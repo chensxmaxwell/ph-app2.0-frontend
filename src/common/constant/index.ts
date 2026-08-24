@@ -25,6 +25,7 @@ const SCREENS = {
   SAVE_PATTERN: "SavePattern" as never,
   NEW_PATTERN: "NewPattern" as never,
   KINK: "Kink" as never,
+  KINK_HUB: "KinkHub" as never,
   KINK_SELECTION: "Kink Selection" as never,
   KINK_INTRO: "Kink Introduction" as never,
   KINK_EMOTIONSELECTION: "Kink Emotion Selection Screen" as never,

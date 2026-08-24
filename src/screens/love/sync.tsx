@@ -50,13 +50,24 @@ export const LoveSyncScreen = () => {
   const insets = useSafeAreaInsets();
   const route = useRoute<SyncRoute>();
   const { companions, activeCompanion } = useCompanions();
-  const { start, patchChat, minimize, companionId } = useLoveSession();
+  const {
+    start,
+    patchChat,
+    minimize,
+    companionId,
+    syncStartedAt,
+    ensureLayerTimer,
+    clearLayerTimer,
+  } = useLoveSession();
   const companion =
     companions.find((item) => item.id === route.params?.companionId) ??
     activeCompanion;
   const name = companion?.name ?? "Kevin";
-  const [elapsed, setElapsed] = useState(0);
+  const [now, setNow] = useState(Date.now());
   const [muted, setMuted] = useState(false);
+  const elapsed = syncStartedAt
+    ? Math.max(0, Math.floor((now - syncStartedAt) / 1000))
+    : 0;
   const [speakerOn, setSpeakerOn] = useState(true);
 
   useEffect(() => {
@@ -65,11 +76,12 @@ export const LoveSyncScreen = () => {
       companionId: companion?.id ?? companionId,
       name,
     });
-  }, [companion?.id, companionId, name, start]);
+    ensureLayerTimer("sync");
+  }, [companion?.id, companionId, ensureLayerTimer, name, start]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setElapsed((current) => current + 1);
+      setNow(Date.now());
     }, 1000);
     return () => clearInterval(timer);
   }, []);
@@ -136,6 +148,7 @@ export const LoveSyncScreen = () => {
           style={styles.hangup}
           onPress={() => {
             patchChat({ synced: false });
+            clearLayerTimer("sync");
             start({
               layer: "chat",
               companionId: companion?.id ?? companionId,

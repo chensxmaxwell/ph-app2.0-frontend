@@ -39,7 +39,7 @@ export const Chat = () => {
     () => threads.filter((thread) => thread.pinned),
     [threads]
   );
-  const recent = threads;
+  const recent = threads.filter((thread) => thread.request !== "refused");
 
   const openThread = (threadId: string) => {
     setMenuOpen(false);

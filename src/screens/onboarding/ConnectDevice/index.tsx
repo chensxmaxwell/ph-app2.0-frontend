@@ -96,13 +96,13 @@ export const ConnectDevice = () => {
             />
             <GoBackIcon style={styles.BackIcon} onPress={handleNavigateToBack}></GoBackIcon>
             <Text style={styles.title}>Find your device</Text>
-            <TouchableOpacity style={styles.connectContainer}>
+            <View style={styles.connectContainer}>
                 <View style={linked ? styles.connectIndicator : styles.disconnectIndicator} />
                 <Text style={styles.buttonText}>
                     {demoConnecting ? 'Connecting...' : linked ? 'Connected' : 'Disconnected'}
                 </Text>
                 <Text style={styles.percentageText}>{linked ? `${battery}%` : '--'}</Text>
-            </TouchableOpacity>
+            </View>
             
 
             {/* Refresh Button */}

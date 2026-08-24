@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { ScreenWrapper } from '@common/components/screen-wrapper';
 import { FULL_SIZE } from '@common/constant';
 import { colors } from '@common/styles/colors';
@@ -8,18 +8,11 @@ import { BaseText } from '@common/components/base-text';
 import { spacings } from '@common/styles/spacings';
 import { useKink } from './hooks';
 import { BackButton } from '@common/components/back-button';
-import Lightbulb from '@images/icons/lightbulb.svg';
 import { ConnectionPill } from '@common/components/connection-pill';
-import { TabBar } from '../sub-components/tab-bar';
 import { CardsList } from '../sub-components/cards-list';
 
-export const Kink = () => {
-  const {
-    tabs,
-    selectedTab,
-    handleLightbulbPress,
-    kinks,
-  } = useKink();
+export const KinkHub = () => {
+  const { kinks } = useKink();
 
   return (
     <ScreenWrapper disableScrolling>
@@ -27,20 +20,16 @@ export const Kink = () => {
         <View style={styles.titleContainer}>
           <BackButton />
           <BaseText style={styles.titleText}>Kink</BaseText>
-          <TouchableOpacity onPress={() => handleLightbulbPress()}>
-            <Lightbulb />
-          </TouchableOpacity>
+          <View style={styles.titleSpacer} />
         </View>
         <ConnectionPill />
-        <TabBar
-          tabs={tabs}
-          selectedTab={selectedTab}
-        />
         <CardsList cards={kinks} />
       </View>
     </ScreenWrapper>
   );
 };
+
+export const Kink = KinkHub;
 
 const styles = StyleSheet.create({
   container: {
@@ -64,5 +53,9 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: fontSizes.large,
     fontWeight: fontWeights.bold,
+  },
+  titleSpacer: {
+    width: 35,
+    height: 35,
   },
 });

@@ -9,8 +9,6 @@ import { fontSizes, fontWeights } from '@common/styles/fonts';
 import { BaseText } from '@common/components/base-text';
 import { spacings } from '@common/styles/spacings';
 import { ConnectionPill } from '@common/components/connection-pill';
-import { SessionLovePill } from '../love/pill';
-import { s } from '../avatar/scale';
 
 export const Control = () => {
   const { controls } = useControl();
@@ -41,7 +39,6 @@ export const Control = () => {
           contentContainerStyle={styles.cardContainer}
           columnWrapperStyle={styles.columnWrapper}
         />
-        <SessionLovePill style={{ top: s(80) }} />
       </View>
     </ScreenWrapper>
   );

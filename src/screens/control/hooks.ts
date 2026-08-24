@@ -37,7 +37,7 @@ export const useControl = () => {
     {
       title: "Kink",
       Icon: Kink,
-      onPress: () => navigation.navigate(SCREENS.KINK),
+      onPress: () => navigation.navigate(SCREENS.KINK_HUB),
     },
     {
       title: "Sync",

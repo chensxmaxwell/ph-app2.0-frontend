@@ -33,8 +33,6 @@ import { useCustomAlert } from "@common/util";
 import { useHomeScreen } from "../../hooks/HomeScreenContext";
 import RedIcon from "@images/redIcon.svg";
 import { ConnectionPill } from "@common/components/connection-pill";
-import { SessionLovePill } from "../love/pill";
-import { s } from "../avatar/scale";
 
 interface KinkItem {
   id: number;
@@ -132,7 +130,6 @@ interface KinkItem {
 
 const ChooseKinkScreen = () => {
   const navigation = useNavigation();
-  const [activeTab, setActiveTab] = useState("All");
   const [selectedKink, setSelectedKink] = useState<number | null>(null);
   const [deleteMode, setDeleteMode] = useState(false);
   const [kinkData, setKinkData] = useState(initialKinkData);
@@ -282,29 +279,16 @@ const ChooseKinkScreen = () => {
     );
   };
 
-  const renderContent = () => {
-    switch (activeTab) {
-      case "All":
-        return (
-          <FlatList
-            data={kinkData}
-            renderItem={renderItem}
-            keyExtractor={(item) => item.id.toString()}
-            numColumns={2}
-            nestedScrollEnabled={false}
-            contentContainerStyle={styles.flatListContainer}
-          />
-        );
-      case "Saved":
-        return <View></View>;
-      case "Generated":
-        return <View></View>;
-      case "Recent":
-        return <View></View>;
-      default:
-        return <View></View>;
-    }
-  };
+  const renderContent = () => (
+    <FlatList
+      data={kinkData}
+      renderItem={renderItem}
+      keyExtractor={(item) => item.id.toString()}
+      numColumns={2}
+      nestedScrollEnabled={false}
+      contentContainerStyle={styles.flatListContainer}
+    />
+  );
 
   return (
     <View style={styles.container}>
@@ -341,33 +325,7 @@ const ChooseKinkScreen = () => {
       {/* Connected Status */}
       <ConnectionPill />
 
-      {/* Tab Navigation */}
-      <View style={styles.tabContainer}>
-        <TouchableOpacity onPress={() => setActiveTab("All")}>
-          <Text style={activeTab === "All" ? styles.tabText : styles.tab}>
-            All
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setActiveTab("Saved")}>
-          <Text style={activeTab === "Saved" ? styles.tabText : styles.tab}>
-            Saved
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setActiveTab("Generated")}>
-          <Text style={activeTab === "Generated" ? styles.tabText : styles.tab}>
-            Generated
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setActiveTab("Recent")}>
-          <Text style={activeTab === "Recent" ? styles.tabText : styles.tab}>
-            Recent
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Render content based on the active tab */}
       <View style={styles.contentContainer}>{renderContent()}</View>
-      <SessionLovePill style={{ top: s(80) }} />
     </View>
   );
 };
@@ -429,27 +387,6 @@ const styles = StyleSheet.create({
     fontSize: fontSizes.medium,
     fontFamily: "Quicksand-Bold",
     fontWeight: fontWeights.bold,
-  },
-  tabContainer: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginVertical: 32,
-    borderBottomWidth: 2,
-    borderBottomColor: colors.white,
-    paddingBottom: 8,
-    marginHorizontal: 16,
-  },
-  tab: {
-    color: colors.grayLighter,
-    fontSize: fontSizes.medium,
-    fontWeight: fontWeights.bold,
-    fontFamily: "Quicksand-Bold",
-  },
-  tabText: {
-    color: colors.white,
-    fontSize: fontSizes.medium,
-    fontWeight: fontWeights.bold,
-    fontFamily: "Quicksand-Bold",
   },
   contentContainer: {
     flex: 1,

@@ -82,11 +82,11 @@ const MenuScreen = () => {
 
       {/* Buttons Section */}
       <View style={styles.infoSection}>
-        <View style={styles.button}>
-          <Text style={styles.buttonText}>Female</Text>
+        <View style={styles.infoChip}>
+          <Text style={styles.infoChipText}>{profile.gender}</Text>
         </View>
-        <View style={styles.button}>
-          <Text style={styles.buttonText}>{formatDate(profile.birthday)}</Text>
+        <View style={styles.infoChip}>
+          <Text style={styles.infoChipText}>{formatDate(profile.birthday)}</Text>
         </View>
         <TouchableOpacity
           style={styles.button}
@@ -234,6 +234,19 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginTop: 20,
     paddingHorizontal: 32,
+  },
+  infoChip: {
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  infoChipText: {
+    fontSize: fontSizes.small,
+    fontFamily: "Quicksand-Bold",
+    color: colors.grayLighter,
+    fontWeight: fontWeights.bold,
+    textAlign: "center",
   },
   button: {
     backgroundColor: colors.grayLightest,

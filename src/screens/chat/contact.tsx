@@ -20,7 +20,8 @@ type ContactRoute = RouteProp<
 export const ChatContactScreen = () => {
   const navigation = useNavigation();
   const route = useRoute<ContactRoute>();
-  const { directory, sendFriendRequest, threads } = useChat();
+  const { directory, sendFriendRequest, cancelFriendRequest, threads } =
+    useChat();
   const person = directory.find((item) => item.id === route.params.personId);
   const existing = threads.find((thread) => thread.id === person?.id);
   const [sent, setSent] = useState(existing?.request === "sent");
@@ -81,6 +82,7 @@ export const ChatContactScreen = () => {
                 return;
               }
               if (sent) {
+                cancelFriendRequest(person.id);
                 setCanceled(true);
                 setSent(false);
                 return;

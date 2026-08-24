@@ -86,6 +86,7 @@ export const ChatThreadScreen = () => {
     inCallThreadId,
     setInCall,
     setRequest,
+    cancelFriendRequest,
     humanLimitReached,
   } = useChat();
   const thread = getThread(route.params.threadId);
@@ -273,7 +274,12 @@ export const ChatThreadScreen = () => {
               >
                 <Text style={styles.primaryText}>Accept</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => navigation.goBack()}>
+              <TouchableOpacity
+                onPress={() => {
+                  setRequest(thread.id, "refused");
+                  navigation.goBack();
+                }}
+              >
                 <Text style={styles.link}>Refuse</Text>
               </TouchableOpacity>
             </View>
@@ -285,7 +291,12 @@ export const ChatThreadScreen = () => {
               >
                 <Text style={styles.primaryText}>Resend request</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => navigation.goBack()}>
+              <TouchableOpacity
+                onPress={() => {
+                  cancelFriendRequest(thread.id);
+                  navigation.goBack();
+                }}
+              >
                 <Text style={styles.link}>Cancel request</Text>
               </TouchableOpacity>
             </View>

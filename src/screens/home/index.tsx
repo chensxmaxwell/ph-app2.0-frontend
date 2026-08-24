@@ -19,7 +19,7 @@ import { useNavigation, NavigationProp, ParamListBase } from "@react-navigation/
 import { lookFromCompanion, useCompanions } from "../../store/companions";
 import { s } from "../avatar/scale";
 import { AvatarPreview } from "../avatar/engine/AvatarPreview";
-import { SessionLovePill, useOpenLove } from "../love/pill";
+import { useOpenLove } from "../love/pill";
 
 const FACE = require("../../../assets/images/love/face.png");
 
@@ -114,7 +114,6 @@ export const Home = () => {
           ) : (
             <House />
           )}
-          <SessionLovePill style={styles.floatingPill} />
         </View>
         <View style={styles.cardContainer}>
           <BaseText style={styles.companionsText}>
@@ -166,9 +165,6 @@ const styles = StyleSheet.create({
     width: FULL_SIZE,
     alignItems: "center",
     overflow: "visible",
-  },
-  floatingPill: {
-    top: s(54),
   },
   cardContainer: {
     display: "flex",

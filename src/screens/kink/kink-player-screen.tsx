@@ -15,7 +15,6 @@ import PauseButton from "@images/pause.svg";
 import ForwardIcon from "@images/Kink/forward.svg";
 import BackwardIcon from "@images/Kink/backward.svg";
 import ChevronLeftfrom from "@images/chevron-left-white.svg";
-import EditIcon from "@images/editIcon.svg";
 import { useAppContext } from "./kink-context";
 import { usePatternPlayer } from "../../hooks/usePatternPlayer";
 import { BUILTIN_PATTERNS, nextNamedPattern } from "../../store/patterns";
@@ -58,9 +57,7 @@ const KinkPlayerScreen = () => {
             <ChevronLeftfrom width={35} height={35} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>{title}</Text>
-          <TouchableOpacity>
-            <EditIcon width={35} height={35} />
-          </TouchableOpacity>
+          <View style={styles.headerSpacer} />
         </View>
         <Text style={styles.subtitle}>{playing ? "Playing" : "Ready"}</Text>
         <ConnectionPill />
@@ -114,6 +111,10 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontFamily: "Quicksand-Bold",
     textAlign: "center",
+  },
+  headerSpacer: {
+    width: 35,
+    height: 35,
   },
   subtitle: {
     fontSize: fontSizes.small,

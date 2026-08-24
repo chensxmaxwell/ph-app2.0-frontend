@@ -410,7 +410,7 @@ export const LoveChatScreen = () => {
       label: "Kink",
       Icon: KinkIcon,
       active: mode === "kink",
-      onPress: () => startMode("kink", SCREENS.KINK),
+      onPress: () => startMode("kink", SCREENS.KINK_HUB),
     },
     {
       key: "bliss",

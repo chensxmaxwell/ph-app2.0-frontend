@@ -8,18 +8,14 @@ import { BaseText } from '@common/components/base-text';
 import { spacings } from '@common/styles/spacings';
 import { useManual } from './hooks';
 import { BackButton } from '@common/components/back-button';
-import Lightbulb from '@images/icons/lightbulb.svg';
 import PlayButton from '@images/arrowtriangle-right.svg';
 import PauseButton from '@images/pause.svg';
 import { SeekBarVertical } from './sub-components/seek-bar-vertical';
-import { SessionLovePill } from '../../../love/pill';
-import { s } from '../../../avatar/scale';
 
 export const Manual = () => {
   const {
     currentValue,
     handleLevelChange,
-    handleLightbulbPress,
     handlePlayButtonPress,
     playing,
   } = useManual();
@@ -35,9 +31,7 @@ export const Manual = () => {
         <View style={styles.titleContainer}>
           <BackButton />
           <BaseText style={styles.titleText}>Manual</BaseText>
-          <TouchableOpacity onPress={() => handleLightbulbPress()}>
-            <Lightbulb />
-          </TouchableOpacity>
+          <View style={styles.titleSpacer} />
         </View>
         <BaseText>Current Level</BaseText>
         <BaseText style={styles.levelText}>{currentValue}</BaseText>
@@ -51,7 +45,6 @@ export const Manual = () => {
         >
           {playing ? <PauseButton /> : <PlayButton />}
         </TouchableOpacity>
-        <SessionLovePill style={{ top: s(80) }} />
       </View>
     </ScreenWrapper>
   );
@@ -79,6 +72,10 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: fontSizes.large,
     fontWeight: fontWeights.bold,
+  },
+  titleSpacer: {
+    width: 35,
+    height: 35,
   },
   cardContainer: {
     paddingTop: spacings.h85,

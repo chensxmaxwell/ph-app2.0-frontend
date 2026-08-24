@@ -1,5 +1,4 @@
 import React, { useContext, useState } from "react";
-import { Tab } from "../sub-components/tab-bar";
 import Pattern1 from "@images/pattern1.svg";
 import Pattern2 from "@images/pattern2.svg";
 import Pattern3 from "@images/pattern3.svg";
@@ -35,37 +34,24 @@ const renderUntitle: React.FC = () => {
 
 export const usePattern = () => {
   const navigation = useNavigation<NavigationType>();
-  const [selectedTab, setSelectedTab] = useState("patterns");
-  const handleTabSelect = (value: string) => {
-    setSelectedTab(value);
-  };
   const { globalState } = useContext(GlobalContext);
-  const [tabs, _] = useState<Tab[]>([
-    {
-      title: "Patterns",
-      value: "patterns",
-      onPress: () => handleTabSelect("patterns"),
-    },
-    {
-      title: "Saved",
-      value: "saved",
-      onPress: () => handleTabSelect("saved"),
-    },
-    {
-      title: "Generated",
-      value: "generated",
-      onPress: () => handleTabSelect("generated"),
-    },
-    {
-      title: "Recent",
-      value: "recent",
-      onPress: () => handleTabSelect("recent"),
-    },
-  ]);
+  const [favorites, setFavorites] = useState<Record<string, boolean>>({
+    Untitled: true,
+  });
 
-  const handleLightbulbPress = () => {
-    console.log("Lightbulb pressed");
+  const toggleFavorite = (id: string) => {
+    setFavorites((current) => ({
+      ...current,
+      [id]: !(current[id] ?? false),
+    }));
   };
+
+  const withFavorite = (id: string, card: CardType): CardType => ({
+    ...card,
+    favorite: favorites[id] ?? card.favorite ?? false,
+    onFavoritePress: () => toggleFavorite(id),
+  });
+
   const handlePatternPress = ({
     pattern,
     title,
@@ -85,7 +71,7 @@ export const usePattern = () => {
       onPress: () => handleCreatePatternPress(),
       hideFavorite: true,
     },
-    {
+    withFavorite("Untitled", {
       Icon: renderUntitle,
       title: "Untitled",
       onPress: () =>
@@ -93,9 +79,8 @@ export const usePattern = () => {
           title: "Untitled",
           pattern: [20, 40, 60, 80, 100, 80, 60, 40, 20, 10],
         }),
-      favorite: true,
-    },
-    {
+    }),
+    withFavorite("pattern-1", {
       Icon: Pattern1,
       onPress: () =>
         handlePatternPress({
@@ -105,8 +90,8 @@ export const usePattern = () => {
             50, 4, 55, 23, 44, 70, 22, 0, 5, 20, 30, 40, 10,
           ],
         }),
-    },
-    {
+    }),
+    withFavorite("pattern-2", {
       Icon: Pattern2,
       onPress: () =>
         handlePatternPress({
@@ -116,8 +101,8 @@ export const usePattern = () => {
             8, 48, 57, 77, 28, 75, 38, 73, 59, 15, 62, 88, 78,
           ],
         }),
-    },
-    {
+    }),
+    withFavorite("pattern-3", {
       Icon: Pattern3,
       onPress: () =>
         handlePatternPress({
@@ -127,8 +112,8 @@ export const usePattern = () => {
             46, 18, 28, 58, 71, 16, 88, 9, 14, 41, 3, 10, 20,
           ],
         }),
-    },
-    {
+    }),
+    withFavorite("pattern-4", {
       Icon: Pattern4,
       onPress: () =>
         handlePatternPress({
@@ -138,8 +123,8 @@ export const usePattern = () => {
             62, 11, 54, 31, 66, 48, 77, 56, 61, 78, 25, 23, 18,
           ],
         }),
-    },
-    {
+    }),
+    withFavorite("pattern-5", {
       Icon: Pattern5,
       onPress: () =>
         handlePatternPress({
@@ -149,8 +134,8 @@ export const usePattern = () => {
             39, 70, 19, 14, 38, 96, 67, 87, 58, 10, 58, 80, 82,
           ],
         }),
-    },
-    {
+    }),
+    withFavorite("pattern-6", {
       Icon: Pattern6,
       onPress: () =>
         handlePatternPress({
@@ -160,14 +145,13 @@ export const usePattern = () => {
             35, 2, 58, 57, 64, 67, 83, 38, 69, 52, 69, 67, 44,
           ],
         }),
-    },
-    ...globalState.tmp_pattern,
+    }),
+    ...globalState.tmp_pattern.map((card, index) =>
+      withFavorite(card.title ?? `tmp-${index}`, card)
+    ),
   ];
 
   return {
-    tabs,
-    selectedTab,
-    handleLightbulbPress,
     patterns,
     handlePatternPress,
   };

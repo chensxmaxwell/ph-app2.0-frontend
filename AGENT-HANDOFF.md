@@ -103,7 +103,7 @@ First screen: `SCREENS.NAV_BAR` = 4 tabs in `src/common/components/nav-bar/nav-b
 
 Screen name constants: **`src/common/constant/index.ts`** (`SCREENS`). Always add routes there **and** in the relevant stack.
 
-Love is **not** a tab. Open via companion avatars on Home, avatar wizard finish, or `SessionLovePill` when minimized.
+Love is **not** a tab. Open via companion avatars on Home, avatar wizard finish, or the **global** `SessionLovePill` when minimized. The pill is mounted once on `HomeStack` (`GlobalSessionLovePill`), not per screen.
 
 ---
 
@@ -135,10 +135,12 @@ Love is **not** a tab. Open via companion avatars on Home, avatar wizard finish,
 
 **Pill product logic (do not regress):**
 
-- Home / Control / Manual / Auto / Performance-play / Pattern / Kink list / Bliss slider render **`SessionLovePill`**, not bare `LovePill`.
-- Header back on Love chat = **end session** (no pill).
-- Side pill on Love chat / minimize icon on Call&Sync = **minimize** (pill on Home).
-- Hangup X on Sync/Call = end that layer, **not** minimize. After full exit of Love, pill gone.
+- Minimized Love shows **one global** `SessionLovePill` overlay on `HomeStack` (all tabs + deep screens). `SessionLovePill` returns null unless `minimized`. Never always-on LovePill on Home.
+- Love overlay chrome still uses bare `LovePill` (chat side pill / Call&Sync minimize).
+- Header back on Love chat = **end session** (no pill). `end()` also clears `companionId` and Call/Sync timers.
+- Side pill on Love chat / minimize icon on Call&Sync = **minimize**. Hangup X ends that layer, **not** minimize.
+- Call/Sync elapsed time lives in `LoveSessionProvider` (`callStartedAt` / `syncStartedAt`) so minimize → restore does not reset to 00:00.
+- Control → Kink opens the Hardcore/Gentle **hub** (`SCREENS.KINK_HUB`). Generate on the hub still enters the wizard (`SCREENS.KINK`).
 
 ### Message tab
 
@@ -175,7 +177,7 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 | `src/hooks/useBleManager.ts` | Real `react-native-ble-manager` (unused for demo) |
 | `src/screens/onboarding/ConnectDevice/index.tsx` | Device list; **demo row first**, then real scan |
 | `src/common/components/connection-pill/` | Connected/Disconnected; tap → `CONNECT_DEVICE` |
-| `src/screens/control/index.tsx` | Hub: Auto, Playground, Pattern, Manual, Kink, Sync |
+| `src/screens/control/index.tsx` | Hub: Auto, Playground, Pattern, Manual, Kink, Sync. Kink → `KINK_HUB` (`control/sub-screens/kink`), then Generate → wizard |
 | `src/screens/control/auto.tsx` | Color wheel + intensity + play → `wavePattern` + motor |
 | `src/screens/control/sub-screens/manual/` | Slider + play; `setMotorInput([1, level, level, level])` |
 | `src/screens/control/sub-screens/pattern/` | Library |
@@ -231,7 +233,7 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 ## 6. Landmines (bugs we already paid for)
 
 1. **Transparent modal + non-modal push** = screen appears under Love. Fix: `dismissLoveOverlays` then navigate Pattern/Kink/Bliss. Same class of bug as Love → old `SYNC_STACK`.
-2. **Home always showing Love pill** was wrong. Pill = minimized session only.
+2. **Home always showing Love pill** was wrong. Pill = minimized session only. Global overlay is the restore affordance; do not re-add per-screen pills.
 3. **Love chat remounts** if you don’t keep messages in `LoveSessionProvider`. Don’t put Love transcript only in component `useState` if minimize/restore must keep it.
 4. **`start()` on LoveChat mount** must `keepLayer` so restoring into Sync/Call doesn’t reset layer to chat.
 5. Pattern play from Love must **minimize Love first**, then Pattern, so the pill is the way back.
@@ -242,7 +244,7 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 
 ## 7. Next work (priority the user already stated)
 
-Do these unless they change their mind:
+Overnight QA close-out (global Love pill, dead taps, Control→Kink hub, fake tabs, Profile/Sync/Switch-account copy, tab focus, Call/Sync timer persist, `end()` clears companionId) is done. Remaining product work:
 
 1. **Wire LLM into Love + Message**  
    - `src/screens/love/chat.tsx` `send`  

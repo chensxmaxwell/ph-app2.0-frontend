@@ -47,13 +47,24 @@ export const LoveCallScreen = () => {
   const insets = useSafeAreaInsets();
   const route = useRoute<CallRoute>();
   const { companions, activeCompanion } = useCompanions();
-  const { start, patchChat, minimize, companionId } = useLoveSession();
+  const {
+    start,
+    patchChat,
+    minimize,
+    companionId,
+    callStartedAt,
+    ensureLayerTimer,
+    clearLayerTimer,
+  } = useLoveSession();
   const companion =
     companions.find((item) => item.id === route.params?.companionId) ??
     activeCompanion;
   const name = companion?.name ?? "Kevin";
-  const [elapsed, setElapsed] = useState(0);
+  const [now, setNow] = useState(Date.now());
   const [pressing, setPressing] = useState(false);
+  const elapsed = callStartedAt
+    ? Math.max(0, Math.floor((now - callStartedAt) / 1000))
+    : 0;
 
   useEffect(() => {
     start({
@@ -61,11 +72,12 @@ export const LoveCallScreen = () => {
       companionId: companion?.id ?? companionId,
       name,
     });
-  }, [companion?.id, companionId, name, start]);
+    ensureLayerTimer("call");
+  }, [companion?.id, companionId, ensureLayerTimer, name, start]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setElapsed((current) => current + 1);
+      setNow(Date.now());
     }, 1000);
     return () => clearInterval(timer);
   }, []);
@@ -123,6 +135,7 @@ export const LoveCallScreen = () => {
       <TouchableOpacity
         onPress={() => {
           patchChat({ inCall: false });
+          clearLayerTimer("call");
           start({
             layer: "chat",
             companionId: companion?.id ?? companionId,

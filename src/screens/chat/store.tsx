@@ -98,6 +98,7 @@ type ChatContextValue = {
   stopSpeaking: () => void;
   setRequest: (threadId: string, request: FriendRequest) => void;
   sendFriendRequest: (person: DirectoryPerson) => string;
+  cancelFriendRequest: (threadId: string) => void;
   setPremium: (value: boolean) => void;
   setInCall: (threadId: string | null) => void;
   createBot: (input: {
@@ -439,6 +440,12 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     [setRequest, threads]
   );
 
+  const cancelFriendRequest = useCallback((threadId: string) => {
+    setThreads((current) =>
+      current.filter((thread) => thread.id !== threadId)
+    );
+  }, []);
+
   const createBot = useCallback(
     (input: {
       name: string;
@@ -506,12 +513,14 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       stopSpeaking,
       setRequest,
       sendFriendRequest,
+      cancelFriendRequest,
       setPremium: setIsPremium,
       setInCall: setInCallThreadId,
       createBot,
       humanLimitReached,
     }),
     [
+      cancelFriendRequest,
       createBot,
       directory,
       editLastMine,

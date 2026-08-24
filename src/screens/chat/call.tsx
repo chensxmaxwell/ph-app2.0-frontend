@@ -81,7 +81,7 @@ export const ChatCallScreen = () => {
           />
         </View>
         <Text style={styles.status}>
-          {connected ? "Press" : `Calling ${name}`}
+          {connected ? "Connected" : `Calling ${name}`}
         </Text>
       </View>
       <TouchableOpacity

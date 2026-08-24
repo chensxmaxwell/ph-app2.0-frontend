@@ -1,4 +1,5 @@
 import React from "react";
+import { View, StyleSheet } from "react-native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Home } from "../../../screens/home";
 import { Control } from "../../../screens/control";
@@ -12,6 +13,18 @@ import ProfileStack from "../../../screens/profile/ProfileStack";
 import { Chat } from "../../../screens/chat";
 
 const Tab = createBottomTabNavigator();
+
+const TabIcon = ({
+  focused,
+  Icon,
+}: {
+  focused: boolean;
+  Icon: React.FC;
+}) => (
+  <View style={[styles.icon, focused ? styles.iconFocused : styles.iconIdle]}>
+    <Icon />
+  </View>
+);
 
 export const NavBar = () => (
   <Tab.Navigator
@@ -30,29 +43,50 @@ export const NavBar = () => (
       name={SCREENS.HOME}
       component={Home}
       options={{
-        tabBarIcon: () => <House />,
+        tabBarIcon: ({ focused }) => <TabIcon focused={focused} Icon={House} />,
       }}
     />
     <Tab.Screen
       name={SCREENS.CONTROL}
       component={Control}
       options={{
-        tabBarIcon: () => <JoyStick />,
+        tabBarIcon: ({ focused }) => (
+          <TabIcon focused={focused} Icon={JoyStick} />
+        ),
       }}
     />
     <Tab.Screen
       name={SCREENS.CHAT}
       component={Chat}
       options={{
-        tabBarIcon: () => <ChatCircle />,
+        tabBarIcon: ({ focused }) => (
+          <TabIcon focused={focused} Icon={ChatCircle} />
+        ),
       }}
     />
     <Tab.Screen
       name={SCREENS.PROFILE}
       component={ProfileStack}
       options={{
-        tabBarIcon: () => <UserCircle />,
+        tabBarIcon: ({ focused }) => (
+          <TabIcon focused={focused} Icon={UserCircle} />
+        ),
       }}
     />
   </Tab.Navigator>
 );
+
+const styles = StyleSheet.create({
+  icon: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  iconFocused: {
+    opacity: 1,
+    transform: [{ scale: 1.08 }],
+  },
+  iconIdle: {
+    opacity: 0.38,
+    transform: [{ scale: 1 }],
+  },
+});

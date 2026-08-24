@@ -3,6 +3,7 @@ import {
   Image,
   StyleSheet,
   TouchableOpacity,
+  View,
   ViewStyle,
 } from "react-native";
 import {
@@ -14,7 +15,7 @@ import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import { useCompanions } from "../../store/companions";
 import { s } from "../avatar/scale";
-import { restoreLoveOverlays } from "./overlay";
+import { getHomeStackNavigation, restoreLoveOverlays } from "./overlay";
 import { useLoveSession } from "./session";
 
 const FACE = require("../../../assets/images/love/face.png");
@@ -37,7 +38,8 @@ export const useOpenLove = () => {
       setActiveCompanionId(nextId);
     }
 
-    const nav = navigation as NavigationProp<ParamListBase>;
+    const nav =
+      getHomeStackNavigation() ?? (navigation as NavigationProp<ParamListBase>);
     if (minimized && (!params?.companionId || params.companionId === companionId)) {
       restore();
       restoreLoveOverlays(nav, layer, nextId);
@@ -95,8 +97,9 @@ export const SessionLovePill = ({ style }: { style?: ViewStyle }) => {
       style={style}
       onPress={() => {
         restore();
+        const homeNav = getHomeStackNavigation();
         restoreLoveOverlays(
-          navigation as NavigationProp<ParamListBase>,
+          homeNav ?? (navigation as NavigationProp<ParamListBase>),
           layer,
           companionId
         );
@@ -105,7 +108,18 @@ export const SessionLovePill = ({ style }: { style?: ViewStyle }) => {
   );
 };
 
+export const GlobalSessionLovePill = () => (
+  <View pointerEvents="box-none" collapsable={false} style={styles.host}>
+    <SessionLovePill />
+  </View>
+);
+
 const styles = StyleSheet.create({
+  host: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 50,
+    elevation: 50,
+  },
   pill: {
     position: "absolute",
     right: s(-27),

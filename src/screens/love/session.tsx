@@ -18,11 +18,15 @@ type StartOptions = {
   replace?: boolean;
 };
 
+type LoveTimerLayer = Extract<LoveLayer, "call" | "sync">;
+
 type LoveSessionValue = {
   companionId?: string;
   layer: LoveLayer | null;
   minimized: boolean;
   chat: LoveChatState | null;
+  callStartedAt: number | null;
+  syncStartedAt: number | null;
   start: (options: StartOptions) => void;
   patchChat: (
     update: Partial<LoveChatState> | ((current: LoveChatState) => LoveChatState)
@@ -30,6 +34,8 @@ type LoveSessionValue = {
   minimize: () => void;
   restore: () => void;
   end: () => void;
+  ensureLayerTimer: (layer: LoveTimerLayer) => void;
+  clearLayerTimer: (layer: LoveTimerLayer) => void;
 };
 
 const LoveSessionContext = createContext<LoveSessionValue | null>(null);
@@ -92,6 +98,8 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
   const [layer, setLayer] = useState<LoveLayer | null>(null);
   const [minimized, setMinimized] = useState(false);
   const [chat, setChat] = useState<LoveChatState | null>(null);
+  const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
+  const [syncStartedAt, setSyncStartedAt] = useState<number | null>(null);
 
   const start = useCallback((options: StartOptions) => {
     setMinimized(false);
@@ -126,6 +134,10 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
         syncing: options.syncing || options.layer === "sync",
       });
     });
+    if (options.replace) {
+      setCallStartedAt(null);
+      setSyncStartedAt(null);
+    }
   }, []);
 
   const patchChat = useCallback(
@@ -154,10 +166,43 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
     setMinimized(false);
   }, []);
 
+  const ensureLayerTimer = useCallback((nextLayer: LoveTimerLayer) => {
+    switch (nextLayer) {
+      case "call":
+        setCallStartedAt((current) => current ?? Date.now());
+        return;
+      case "sync":
+        setSyncStartedAt((current) => current ?? Date.now());
+        return;
+      default: {
+        const exhaustive: never = nextLayer;
+        return exhaustive;
+      }
+    }
+  }, []);
+
+  const clearLayerTimer = useCallback((nextLayer: LoveTimerLayer) => {
+    switch (nextLayer) {
+      case "call":
+        setCallStartedAt(null);
+        return;
+      case "sync":
+        setSyncStartedAt(null);
+        return;
+      default: {
+        const exhaustive: never = nextLayer;
+        return exhaustive;
+      }
+    }
+  }, []);
+
   const end = useCallback(() => {
+    setCompanionId(undefined);
     setLayer(null);
     setMinimized(false);
     setChat(null);
+    setCallStartedAt(null);
+    setSyncStartedAt(null);
   }, []);
 
   const value = useMemo(
@@ -166,22 +211,30 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
       layer,
       minimized,
       chat,
+      callStartedAt,
+      syncStartedAt,
       start,
       patchChat,
       minimize,
       restore,
       end,
+      ensureLayerTimer,
+      clearLayerTimer,
     }),
     [
+      callStartedAt,
       chat,
+      clearLayerTimer,
       companionId,
       end,
+      ensureLayerTimer,
       layer,
       minimize,
       minimized,
       patchChat,
       restore,
       start,
+      syncStartedAt,
     ]
   );
 

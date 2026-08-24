@@ -1,6 +1,9 @@
 import React from "react";
+import { StyleSheet, View } from "react-native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { COMMON_HEADER_OPTIONS_CONFIG, SCREENS } from "../src/common/constant";
+import { GlobalSessionLovePill } from "../src/screens/love/pill";
+import { bindHomeStackNavigation } from "../src/screens/love/overlay";
 import { NavBar } from "@common/components/nav-bar/nav-bar";
 import { Manual } from "../src/screens/control/sub-screens/manual";
 import { Pattern } from "../src/screens/control/sub-screens/pattern";
@@ -11,6 +14,7 @@ import {
 } from "../src/screens/control/sub-screens/pattern/sub-screens/play-pattern";
 import { PlaygroundStack } from "./playground-stack";
 import KinkStack from "../src/screens/kink/kink-stack";
+import { KinkHub } from "../src/screens/control/sub-screens/kink";
 import { SavePattern } from "../src/screens/control/sub-screens/pattern/sub-screens/save-pattern";
 import { NewPattern } from "../src/screens/control/sub-screens/pattern/sub-screens/new-pattern";
 import { ConnectDevice } from "../src/screens/onboarding/ConnectDevice";
@@ -35,10 +39,15 @@ import { PremiumScreen } from "../src/screens/profile/Premium";
 const Stack = createNativeStackNavigator<HomeStackScreenProps>();
 
 export const HomeStack = () => (
-  <Stack.Navigator
-    initialRouteName={SCREENS.NAV_BAR}
-    screenOptions={COMMON_HEADER_OPTIONS_CONFIG}
-  >
+  <View style={styles.root}>
+    <Stack.Navigator
+      initialRouteName={SCREENS.NAV_BAR}
+      screenOptions={COMMON_HEADER_OPTIONS_CONFIG}
+      screenListeners={({ navigation }) => {
+        bindHomeStackNavigation(navigation);
+        return {};
+      }}
+    >
     <Stack.Screen name={SCREENS.NAV_BAR} component={NavBar} />
     <Stack.Screen name={SCREENS.MANUAL} component={Manual} />
     <Stack.Screen name={SCREENS.PATTERN} component={Pattern} />
@@ -50,6 +59,7 @@ export const HomeStack = () => (
       component={PlayPattern}
       initialParams={{ pattern: [], title: "" }} // Provide default values for required props
     />
+    <Stack.Screen name={SCREENS.KINK_HUB} component={KinkHub} />
     <Stack.Screen name={SCREENS.KINK} component={KinkStack} />
     <Stack.Screen name={SCREENS.PLAYGROUND_STACK} component={PlaygroundStack} />
     <Stack.Screen name={SCREENS.CONNECT_DEVICE} component={ConnectDevice} />
@@ -104,15 +114,24 @@ export const HomeStack = () => (
       component={PerformancePlayScreen}
     />
     <Stack.Screen name={SCREENS.FEED} component={FeedScreen} />
-    <Stack.Screen name={SCREENS.PREMIUM} component={PremiumScreen} />
-  </Stack.Navigator>
+      <Stack.Screen name={SCREENS.PREMIUM} component={PremiumScreen} />
+    </Stack.Navigator>
+    <GlobalSessionLovePill />
+  </View>
 );
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
+});
 
 export type HomeStackScreenProps = {
   NavBar: undefined;
   Manual: undefined;
   Pattern: undefined;
   Kink: undefined;
+  KinkHub: undefined;
   DisplayPattern: DisplayPatternScreenProps;
   CreatePattern: undefined;
   Playground: undefined;

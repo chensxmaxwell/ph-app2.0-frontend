@@ -8,8 +8,6 @@ import ChevronLeft from "@images/chevron-left-white.svg";
 import { Slider } from "@miblanchard/react-native-slider";
 import { SCREENS } from "@common/constant";
 import { useAppContext } from "./quick-bliss-context";
-import { SessionLovePill } from "../love/pill";
-import { s } from "../avatar/scale";
 
 const SliderScreen = () => {
   const navigation = useNavigation();
@@ -62,7 +60,6 @@ const SliderScreen = () => {
           <Text style={styles.cancelText}>Cancel</Text>
         </TouchableOpacity>
       </View>
-      <SessionLovePill style={{ top: s(80) }} />
     </ScreenWrapper>
   );
 };
