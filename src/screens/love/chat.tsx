@@ -39,6 +39,7 @@ import { useCompanions } from "../../store/companions";
 import { s } from "../avatar/scale";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
+import { resolveLovePerson } from "./partner";
 import { companionChatOrFallback } from "../../services/llm";
 import { useLoveSession } from "./session";
 import { LoveChatItem, LoveMode } from "./types";
@@ -51,6 +52,7 @@ type ChatRoute = RouteProp<
   {
     LoveChat: {
       companionId?: string;
+      name?: string;
       fromCreation?: boolean;
       syncing?: boolean;
     };
@@ -175,10 +177,13 @@ export const LoveChatScreen = () => {
   const route = useRoute<ChatRoute>();
   const { companions, activeCompanion } = useCompanions();
   const { chat, start, patchChat, minimize, end } = useLoveSession();
-  const companion =
-    companions.find((item) => item.id === route.params?.companionId) ??
-    activeCompanion;
-  const name = chat?.name ?? companion?.name ?? "Kevin";
+  const { companion, companionId: partnerId, name } = resolveLovePerson({
+    companionId: route.params?.companionId,
+    name: route.params?.name,
+    companions,
+    activeCompanion,
+    chatName: chat?.name,
+  });
   const fromCreation = route.params?.fromCreation === true;
   const startedSyncing = route.params?.syncing === true;
 
@@ -203,12 +208,12 @@ export const LoveChatScreen = () => {
     start({
       layer: "chat",
       keepLayer: true,
-      companionId: companion?.id,
+      companionId: partnerId,
       name,
       fromCreation,
       syncing: startedSyncing,
     });
-  }, [companion?.id, fromCreation, name, start, startedSyncing]);
+  }, [fromCreation, name, partnerId, start, startedSyncing]);
 
   const busy = mode !== "none" || synced || inCall;
 
@@ -267,12 +272,12 @@ export const LoveChatScreen = () => {
     setDrawerOpen(false);
     start({
       layer: "call",
-      companionId: companion?.id,
+      companionId: partnerId,
       name,
     });
     navigation.navigate(
       SCREENS.LOVE_CALL as never,
-      { companionId: companion?.id } as never
+      { companionId: partnerId, name } as never
     );
   };
 
@@ -365,12 +370,12 @@ export const LoveChatScreen = () => {
         }));
         start({
           layer: "sync",
-          companionId: companion?.id,
+          companionId: partnerId,
           name,
         });
         navigation.navigate(
           SCREENS.LOVE_SYNC as never,
-          { companionId: companion?.id } as never
+          { companionId: partnerId, name } as never
         );
       },
     },
@@ -453,7 +458,10 @@ export const LoveChatScreen = () => {
         pointerEvents="none"
       />
       <SafeAreaView style={styles.safe} edges={["top"]}>
-        <View style={styles.header}>
+        <Pressable
+          style={styles.header}
+          onPress={drawerOpen ? () => setDrawerOpen(false) : undefined}
+        >
           <TouchableOpacity
             onPress={tryLeave}
             hitSlop={8}
@@ -472,27 +480,35 @@ export const LoveChatScreen = () => {
           >
             <Dots width={s(35)} height={s(35)} />
           </TouchableOpacity>
-        </View>
+        </Pressable>
         <KeyboardAvoidingView
           style={styles.flex}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
-          <ScrollView
-            contentContainerStyle={styles.messages}
-            keyboardShouldPersistTaps="handled"
-          >
-            {messages.map((item) => renderChatItem(item, name, listen))}
-          </ScrollView>
+          <View style={styles.flex}>
+            <ScrollView
+              contentContainerStyle={styles.messages}
+              keyboardShouldPersistTaps="handled"
+            >
+              {messages.map((item) => renderChatItem(item, name, listen))}
+            </ScrollView>
+            {drawerOpen ? (
+              <Pressable
+                style={styles.drawerScrim}
+                onPress={() => setDrawerOpen(false)}
+              />
+            ) : null}
+          </View>
           <View
             style={[
               styles.composer,
               {
                 paddingBottom: drawerOpen ? s(8) : insets.bottom,
-                height: drawerOpen ? s(64) : s(80) + insets.bottom,
+                minHeight: drawerOpen ? s(64) : s(80) + insets.bottom,
               },
             ]}
           >
-            <TouchableOpacity onPress={openCall} hitSlop={8}>
+            <TouchableOpacity onPress={openCall} hitSlop={8} style={styles.iconHit}>
               <Waveform width={s(35)} height={s(35)} />
             </TouchableOpacity>
             <View style={styles.inputWrap}>
@@ -545,6 +561,7 @@ export const LoveChatScreen = () => {
                   <Pressable
                     key={page}
                     onPress={() => setDrawerPage(page)}
+                    hitSlop={12}
                     style={[
                       styles.dot,
                       drawerPage === page ? styles.dotOn : null,
@@ -700,19 +717,17 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   composer: {
-    height: s(80),
     backgroundColor: "#4c495f",
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     paddingTop: s(8),
-    paddingLeft: s(16),
-    paddingRight: s(16),
-    zIndex: 2,
+    paddingHorizontal: s(12),
+    gap: s(8),
+    zIndex: 5,
   },
   inputWrap: {
-    width: s(216),
-    height: s(48),
-    marginLeft: s(16),
+    flex: 1,
+    minHeight: s(48),
     borderRadius: s(12),
     borderWidth: 1,
     borderColor: colors.white,
@@ -726,21 +741,37 @@ const styles = StyleSheet.create({
     fontSize: 13,
     padding: 0,
   },
-  plus: {
-    marginLeft: s(16),
-    width: s(35),
-    height: s(35),
+  iconHit: {
+    width: s(44),
+    height: s(44),
     alignItems: "center",
     justifyContent: "center",
+    zIndex: 6,
+  },
+  plus: {
+    width: s(44),
+    height: s(44),
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 6,
   },
   send: {
-    marginLeft: s(8),
+    width: s(44),
+    height: s(44),
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 6,
+  },
+  drawerScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    zIndex: 3,
   },
   drawer: {
     backgroundColor: "#2f2d3c",
     paddingTop: s(24),
     paddingHorizontal: s(24),
-    zIndex: 4,
+    zIndex: 5,
   },
   drawerRow: {
     flexDirection: "row",

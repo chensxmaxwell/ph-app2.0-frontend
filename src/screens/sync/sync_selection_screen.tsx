@@ -100,7 +100,12 @@ const SyncSelectionScreen = () => {
         renderItem={({ item }) => (
           <TouchableOpacity
             style={styles.listItem}
-            onPress={() => navigation.navigate(SCREENS.SYNC_SCREEN)}
+            onPress={() =>
+              navigation.navigate(
+                SCREENS.SYNC_SCREEN as never,
+                { name: item.name } as never
+              )
+            }
           >
             <Image source={images[item.avatar]} style={styles.avatar} />
             <Text style={styles.userName}>{item.name}</Text>

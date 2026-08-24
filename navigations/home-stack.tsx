@@ -137,17 +137,22 @@ export type HomeStackScreenProps = {
   Playground: undefined;
   AvatarStack: undefined;
   LoveChat:
-    | { companionId?: string; fromCreation?: boolean; syncing?: boolean }
+    | {
+        companionId?: string;
+        name?: string;
+        fromCreation?: boolean;
+        syncing?: boolean;
+      }
     | undefined;
-  LoveCall: { companionId?: string } | undefined;
-  LoveSync: { companionId?: string } | undefined;
+  LoveCall: { companionId?: string; name?: string } | undefined;
+  LoveSync: { companionId?: string; name?: string } | undefined;
   ChatThread: { threadId: string };
   ChatSearch: { addFriends?: boolean } | undefined;
   ChatSettings: { threadId: string };
   ChatCreate: { threadId?: string } | undefined;
   ChatContact: { personId: string };
   ChatCall: { threadId: string };
-  SyncStack: undefined;
+  SyncStack: { companionId?: string; name?: string } | undefined;
   BlissStack: undefined;
   Auto: undefined;
   Performance: undefined;

@@ -16,51 +16,62 @@ import { SCREENS } from "@common/constant";
 import { useCompanions } from "../../store/companions";
 import { s } from "../avatar/scale";
 import { getHomeStackNavigation, restoreLoveOverlays } from "./overlay";
+import { LovePersonParams, resolveLovePerson } from "./partner";
 import { useLoveSession } from "./session";
 
 const FACE = require("../../../assets/images/love/face.png");
 
-export type LoveChatParams = {
-  companionId?: string;
-  fromCreation?: boolean;
-  syncing?: boolean;
-};
+export type LoveChatParams = LovePersonParams;
 
 export const useOpenLove = () => {
   const navigation = useNavigation();
   const { activeCompanion, companions, setActiveCompanionId } = useCompanions();
-  const { start, restore, minimized, companionId, layer } = useLoveSession();
+  const { start, restore, minimized, companionId, layer, chat } =
+    useLoveSession();
 
   return (params?: LoveChatParams) => {
-    const nextId = params?.companionId ?? activeCompanion?.id ?? companionId;
-    const companion = companions.find((item) => item.id === nextId);
-    if (nextId) {
-      setActiveCompanionId(nextId);
+    const person = resolveLovePerson({
+      companionId:
+        params?.companionId ?? activeCompanion?.id ?? companionId,
+      name: params?.name,
+      companions,
+      activeCompanion,
+      chatName: chat?.name,
+    });
+    if (person.companion?.id) {
+      setActiveCompanionId(person.companion.id);
     }
 
     const nav =
       getHomeStackNavigation() ?? (navigation as NavigationProp<ParamListBase>);
-    if (minimized && (!params?.companionId || params.companionId === companionId)) {
+    if (
+      minimized &&
+      (!params?.companionId || params.companionId === companionId)
+    ) {
       restore();
-      restoreLoveOverlays(nav, layer, nextId);
+      restoreLoveOverlays(nav, layer, person.companionId, person.name);
       return;
     }
 
     start({
       layer: params?.syncing ? "sync" : "chat",
-      companionId: nextId,
-      name: companion?.name,
+      companionId: person.companionId,
+      name: person.name,
       fromCreation: params?.fromCreation,
       syncing: params?.syncing,
-      replace: Boolean(nextId && nextId !== companionId),
+      replace: Boolean(
+        person.companionId && person.companionId !== companionId
+      ),
     });
-    nav.navigate(SCREENS.LOVE_CHAT as never, {
-      companionId: nextId,
+    const overlayParams = {
+      companionId: person.companionId,
+      name: person.name,
       fromCreation: params?.fromCreation,
       syncing: params?.syncing,
-    } as never);
+    };
+    nav.navigate(SCREENS.LOVE_CHAT as never, overlayParams as never);
     if (params?.syncing) {
-      nav.navigate(SCREENS.LOVE_SYNC as never, { companionId: nextId } as never);
+      nav.navigate(SCREENS.LOVE_SYNC as never, overlayParams as never);
     }
   };
 };
@@ -86,7 +97,7 @@ export const LovePill = ({ onPress, style }: LovePillProps) => {
 
 export const SessionLovePill = ({ style }: { style?: ViewStyle }) => {
   const navigation = useNavigation();
-  const { minimized, layer, companionId, restore } = useLoveSession();
+  const { minimized, layer, companionId, chat, restore } = useLoveSession();
 
   if (!minimized) {
     return null;
@@ -101,7 +112,8 @@ export const SessionLovePill = ({ style }: { style?: ViewStyle }) => {
         restoreLoveOverlays(
           homeNav ?? (navigation as NavigationProp<ParamListBase>),
           layer,
-          companionId
+          companionId,
+          chat?.name
         );
       }}
     />

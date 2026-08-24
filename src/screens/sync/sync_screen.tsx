@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Image, TouchableOpacity } from "react-native";
 import { ScreenWrapper } from "@common/components/screen-wrapper";
 import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute } from "@react-navigation/native";
 import { SCREENS } from "../../common/constant/index";
 import MinimizeIcon from "@images/minimize.svg";
 import Xmark from "@images/icons/xmark.svg";
@@ -15,6 +15,9 @@ import { wavePattern } from "../../store/patterns";
 
 const SyncScreen = () => {
   const navigation = useNavigation();
+  const route = useRoute();
+  const partnerName =
+    (route.params as { name?: string } | undefined)?.name?.trim() || "Kevin";
   const [syncState, setSyncState] = useState("SYNC_ONGOING");
   const { start, stop } = usePatternPlayer(wavePattern(72), "sync");
   //   SYNC_INVITATION_SENT
@@ -61,7 +64,7 @@ const SyncScreen = () => {
       case "SYNC_ONGOING":
         return (
           <View style={styles.header}>
-            <Text style={styles.headerTitle}>Kevin</Text>
+            <Text style={styles.headerTitle}>{partnerName}</Text>
             <TouchableOpacity
               style={styles.minimizeIcon}
               onPress={() => navigation.goBack()}
@@ -127,7 +130,7 @@ const SyncScreen = () => {
             <View>
               <Text style={styles.text}>Sync invitation sent</Text>
               <Text style={styles.subText}>
-                Waiting for Kevin to accept your invitation.
+                {`Waiting for ${partnerName} to accept your invitation.`}
               </Text>
             </View>
             <TouchableOpacity
@@ -143,7 +146,7 @@ const SyncScreen = () => {
           <View style={styles.footer}>
             <View>
               <Text style={styles.text}>
-                Kevin has accepted your sync invitation
+                {`${partnerName} has accepted your sync invitation`}
               </Text>
             </View>
             <View>
@@ -166,7 +169,7 @@ const SyncScreen = () => {
         return (
           <View style={styles.footer}>
             <View>
-              <Text style={styles.text}>Kevin wants to sync</Text>
+              <Text style={styles.text}>{`${partnerName} wants to sync`}</Text>
             </View>
             <View>
               <TouchableOpacity
@@ -189,7 +192,7 @@ const SyncScreen = () => {
           <View style={styles.footer}>
             <View>
               <Text style={styles.text}>
-                Looks like Kevin is busy right now
+                {`Looks like ${partnerName} is busy right now`}
               </Text>
             </View>
             <View>
@@ -213,7 +216,7 @@ const SyncScreen = () => {
           <View style={[styles.footer, { justifyContent: "flex-end" }]}>
             <View>
               <Text style={styles.text}>
-                Kevin has accepted your sync invitation
+                {`${partnerName} has accepted your sync invitation`}
               </Text>
             </View>
             <View

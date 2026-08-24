@@ -47,9 +47,10 @@ export const dismissLoveOverlays = (
 export const restoreLoveOverlays = (
   navigation: NavigationProp<ParamListBase>,
   layer: LoveLayer | null,
-  companionId?: string
+  companionId?: string,
+  name?: string
 ) => {
-  const params = { companionId };
+  const params = { companionId, name };
   navigation.navigate(SCREENS.LOVE_CHAT as never, params as never);
   if (layer === "call") {
     navigation.navigate(SCREENS.LOVE_CALL as never, params as never);

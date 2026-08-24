@@ -23,13 +23,14 @@ import PhoneDown from "@images/love/phone-down.svg";
 import { useCompanions } from "../../store/companions";
 import { s } from "../avatar/scale";
 import { dismissLoveOverlays } from "./overlay";
+import { resolveLovePerson } from "./partner";
 import { useLoveSession } from "./session";
 
 const CALL_FACE = require("../../../assets/images/love/call-face.png");
 
 type CallRoute = RouteProp<
   {
-    LoveCall: { companionId?: string };
+    LoveCall: { companionId?: string; name?: string };
   },
   "LoveCall"
 >;
@@ -52,14 +53,18 @@ export const LoveCallScreen = () => {
     patchChat,
     minimize,
     companionId,
+    chat,
     callStartedAt,
     ensureLayerTimer,
     clearLayerTimer,
   } = useLoveSession();
-  const companion =
-    companions.find((item) => item.id === route.params?.companionId) ??
-    activeCompanion;
-  const name = companion?.name ?? "Kevin";
+  const { companionId: partnerId, name } = resolveLovePerson({
+    companionId: route.params?.companionId ?? companionId,
+    name: route.params?.name,
+    companions,
+    activeCompanion,
+    chatName: chat?.name,
+  });
   const [now, setNow] = useState(Date.now());
   const [pressing, setPressing] = useState(false);
   const elapsed = callStartedAt
@@ -69,11 +74,11 @@ export const LoveCallScreen = () => {
   useEffect(() => {
     start({
       layer: "call",
-      companionId: companion?.id ?? companionId,
+      companionId: partnerId,
       name,
     });
     ensureLayerTimer("call");
-  }, [companion?.id, companionId, ensureLayerTimer, name, start]);
+  }, [ensureLayerTimer, name, partnerId, start]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -138,7 +143,7 @@ export const LoveCallScreen = () => {
           clearLayerTimer("call");
           start({
             layer: "chat",
-            companionId: companion?.id ?? companionId,
+            companionId: partnerId,
             name,
           });
           navigation.goBack();

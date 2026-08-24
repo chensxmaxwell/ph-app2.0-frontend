@@ -26,13 +26,16 @@ import { useCompanions } from "../../store/companions";
 import { s } from "../avatar/scale";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
+import { resolveLovePerson } from "./partner";
 import { useLoveSession } from "./session";
+import { usePatternPlayer } from "../../hooks/usePatternPlayer";
+import { wavePattern } from "../../store/patterns";
 
 const FACE = require("../../../assets/images/love/call-face.png");
 
 type SyncRoute = RouteProp<
   {
-    LoveSync: { companionId?: string };
+    LoveSync: { companionId?: string; name?: string };
   },
   "LoveSync"
 >;
@@ -55,14 +58,23 @@ export const LoveSyncScreen = () => {
     patchChat,
     minimize,
     companionId,
+    chat,
     syncStartedAt,
     ensureLayerTimer,
     clearLayerTimer,
   } = useLoveSession();
-  const companion =
-    companions.find((item) => item.id === route.params?.companionId) ??
-    activeCompanion;
-  const name = companion?.name ?? "Kevin";
+  const { companionId: partnerId, name } = resolveLovePerson({
+    companionId: route.params?.companionId ?? companionId,
+    name: route.params?.name,
+    companions,
+    activeCompanion,
+    chatName: chat?.name,
+  });
+  const { stop: stopMotor } = usePatternPlayer(
+    wavePattern(72),
+    "sync",
+    true
+  );
   const [now, setNow] = useState(Date.now());
   const [muted, setMuted] = useState(false);
   const elapsed = syncStartedAt
@@ -73,11 +85,11 @@ export const LoveSyncScreen = () => {
   useEffect(() => {
     start({
       layer: "sync",
-      companionId: companion?.id ?? companionId,
+      companionId: partnerId,
       name,
     });
     ensureLayerTimer("sync");
-  }, [companion?.id, companionId, ensureLayerTimer, name, start]);
+  }, [ensureLayerTimer, name, partnerId, start]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -149,9 +161,10 @@ export const LoveSyncScreen = () => {
           onPress={() => {
             patchChat({ synced: false });
             clearLayerTimer("sync");
+            stopMotor();
             start({
               layer: "chat",
-              companionId: companion?.id ?? companionId,
+              companionId: partnerId,
               name,
             });
             navigation.goBack();

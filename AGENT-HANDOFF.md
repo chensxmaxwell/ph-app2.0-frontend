@@ -47,6 +47,8 @@ Read this file first. It is the working memory for the next agent: product decis
 | 3D beauty | **Ignore for now** (user, 2026-08-24). |
 | Real BLE / toy hardware | **Ignore for now** (user, 2026-08-24). Use **fake Bluetooth**. |
 | LLM | User wants a real OpenAI-compatible API, “just add a key.” Service exists; **Love/Message UI still uses local scripted replies** until wired. |
+| Companion Sync | Love chat or Message thread already has a person. Sync **starts with that person** (Love SYNC overlay). No picker. Control Sync has no person, so the selection stack is OK. |
+| Control Auto | **Toggle in place** on the hub. Rotating ring while on. Do **not** push `auto.tsx` as the primary tap. |
 
 ---
 
@@ -177,8 +179,8 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 | `src/hooks/useBleManager.ts` | Real `react-native-ble-manager` (unused for demo) |
 | `src/screens/onboarding/ConnectDevice/index.tsx` | Device list; **demo row first**, then real scan |
 | `src/common/components/connection-pill/` | Connected/Disconnected; tap → `CONNECT_DEVICE` |
-| `src/screens/control/index.tsx` | Hub: Auto, Playground, Pattern, Manual, Kink, Sync. Kink → `KINK_HUB` (`control/sub-screens/kink`), then Generate → wizard |
-| `src/screens/control/auto.tsx` | Color wheel + intensity + play → `wavePattern` + motor |
+| `src/screens/control/index.tsx` | Hub: Auto, Playground, Pattern, Manual, Kink, Sync. **Auto tap toggles** (ring + motor). Kink → `KINK_HUB` (`control/sub-screens/kink`), then Generate → wizard |
+| `src/screens/control/auto.tsx` | Leftover color-wheel screen — not the primary Auto action |
 | `src/screens/control/sub-screens/manual/` | Slider + play; `setMotorInput([1, level, level, level])` |
 | `src/screens/control/sub-screens/pattern/` | Library |
 | `src/store/patterns.ts` | `BUILTIN_PATTERNS`, `wavePattern`, `nextNamedPattern` |
@@ -238,7 +240,8 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 4. **`start()` on LoveChat mount** must `keepLayer` so restoring into Sync/Call doesn’t reset layer to chat.
 5. Pattern play from Love must **minimize Love first**, then Pattern, so the pill is the way back.
 6. Chat call `useEffect` cleanup used to `setInCall(null)` on minimize. Hangup vs minimize must use a ref (see `src/screens/chat/call.tsx`).
-7. Figma Control tab *is* the color remote; current Control is a **6-card hub**, Auto is the wheel. User never 拍版; leave hub unless they ask.
+7. Figma Control tab *is* the color remote; current Control is a **6-card hub**. **Auto is a hub toggle** (ring + fake motor), not a full-screen push. `auto.tsx` color wheel is leftover advanced UI — do not make it the primary Auto tap.
+8. Message/Love Sync with a known companion must open Love SYNC overlay bound to that person. Never dump the user on `SYNC_SELECTION_SCREEN` to pick again.
 
 ---
 

@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import {
   Image,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -69,10 +70,18 @@ export const Chat = () => {
           <TouchableOpacity
             onPress={() => setMenuOpen((open) => !open)}
             activeOpacity={0.85}
+            hitSlop={12}
+            style={styles.addHit}
           >
             <PlusIcon width={s(40)} height={s(40)} />
           </TouchableOpacity>
         </View>
+        {menuOpen ? (
+          <Pressable
+            style={styles.menuScrim}
+            onPress={() => setMenuOpen(false)}
+          />
+        ) : null}
         {menuOpen ? (
           <View style={styles.menu}>
             <TouchableOpacity
@@ -192,6 +201,18 @@ const styles = StyleSheet.create({
     backgroundColor: colors.grayLight,
     alignItems: "center",
     justifyContent: "center",
+  },
+  addHit: {
+    width: s(44),
+    height: s(44),
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 5,
+  },
+  menuScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.25)",
+    zIndex: 3,
   },
   menu: {
     position: "absolute",
