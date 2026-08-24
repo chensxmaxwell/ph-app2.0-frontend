@@ -37,7 +37,7 @@ export const useHome = () => {
       profilePicture: MockProfile,
     },
     {
-      name: "Samantha",
+      name: "Riley",
       gender: "M",
       birthdate: "1995-01-01",
       photos: [],
@@ -46,7 +46,7 @@ export const useHome = () => {
       profilePicture: MockProfile4,
     },
     {
-      name: "Samantha",
+      name: "Jordan",
       gender: "M",
       birthdate: "1995-01-01",
       photos: [],
@@ -55,7 +55,7 @@ export const useHome = () => {
       profilePicture: MockProfile2,
     },
     {
-      name: "Samantha",
+      name: "Alex",
       gender: "M",
       birthdate: "1995-01-01",
       photos: [],
@@ -64,7 +64,7 @@ export const useHome = () => {
       profilePicture: MockProfile5,
     },
     {
-      name: "Samantha",
+      name: "Casey",
       gender: "M",
       birthdate: "1995-01-01",
       photos: [],
@@ -73,7 +73,7 @@ export const useHome = () => {
       profilePicture: MockProfile9,
     },
     {
-      name: "Samantha",
+      name: "Quinn",
       gender: "M",
       birthdate: "1995-01-01",
       photos: [],
@@ -82,7 +82,7 @@ export const useHome = () => {
       profilePicture: MockProfile6,
     },
     {
-      name: "Samantha",
+      name: "Reese",
       gender: "M",
       birthdate: "1995-01-01",
       photos: [],
@@ -91,7 +91,7 @@ export const useHome = () => {
       profilePicture: MockProfile7,
     },
     {
-      name: "Samantha",
+      name: "Morgan",
       gender: "M",
       birthdate: "1995-01-01",
       photos: [],

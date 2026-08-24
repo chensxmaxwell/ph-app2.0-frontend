@@ -3,8 +3,12 @@ import { View, Text, StyleSheet, Image, TouchableOpacity } from "react-native";
 import { ScreenWrapper } from "@common/components/screen-wrapper";
 import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
-import { useNavigation, useRoute } from "@react-navigation/native";
-import { SCREENS } from "../../common/constant/index";
+import {
+  NavigationProp,
+  ParamListBase,
+  useNavigation,
+  useRoute,
+} from "@react-navigation/native";
 import MinimizeIcon from "@images/minimize.svg";
 import Xmark from "@images/icons/xmark.svg";
 import Speaker from "@images/speaker.svg";
@@ -12,12 +16,17 @@ import MicroPhone_unmute from "@images/microphone-unmute.svg";
 import MicroPhone_mute from "@images/microphone-mute.svg";
 import { usePatternPlayer } from "../../hooks/usePatternPlayer";
 import { wavePattern } from "../../store/patterns";
+import { useLoveSession } from "../love/session";
 
 const SyncScreen = () => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp<ParamListBase>>();
   const route = useRoute();
-  const partnerName =
-    (route.params as { name?: string } | undefined)?.name?.trim() || "Kevin";
+  const params = route.params as
+    | { name?: string; companionId?: string }
+    | undefined;
+  const partnerName = params?.name?.trim() || "Kevin";
+  const partnerId = params?.companionId?.trim() || `sync-${partnerName}`;
+  const { start: startSession, minimize, ensureLayerTimer } = useLoveSession();
   const [syncState, setSyncState] = useState("SYNC_ONGOING");
   const { start, stop } = usePatternPlayer(wavePattern(72), "sync");
   //   SYNC_INVITATION_SENT
@@ -28,7 +37,34 @@ const SyncScreen = () => {
   //   SYNC_ONGOING
 
   const [isMuted, setIsMuted] = useState(false);
+  const [speakerOn, setSpeakerOn] = useState(true);
   const [elapsedTime, setElapsedTime] = useState(0);
+
+  const leaveSyncStack = () => {
+    const parent = navigation.getParent();
+    if (parent) {
+      parent.goBack();
+      return;
+    }
+    navigation.goBack();
+  };
+
+  const hangupSync = () => {
+    stop();
+    leaveSyncStack();
+  };
+
+  const minimizeSync = () => {
+    startSession({
+      layer: "sync",
+      companionId: partnerId,
+      name: partnerName,
+      syncing: true,
+    });
+    ensureLayerTimer("sync", Date.now() - elapsedTime * 1000);
+    minimize();
+    leaveSyncStack();
+  };
 
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
@@ -67,7 +103,7 @@ const SyncScreen = () => {
             <Text style={styles.headerTitle}>{partnerName}</Text>
             <TouchableOpacity
               style={styles.minimizeIcon}
-              onPress={() => navigation.goBack()}
+              onPress={minimizeSync}
             >
               <MinimizeIcon width={35} height={35} />
             </TouchableOpacity>
@@ -234,7 +270,7 @@ const SyncScreen = () => {
                   alignItems: "center",
                   justifyContent: "center",
                 }}
-                onPress={() => navigation.goBack()}
+                onPress={hangupSync}
               >
                 <Xmark width={20} height={20}></Xmark>
               </TouchableOpacity>
@@ -281,7 +317,7 @@ const SyncScreen = () => {
                   alignItems: "center",
                   justifyContent: "center",
                 }}
-                onPress={() => navigation.goBack()}
+                onPress={hangupSync}
               >
                 <Xmark width={20} height={20}></Xmark>
               </TouchableOpacity>
@@ -290,10 +326,13 @@ const SyncScreen = () => {
                   height: 73,
                   width: 73,
                   borderRadius: 100,
-                  backgroundColor: colors.grayLightest,
+                  backgroundColor: speakerOn
+                    ? colors.grayLightest
+                    : colors.grayLighter,
                   alignItems: "center",
                   justifyContent: "center",
                 }}
+                onPress={() => setSpeakerOn((current) => !current)}
               >
                 <Speaker width={35} height={35}></Speaker>
               </TouchableOpacity>

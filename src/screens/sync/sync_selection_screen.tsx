@@ -26,9 +26,9 @@ const images = {
 };
 
 const users = [
-  { id: "1", name: "Kevin", avatar: "avatar1" },
-  { id: "2", name: "Kevin", avatar: "avatar2" },
-  { id: "3", name: "Kevin", avatar: "avatar3" },
+  { id: "kevin", name: "Kevin", avatar: "avatar1" },
+  { id: "chad", name: "Chad", avatar: "avatar2" },
+  { id: "amanda", name: "Amanda", avatar: "avatar3" },
 ];
 
 const SyncSelectionScreen = () => {
@@ -103,7 +103,7 @@ const SyncSelectionScreen = () => {
             onPress={() =>
               navigation.navigate(
                 SCREENS.SYNC_SCREEN as never,
-                { name: item.name } as never
+                { name: item.name, companionId: item.id } as never
               )
             }
           >

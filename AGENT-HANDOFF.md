@@ -242,6 +242,7 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 6. Chat call `useEffect` cleanup used to `setInCall(null)` on minimize. Hangup vs minimize must use a ref (see `src/screens/chat/call.tsx`).
 7. Figma Control tab *is* the color remote; current Control is a **6-card hub**. **Auto is a hub toggle** (ring + fake motor), not a full-screen push. `auto.tsx` color wheel is leftover advanced UI — do not make it the primary Auto tap.
 8. Message/Love Sync with a known companion must open Love SYNC overlay bound to that person. Never dump the user on `SYNC_SELECTION_SCREEN` to pick again.
+9. Control Sync minimize must **keep the session** (Love session + global pill). Red X ends Sync. Do not treat minimize as hangup.
 
 ---
 

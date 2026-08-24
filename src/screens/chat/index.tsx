@@ -108,23 +108,27 @@ export const Chat = () => {
             </TouchableOpacity>
           </View>
         ) : null}
-        <Text style={styles.section}>Pinned</Text>
-        <View style={styles.pinnedCard}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.pinnedRow}
-          >
-            {(pinned.length ? pinned : threads.slice(0, 1)).map((thread) => (
-              <TouchableOpacity
-                key={`pin-${thread.id}`}
-                onPress={() => openThread(thread.id)}
+        {pinned.length ? (
+          <>
+            <Text style={styles.section}>Pinned</Text>
+            <View style={styles.pinnedCard}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.pinnedRow}
               >
-                <Image source={faceFor(thread)} style={styles.pinFace} />
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
+                {pinned.map((thread) => (
+                  <TouchableOpacity
+                    key={`pin-${thread.id}`}
+                    onPress={() => openThread(thread.id)}
+                  >
+                    <Image source={faceFor(thread)} style={styles.pinFace} />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          </>
+        ) : null}
         <Text style={[styles.section, styles.recentLabel]}>Recent</Text>
         <ScrollView
           style={styles.recent}

@@ -72,7 +72,10 @@ export const ChatSettingsScreen = () => {
           <TouchableOpacity
             style={styles.traits}
             onPress={() =>
-              navigation.navigate(SCREENS.AVATAR_STACK as never)
+              navigation.navigate(
+                SCREENS.CHAT_CREATE as never,
+                { threadId: thread.id } as never
+              )
             }
           >
             <Text style={styles.traitsText}>Edit traits</Text>

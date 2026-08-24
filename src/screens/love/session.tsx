@@ -34,7 +34,7 @@ type LoveSessionValue = {
   minimize: () => void;
   restore: () => void;
   end: () => void;
-  ensureLayerTimer: (layer: LoveTimerLayer) => void;
+  ensureLayerTimer: (layer: LoveTimerLayer, startedAt?: number) => void;
   clearLayerTimer: (layer: LoveTimerLayer) => void;
 };
 
@@ -166,13 +166,17 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
     setMinimized(false);
   }, []);
 
-  const ensureLayerTimer = useCallback((nextLayer: LoveTimerLayer) => {
+  const ensureLayerTimer = useCallback((
+    nextLayer: LoveTimerLayer,
+    startedAt?: number
+  ) => {
+    const fallback = startedAt ?? Date.now();
     switch (nextLayer) {
       case "call":
-        setCallStartedAt((current) => current ?? Date.now());
+        setCallStartedAt((current) => current ?? fallback);
         return;
       case "sync":
-        setSyncStartedAt((current) => current ?? Date.now());
+        setSyncStartedAt((current) => current ?? fallback);
         return;
       default: {
         const exhaustive: never = nextLayer;

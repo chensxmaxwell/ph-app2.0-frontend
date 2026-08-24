@@ -100,6 +100,7 @@ export const ChatThreadScreen = () => {
   const [holding, setHolding] = useState(false);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [listenBlocked, setListenBlocked] = useState(false);
+  const [resentNote, setResentNote] = useState(false);
   const listRef = useRef<ScrollView>(null);
 
   if (!thread) {
@@ -300,9 +301,15 @@ export const ChatThreadScreen = () => {
             </View>
           ) : thread.request === "sent" ? (
             <View style={[styles.gate, { paddingBottom: insets.bottom + s(16) }]}>
+              {resentNote ? (
+                <Text style={styles.limit}>Request resent</Text>
+              ) : null}
               <TouchableOpacity
                 style={styles.primary}
-                onPress={() => setRequest(thread.id, "sent")}
+                onPress={() => {
+                  setRequest(thread.id, "sent");
+                  setResentNote(true);
+                }}
               >
                 <Text style={styles.primaryText}>Resend request</Text>
               </TouchableOpacity>
@@ -497,12 +504,16 @@ export const ChatThreadScreen = () => {
                   <Pressable
                     key={page}
                     onPress={() => setDrawerPage(page)}
-                    hitSlop={12}
-                    style={[
-                      styles.dot,
-                      drawerPage === page ? styles.dotOn : null,
-                    ]}
-                  />
+                    hitSlop={8}
+                    style={styles.dotHit}
+                  >
+                    <View
+                      style={[
+                        styles.dot,
+                        drawerPage === page ? styles.dotOn : null,
+                      ]}
+                    />
+                  </Pressable>
                 ))}
               </View>
             </View>
@@ -771,6 +782,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "center",
     gap: s(8),
+  },
+  dotHit: {
+    width: s(44),
+    height: s(44),
+    alignItems: "center",
+    justifyContent: "center",
   },
   dot: {
     width: s(6),

@@ -135,7 +135,7 @@ export const LoveCallScreen = () => {
         >
           <Image source={CALL_FACE} style={styles.face} />
         </Pressable>
-        <Text style={styles.press}>Press</Text>
+        <Text style={styles.press}>Connected</Text>
       </View>
       <TouchableOpacity
         onPress={() => {

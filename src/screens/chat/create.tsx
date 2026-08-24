@@ -26,7 +26,7 @@ type CreateRoute = RouteProp<
 export const ChatCreateScreen = () => {
   const navigation = useNavigation();
   const route = useRoute<CreateRoute>();
-  const { createBot, getThread } = useChat();
+  const { createBot, updateBot, getThread } = useChat();
   const existing = route.params?.threadId
     ? getThread(route.params.threadId)
     : undefined;
@@ -39,8 +39,11 @@ export const ChatCreateScreen = () => {
   );
   const [done, setDone] = useState(false);
 
+  const editing = Boolean(existing);
+
   const submit = () => {
     if (existing) {
+      updateBot(existing.id, { name, gender, birthday, description });
       setCreatedId(existing.id);
       setDone(true);
       return;
@@ -67,7 +70,9 @@ export const ChatCreateScreen = () => {
             </View>
             <Text style={styles.successTitle}>{name || "Kevin"}</Text>
             <Text style={styles.successBody}>
-              {`You have successfully created ${name || "Kevin"}. Start chatting with ${name || "Kevin"} or create an avatar.`}
+              {editing
+                ? `You have saved ${name || "Kevin"}.`
+                : `You have successfully created ${name || "Kevin"}. Start chatting with ${name || "Kevin"} or create an avatar.`}
             </Text>
             <TouchableOpacity
               style={styles.primary}
@@ -80,12 +85,14 @@ export const ChatCreateScreen = () => {
             >
               <Text style={styles.primaryText}>Start chatting</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.primary}
-              onPress={() => navigation.navigate(SCREENS.AVATAR_STACK as never)}
-            >
-              <Text style={styles.primaryText}>Create avatar</Text>
-            </TouchableOpacity>
+            {editing ? null : (
+              <TouchableOpacity
+                style={styles.primary}
+                onPress={() => navigation.navigate(SCREENS.AVATAR_STACK as never)}
+              >
+                <Text style={styles.primaryText}>Create avatar</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity onPress={() => navigation.goBack()}>
               <Text style={styles.link}>Return</Text>
             </TouchableOpacity>

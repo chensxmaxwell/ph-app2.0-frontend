@@ -52,7 +52,12 @@ export const Home = () => {
       <TouchableOpacity
         key={`mock-${index}`}
         style={styles.companionPicture}
-        onPress={() => openLove()}
+        onPress={() =>
+          openLove({
+            companionId: `home-mock-${index}`,
+            name: companion.name,
+          })
+        }
       >
         {companion.profilePicture && (
           <companion.profilePicture height="100%" width="100%" />
@@ -106,11 +111,21 @@ export const Home = () => {
         <BaseText style={styles.pleasureHouse}>Pleasure House</BaseText>
         <View style={styles.hero}>
           {activeCompanion ? (
-            <AvatarPreview
-              look={lookFromCompanion(activeCompanion)}
-              width={s(300)}
-              height={s(300)}
-            />
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={() =>
+                openLove({
+                  companionId: activeCompanion.id,
+                  name: activeCompanion.name,
+                })
+              }
+            >
+              <AvatarPreview
+                look={lookFromCompanion(activeCompanion)}
+                width={s(300)}
+                height={s(300)}
+              />
+            </TouchableOpacity>
           ) : (
             <House />
           )}

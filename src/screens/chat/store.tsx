@@ -107,6 +107,15 @@ type ChatContextValue = {
     birthday: string;
     description: string;
   }) => string;
+  updateBot: (
+    threadId: string,
+    input: {
+      name: string;
+      gender: string;
+      birthday: string;
+      description: string;
+    }
+  ) => void;
   humanLimitReached: (thread: ChatThread) => boolean;
 };
 
@@ -383,7 +392,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
           request === "accepted"
             ? "I have accepted your request. Let’s Chat!"
             : request === "sent"
-            ? "Waiting for Chad to respond"
+            ? `Request resent. Waiting for ${thread.name} to respond.`
             : request === "incoming"
             ? `${thread.name} wants to chat`
             : thread.preview;
@@ -483,6 +492,29 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     []
   );
 
+  const updateBot = useCallback(
+    (
+      threadId: string,
+      input: {
+        name: string;
+        gender: string;
+        birthday: string;
+        description: string;
+      }
+    ) => {
+      updateThread(threadId, (thread) => ({
+        ...thread,
+        name: input.name.trim() || thread.name,
+        gender: input.gender,
+        birthday: input.birthday,
+        description: input.description,
+        preview: thread.preview,
+        time: "Now",
+      }));
+    },
+    [updateThread]
+  );
+
   const humanLimitReached = useCallback(
     (thread: ChatThread) => {
       if (isPremium || thread.kind !== "human" || thread.request !== "accepted") {
@@ -517,11 +549,13 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       setPremium: setIsPremium,
       setInCall: setInCallThreadId,
       createBot,
+      updateBot,
       humanLimitReached,
     }),
     [
       cancelFriendRequest,
       createBot,
+      updateBot,
       directory,
       editLastMine,
       getThread,

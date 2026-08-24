@@ -25,7 +25,6 @@ import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import ChevronBack from "@images/avatar/chevron-back.svg";
 import Dots from "@images/love/dots.svg";
-import Waveform from "@images/love/waveform.svg";
 import PlusCircle from "@images/love/plus-circle.svg";
 import Paperplane from "@images/love/paperplane.svg";
 import ListenIcon from "@images/message/listen.svg";
@@ -68,24 +67,36 @@ type DrawerItem = {
   active?: boolean;
 };
 
-const modeCopy = (mode: Exclude<LoveMode, "none">) => {
+const modeCopy = (
+  mode: Exclude<LoveMode, "none">,
+  intent: "stop" | "leave"
+) => {
   switch (mode) {
     case "pattern":
       return {
         title: "Pattern mode in Progress",
-        body: "Leaving this chat will end voice calling and syncing session.",
+        body:
+          intent === "leave"
+            ? "Leaving this chat will end the Pattern session."
+            : "You cannot start another action while Pattern is running.",
         primary: "Stop Pattern",
       };
     case "kink":
       return {
         title: "Kink mode in Progress",
-        body: "You cannot start another action when you are in kink mode.",
+        body:
+          intent === "leave"
+            ? "Leaving this chat will end the Kink session."
+            : "You cannot start another action while Kink is running.",
         primary: "Stop Kink",
       };
     case "bliss":
       return {
         title: "Quick bliss in Progress",
-        body: "Leaving this chat will end the Quick bliss session.",
+        body:
+          intent === "leave"
+            ? "Leaving this chat will end the Quick bliss session."
+            : "You cannot start another action while Quick bliss is running.",
         primary: "Stop Quick bliss",
       };
     default: {
@@ -106,9 +117,9 @@ const Dialog = ({
   title: string;
   body: string;
   primary: string;
-  secondary: string;
+  secondary?: string;
   onPrimary: () => void;
-  onSecondary: () => void;
+  onSecondary?: () => void;
 }) => (
   <View style={styles.dialogScrim}>
     <View style={styles.dialog}>
@@ -117,9 +128,11 @@ const Dialog = ({
       <TouchableOpacity style={styles.dialogPrimary} onPress={onPrimary}>
         <Text style={styles.dialogPrimaryText}>{primary}</Text>
       </TouchableOpacity>
-      <TouchableOpacity onPress={onSecondary}>
-        <Text style={styles.dialogSecondary}>{secondary}</Text>
-      </TouchableOpacity>
+      {secondary && onSecondary ? (
+        <TouchableOpacity onPress={onSecondary}>
+          <Text style={styles.dialogSecondary}>{secondary}</Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   </View>
 );
@@ -427,7 +440,8 @@ export const LoveChatScreen = () => {
   ];
 
   const drawerItems = drawerPage === 0 ? pageZero : pageOne;
-  const stop = mode === "none" ? null : modeCopy(mode);
+  const stop = mode === "none" ? null : modeCopy(mode, "stop");
+  const leave = mode === "none" ? null : modeCopy(mode, "leave");
 
   return (
     <View style={styles.root}>
@@ -509,7 +523,7 @@ export const LoveChatScreen = () => {
             ]}
           >
             <TouchableOpacity onPress={openCall} hitSlop={8} style={styles.iconHit}>
-              <Waveform width={s(35)} height={s(35)} />
+              <PhoneIcon width={s(35)} height={s(35)} />
             </TouchableOpacity>
             <View style={styles.inputWrap}>
               <TextInput
@@ -561,12 +575,16 @@ export const LoveChatScreen = () => {
                   <Pressable
                     key={page}
                     onPress={() => setDrawerPage(page)}
-                    hitSlop={12}
-                    style={[
-                      styles.dot,
-                      drawerPage === page ? styles.dotOn : null,
-                    ]}
-                  />
+                    hitSlop={8}
+                    style={styles.dotHit}
+                  >
+                    <View
+                      style={[
+                        styles.dot,
+                        drawerPage === page ? styles.dotOn : null,
+                      ]}
+                    />
+                  </Pressable>
                 ))}
               </View>
             </View>
@@ -586,12 +604,12 @@ export const LoveChatScreen = () => {
       ) : null}
       {leaveOpen ? (
         <Dialog
-          title={stop?.title ?? "Actions in progress"}
+          title={leave?.title ?? "Actions in progress"}
           body={
-            stop?.body ??
-            "Leaving this chat will end voice calling and syncing session."
+            leave?.body ??
+            "Leaving this chat will end the voice call or sync session."
           }
-          primary={stop?.primary ?? "Leave"}
+          primary={leave?.primary ?? "Leave"}
           secondary="Cancel"
           onPrimary={() => {
             stopEverything();
@@ -609,9 +627,7 @@ export const LoveChatScreen = () => {
             `${name} is your companion.`
           }
           primary="Close"
-          secondary="Back"
           onPrimary={() => setInfoOpen(false)}
-          onSecondary={() => setInfoOpen(false)}
         />
       ) : null}
       {listenBlocked ? (
@@ -805,6 +821,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "center",
     gap: s(8),
+  },
+  dotHit: {
+    width: s(44),
+    height: s(44),
+    alignItems: "center",
+    justifyContent: "center",
   },
   dot: {
     width: s(6),
