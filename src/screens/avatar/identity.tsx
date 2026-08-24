@@ -20,6 +20,7 @@ import {
   PillField,
   WizardShell,
   useLeaveGuard,
+  wizardProgressFill,
 } from "./shared";
 
 const isPlausibleBirthday = (value: string): boolean => {
@@ -54,13 +55,14 @@ export const AvatarIdentityScreen = () => {
     resetDraft();
     navigation.goBack();
   });
-  const canContinue = draft.name.trim().length > 0;
   const birthdayLooksInvalid = !isPlausibleBirthday(draft.birthday);
+  const canContinue =
+    draft.name.trim().length > 0 && !birthdayLooksInvalid;
 
   return (
     <WizardShell
       title="Craft your ideal lover"
-      progressFill={33}
+      progressFill={wizardProgressFill(1)}
       leftIcon="back"
       onLeftPress={requestLeave}
       primaryLabel="Continue"
@@ -119,34 +121,56 @@ export const AvatarIdentityScreen = () => {
             activeOpacity={0.85}
             onPress={() => setGenderOpen((open) => !open)}
           >
-            <PillField>
+            <PillField focused={Boolean(draft.gender) || genderOpen}>
               <View style={styles.genderRow}>
                 <Text
                   style={[
                     styles.input,
-                    draft.gender ? styles.genderValue : null,
+                    draft.gender ? styles.genderValue : styles.genderPlaceholder,
                   ]}
                 >
-                  {draft.gender}
+                  {draft.gender || "Select"}
                 </Text>
                 <ChevronDown width={s(35)} height={s(35)} />
               </View>
             </PillField>
           </TouchableOpacity>
           {genderOpen
-            ? GENDER_OPTIONS.map((option) => (
-                <TouchableOpacity
-                  key={option}
-                  style={styles.genderOption}
-                  onPress={() => {
-                    patchDraft({ gender: option as GenderOption });
-                    setGenderOpen(false);
-                  }}
-                >
-                  <Text style={styles.genderOptionText}>{option}</Text>
-                </TouchableOpacity>
-              ))
+            ? GENDER_OPTIONS.map((option) => {
+                const available = option === "Male";
+                const selected = draft.gender === option;
+                return (
+                  <TouchableOpacity
+                    key={option}
+                    disabled={!available}
+                    style={[
+                      styles.genderOption,
+                      selected && styles.genderOptionSelected,
+                      !available && styles.genderOptionDisabled,
+                    ]}
+                    onPress={() => {
+                      if (!available) {
+                        return;
+                      }
+                      patchDraft({ gender: option as GenderOption });
+                      setGenderOpen(false);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.genderOptionText,
+                        !available && styles.genderOptionTextDisabled,
+                      ]}
+                    >
+                      {available ? option : `${option} · unavailable`}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })
             : null}
+          <Text style={styles.genderNote}>
+            Demo: male avatar only for now
+          </Text>
         </View>
       </KeyboardAvoidingView>
     </WizardShell>
@@ -186,6 +210,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   genderValue: {
+    color: colors.white,
+  },
+  genderPlaceholder: {
     color: colors.grayLighter,
   },
   genderOption: {
@@ -196,10 +223,30 @@ const styles = StyleSheet.create({
     marginTop: s(8),
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "transparent",
+  },
+  genderOptionSelected: {
+    backgroundColor: colors.grayLighter,
+    borderColor: colors.white,
+  },
+  genderOptionDisabled: {
+    opacity: 0.42,
   },
   genderOptionText: {
     color: colors.white,
     fontFamily: "Quicksand-Bold",
     fontSize: 13,
+  },
+  genderOptionTextDisabled: {
+    color: colors.grayLighter,
+  },
+  genderNote: {
+    marginTop: s(10),
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 13,
+    textAlign: "center",
+    width: s(329),
   },
 });

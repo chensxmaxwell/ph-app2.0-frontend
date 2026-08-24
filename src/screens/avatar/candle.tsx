@@ -7,7 +7,7 @@ import Candle from "@images/avatar/candle.svg";
 import Flame from "@images/avatar/flame.svg";
 import { useAvatarWizard } from "./context";
 import { s } from "./scale";
-import { WizardShell, useLeaveGuard } from "./shared";
+import { WizardShell, useLeaveGuard, wizardProgressFill } from "./shared";
 
 export const AvatarCandleScreen = () => {
   const navigation = useNavigation();
@@ -21,7 +21,7 @@ export const AvatarCandleScreen = () => {
   return (
     <WizardShell
       title="Craft your ideal lover"
-      progressFill={328}
+      progressFill={wizardProgressFill(8)}
       leftIcon="close"
       onLeftPress={requestLeave}
       primaryLabel="Blow the candle"
@@ -33,8 +33,8 @@ export const AvatarCandleScreen = () => {
       <View style={styles.content}>
         <Text style={styles.heading}>{name} is here to meet you</Text>
         <Text style={styles.body}>
-          When you’re ready, blow the candle and breathe life into your perfect
-          partner and step into the love story you’ve always dreamed of.
+          Blow the candle to save {name} and open chat. This is a send-off —
+          look and persona are already set.
         </Text>
         <View style={styles.candle}>
           <View style={styles.flame}>

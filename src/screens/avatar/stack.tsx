@@ -49,6 +49,7 @@ export const AvatarStack = () => (
       <Stack.Screen
         name={SCREENS.AVATAR_WAITING}
         component={AvatarWaitingScreen}
+        options={{ gestureEnabled: false }}
       />
     </Stack.Navigator>
   </AvatarWizardProvider>

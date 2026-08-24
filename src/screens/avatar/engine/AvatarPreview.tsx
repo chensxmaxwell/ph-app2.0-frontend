@@ -1,38 +1,60 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   LayoutChangeEvent,
   NativeModules,
   StyleSheet,
+  Text,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { WebView } from "react-native-webview";
+import { colors } from "@common/styles/colors";
 import { AvatarLook } from "./viewer-html";
 
-const avatarViewerUri = () => {
+export const avatarViewerUri = (nonce = 0) => {
   const scriptURL = NativeModules.SourceCode?.scriptURL || "";
   const match = String(scriptURL).match(/^(https?):\/\/([^/:]+)(?::(\d+))?/);
   const protocol = match?.[1] || "http";
   const host = match?.[2] || "localhost";
   const metroPort = match?.[3] || "8081";
-  return `${protocol}://${host}:${metroPort}/ph-avatar/viewer.html?v=bozo9`;
+  return `${protocol}://${host}:${metroPort}/ph-avatar/viewer.html?v=bozo10&r=${nonce}`;
 };
+
+const LOAD_TIMEOUT_MS = 15000;
+
+type LoadStatus = "loading" | "ready" | "error";
 
 type AvatarPreviewProps = {
   look: AvatarLook;
   width: number;
   height: number;
   viewMode?: "full" | "bust";
+  revealBody?: boolean;
 };
+
+const metroHint = (uri: string) =>
+  `Phone must reach Metro at ${uri.replace(/\/ph-avatar\/.*$/, "")}. Same Wi‑Fi as the Mac running npm start.`;
 
 export const AvatarPreview = ({
   look,
   width,
   height,
   viewMode = "full",
+  revealBody = false,
 }: AvatarPreviewProps) => {
   const webRef = useRef<WebView>(null);
-  const viewerUri = useMemo(() => avatarViewerUri(), []);
-  const payload = JSON.stringify({ ...look, viewMode });
+  const [nonce, setNonce] = useState(0);
+  const [status, setStatus] = useState<LoadStatus>("loading");
+  const [errorMessage, setErrorMessage] = useState("");
+  const viewerUri = useMemo(() => avatarViewerUri(nonce), [nonce]);
+  const payload = JSON.stringify({ ...look, viewMode, revealBody });
+
+  const fail = (raw: string) => {
+    const detail = raw.trim() || "Unknown preview error";
+    setStatus("error");
+    setErrorMessage(`${detail}\n${metroHint(viewerUri)}`);
+  };
 
   const pushLook = () => {
     webRef.current?.injectJavaScript(
@@ -41,12 +63,31 @@ export const AvatarPreview = ({
   };
 
   useEffect(() => {
-    pushLook();
-  }, [payload]);
+    if (status === "ready") {
+      pushLook();
+    }
+  }, [payload, status]);
+
+  useEffect(() => {
+    if (status !== "loading") {
+      return;
+    }
+    const timer = setTimeout(() => {
+      fail("Timed out while loading the 3D model.");
+    }, LOAD_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [nonce, status, viewerUri]);
+
+  const retry = () => {
+    setErrorMessage("");
+    setStatus("loading");
+    setNonce((current) => current + 1);
+  };
 
   return (
     <View style={[styles.wrap, { width, height }]}>
       <WebView
+        key={nonce}
         ref={webRef}
         originWhitelist={["*"]}
         source={{ uri: viewerUri }}
@@ -58,23 +99,49 @@ export const AvatarPreview = ({
         androidLayerType="hardware"
         mixedContentMode="always"
         javaScriptEnabled
-        onLoadEnd={pushLook}
+        onLoadEnd={() => {
+          if (status === "ready") {
+            pushLook();
+          }
+        }}
         onHttpError={(event) => {
-          console.log("Avatar HTTP error", event.nativeEvent);
+          const { statusCode, description } = event.nativeEvent;
+          fail(`HTTP ${statusCode}${description ? ` ${description}` : ""}`);
         }}
         onError={(event) => {
-          console.log("Avatar WebView error", event.nativeEvent);
+          fail(event.nativeEvent.description || "WebView failed to load");
         }}
         onMessage={(event) => {
           const data = event.nativeEvent.data || "";
-          if (data === "ready" || data.startsWith("error:")) {
-            console.log("Avatar WebView", data);
-            if (data === "ready") {
-              pushLook();
-            }
+          if (data === "ready") {
+            setStatus("ready");
+            pushLook();
+            return;
+          }
+          if (data.startsWith("error:")) {
+            fail(data.slice("error:".length));
           }
         }}
       />
+      {status === "loading" ? (
+        <View style={styles.overlay} pointerEvents="none">
+          <ActivityIndicator color={colors.white} />
+          <Text style={styles.overlayTitle}>Loading 3D model…</Text>
+        </View>
+      ) : null}
+      {status === "error" ? (
+        <View style={styles.overlay}>
+          <Text style={styles.overlayTitle}>Couldn’t load 3D preview</Text>
+          <Text style={styles.overlayBody}>{errorMessage}</Text>
+          <TouchableOpacity
+            onPress={retry}
+            style={styles.retry}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
     </View>
   );
 };
@@ -83,10 +150,12 @@ export const FittedAvatarPreview = ({
   look,
   aspect = 186 / 402,
   viewMode = "full",
+  revealBody = false,
 }: {
   look: AvatarLook;
   aspect?: number;
   viewMode?: "full" | "bust";
+  revealBody?: boolean;
 }) => {
   const [size, setSize] = useState({ width: 1, height: 1 });
 
@@ -117,6 +186,7 @@ export const FittedAvatarPreview = ({
           width={size.width}
           height={size.height}
           viewMode={viewMode}
+          revealBody={revealBody}
         />
       ) : null}
     </View>
@@ -138,5 +208,41 @@ const styles = StyleSheet.create({
     minHeight: 0,
     alignItems: "center",
     justifyContent: "center",
+  },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(20, 16, 40, 0.72)",
+    paddingHorizontal: 16,
+    gap: 10,
+  },
+  overlayTitle: {
+    color: colors.white,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 15,
+    textAlign: "center",
+  },
+  overlayBody: {
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: "center",
+  },
+  retry: {
+    marginTop: 4,
+    minWidth: 112,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.grayLightest,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 18,
+  },
+  retryText: {
+    color: colors.white,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 14,
   },
 });

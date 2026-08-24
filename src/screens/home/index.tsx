@@ -1,11 +1,5 @@
 import React from "react";
-import {
-  View,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Image,
-} from "react-native";
+import { View, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
 import { useHome } from "./hooks";
 import House from "@images/3d-rendering-cartoon-house.svg";
 import AddIcon from "@images/AddIcon.svg";
@@ -19,9 +13,8 @@ import { useNavigation, NavigationProp, ParamListBase } from "@react-navigation/
 import { lookFromCompanion, useCompanions } from "../../store/companions";
 import { s } from "../avatar/scale";
 import { AvatarPreview } from "../avatar/engine/AvatarPreview";
+import { LookFace } from "../avatar/look-face";
 import { useOpenLove } from "../love/pill";
-
-const FACE = require("../../../assets/images/love/face.png");
 
 export const Home = () => {
   const { companions, events, navigateToNestedScreen } = useHome();
@@ -43,7 +36,7 @@ export const Home = () => {
         style={styles.companionPicture}
         onPress={() => openLove({ companionId: companion.id })}
       >
-        <Image source={FACE} style={styles.companionImage} />
+        <LookFace look={lookFromCompanion(companion)} size={70} />
       </TouchableOpacity>
     ));
 

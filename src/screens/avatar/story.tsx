@@ -12,7 +12,7 @@ import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import { useAvatarWizard } from "./context";
 import { s } from "./scale";
-import { FieldLabel, WizardShell, useLeaveGuard } from "./shared";
+import { FieldLabel, WizardShell, useLeaveGuard, wizardProgressFill } from "./shared";
 
 const STORY_LIMIT = 3000;
 
@@ -28,7 +28,7 @@ export const AvatarStoryScreen = () => {
   return (
     <WizardShell
       title="Craft your ideal lover"
-      progressFill={167}
+      progressFill={wizardProgressFill(6)}
       leftIcon="close"
       onLeftPress={requestLeave}
       primaryLabel="Continue"
@@ -47,6 +47,7 @@ export const AvatarStoryScreen = () => {
           <Text style={styles.hintName}>{name}</Text>
           ’s experiences, passions, and the undeniable charm that make them
           unforgettable.
+          {"\n"}Affects chat persona, not 3D.
         </Text>
         <View style={styles.storyBox}>
           <TextInput

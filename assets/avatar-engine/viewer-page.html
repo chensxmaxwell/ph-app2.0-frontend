@@ -32,7 +32,8 @@
   var look = {
     appearanceIndex: 2, hairStyle: 2, hairColor: 1, skinTone: 1, eyeColor: 0,
     upperArms: 0.45, chest: 0.5, forearms: 0.45, backAndHips: 0.48,
-    faceWidth: 0.48, jaw: 0.46, chin: 0.5, eyeSize: 0.5, age: 0.28, viewMode: "full"
+    faceWidth: 0.48, jaw: 0.46, chin: 0.5, eyeSize: 0.5, age: 0.28,
+    viewMode: "full", revealBody: false
   };
 
   var renderer, scene, camera;
@@ -193,6 +194,26 @@
       if (outfitIdx >= 0) {
         obj.visible = outfitIdx === outfit;
         obj.scale.set(1, 1, 1);
+        materialsOf(obj).forEach(function (mat) {
+          if (!mat || typeof mat !== "object") return;
+          if (!mat._phOrig) {
+            mat._phOrig = {
+              transparent: !!mat.transparent,
+              opacity: typeof mat.opacity === "number" ? mat.opacity : 1,
+              depthWrite: mat.depthWrite !== false
+            };
+          }
+          if (next.revealBody && obj.visible) {
+            mat.transparent = true;
+            mat.opacity = 0.22;
+            mat.depthWrite = false;
+          } else {
+            mat.transparent = mat._phOrig.transparent;
+            mat.opacity = mat._phOrig.opacity;
+            mat.depthWrite = mat._phOrig.depthWrite;
+          }
+          mat.needsUpdate = true;
+        });
         return;
       }
       if (name.indexOf("Head_") === 0 || name.indexOf("Eyes_") === 0) {
@@ -220,6 +241,10 @@
 
     bodyMeshes.forEach(function (obj) {
       var name = obj.name || "";
+      if (next.revealBody) {
+        obj.visible = true;
+        return;
+      }
       if (nameHasExposedSkin(name)) {
         obj.visible = true;
         return;
@@ -236,7 +261,7 @@
     var age = clamp01(next.age);
     var white = new THREE.Color(0xffffff);
     var skin = hexColor(SKIN_COLORS[next.skinTone] || SKIN_COLORS[1]);
-    skin.lerp(white, 0.55);
+    skin.lerp(white, 0.08);
     skinMats.forEach(function (mat) {
       mat.color.copy(skin);
       mat.roughness = 0.46 + age * 0.08;

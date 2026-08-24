@@ -6,7 +6,13 @@ import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import { useAvatarWizard } from "./context";
 import { s } from "./scale";
-import { FieldHint, FieldLabel, WizardShell, useLeaveGuard } from "./shared";
+import {
+  FieldHint,
+  FieldLabel,
+  WizardShell,
+  useLeaveGuard,
+  wizardProgressFill,
+} from "./shared";
 
 const SLIDERS = [
   {
@@ -37,7 +43,7 @@ export const AvatarIntimateScreen = () => {
   return (
     <WizardShell
       title="Craft your ideal lover"
-      progressFill={220}
+      progressFill={wizardProgressFill(7)}
       leftIcon="close"
       onLeftPress={requestLeave}
       primaryLabel="Continue"
@@ -49,8 +55,8 @@ export const AvatarIntimateScreen = () => {
       <View style={styles.content}>
         <FieldLabel>Intimate profile</FieldLabel>
         <FieldHint>
-          What kind of connection do you yearn for? Shape the desires that will
-          bind your souls in passion and tenderness.
+          What kind of connection do you yearn for? Affects chat persona, not
+          3D.
         </FieldHint>
         <View style={styles.sliders}>
           {SLIDERS.map((slider) => (

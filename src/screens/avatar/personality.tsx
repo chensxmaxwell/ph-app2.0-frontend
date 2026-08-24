@@ -14,6 +14,7 @@ import {
   OptionPill,
   WizardShell,
   useLeaveGuard,
+  wizardProgressFill,
 } from "./shared";
 
 export const AvatarPersonalityScreen = () => {
@@ -42,7 +43,7 @@ export const AvatarPersonalityScreen = () => {
   return (
     <WizardShell
       title="Craft your ideal lover"
-      progressFill={131}
+      progressFill={wizardProgressFill(5)}
       leftIcon="close"
       onLeftPress={requestLeave}
       primaryLabel="Continue"
@@ -60,7 +61,7 @@ export const AvatarPersonalityScreen = () => {
       <View style={styles.content}>
         <FieldLabel>Personality</FieldLabel>
         <FieldHint>
-          {`What traits set your heart aflame? \nChoose up to 3 qualities that will make your love story unforgettable.`}
+          {`What traits set your heart aflame?\nChoose up to 3. These shape chat persona, not the 3D look.`}
         </FieldHint>
         <View style={styles.options}>
           {PERSONALITY_OPTIONS.map((option) => (

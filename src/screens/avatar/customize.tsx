@@ -13,7 +13,7 @@ import {
 import { FittedAvatarPreview } from "./engine/AvatarPreview";
 import { HairStyleIcon, toHairStyle } from "./hair-style-icon";
 import { s } from "./scale";
-import { WizardShell, useLeaveGuard } from "./shared";
+import { WizardShell, useLeaveGuard, wizardProgressFill } from "./shared";
 
 const CATEGORIES = ["Hair", "Face", "Skin", "Body", "Eyes", "Age"] as const;
 type Category = (typeof CATEGORIES)[number];
@@ -215,6 +215,16 @@ export const AvatarCustomizeScreen = () => {
       case "Age":
         return (
           <View style={styles.sliderPanel}>
+            {category === "Body" ? (
+              <Text style={styles.honestyNote}>
+                Clothes fade so body shape is visible.
+              </Text>
+            ) : null}
+            {category === "Age" ? (
+              <Text style={styles.honestyNote}>
+                Softens skin and adds a little weight — not a real age change.
+              </Text>
+            ) : null}
             {sliders.map((slider) => (
               <SliderRow
                 key={`${category}-${slider.key}`}
@@ -236,6 +246,7 @@ export const AvatarCustomizeScreen = () => {
     <WizardShell
       title={title}
       titleFont="opensans"
+      progressFill={wizardProgressFill(4)}
       leftIcon="back"
       rightIcon="close"
       closeCircle
@@ -249,6 +260,7 @@ export const AvatarCustomizeScreen = () => {
         <FittedAvatarPreview
           look={lookFromDraft(draft)}
           viewMode={previewViewMode(category)}
+          revealBody={category === "Body"}
         />
         <View style={styles.panel}>{renderPanel()}</View>
         <View style={styles.categoryBar}>
@@ -304,6 +316,14 @@ const styles = StyleSheet.create({
     fontFamily: "OpenSans-Bold",
     fontSize: 13,
     lineHeight: 16,
+  },
+  honestyNote: {
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 12,
+    lineHeight: 15,
+    textAlign: "center",
+    marginBottom: s(4),
   },
   styleRow: {
     flexDirection: "row",

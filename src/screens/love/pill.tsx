@@ -1,11 +1,5 @@
 import React from "react";
-import {
-  Image,
-  StyleSheet,
-  TouchableOpacity,
-  View,
-  ViewStyle,
-} from "react-native";
+import { StyleSheet, TouchableOpacity, View, ViewStyle } from "react-native";
 import {
   NavigationProp,
   ParamListBase,
@@ -13,13 +7,12 @@ import {
 } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
-import { useCompanions } from "../../store/companions";
+import { lookFromCompanion, useCompanions } from "../../store/companions";
+import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
 import { getHomeStackNavigation, restoreLoveOverlays } from "./overlay";
 import { LovePersonParams, resolveLovePerson } from "./partner";
 import { useLoveSession } from "./session";
-
-const FACE = require("../../../assets/images/love/face.png");
 
 export type LoveChatParams = LovePersonParams;
 
@@ -83,6 +76,11 @@ type LovePillProps = {
 
 export const LovePill = ({ onPress, style }: LovePillProps) => {
   const openLove = useOpenLove();
+  const { companions, activeCompanion } = useCompanions();
+  const { companionId } = useLoveSession();
+  const companion =
+    companions.find((item) => item.id === companionId) ?? activeCompanion;
+  const look = companion ? lookFromCompanion(companion) : null;
 
   return (
     <TouchableOpacity
@@ -90,7 +88,7 @@ export const LovePill = ({ onPress, style }: LovePillProps) => {
       onPress={onPress ?? (() => openLove())}
       activeOpacity={0.85}
     >
-      <Image source={FACE} style={styles.face} />
+      <LookFace look={look} size={s(37)} />
     </TouchableOpacity>
   );
 };

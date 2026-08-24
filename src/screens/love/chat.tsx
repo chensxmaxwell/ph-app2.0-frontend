@@ -34,7 +34,8 @@ import LinkIcon from "@images/message/link.svg";
 import Heartbeat from "@images/message/heartbeat.svg";
 import PatternIcon from "@images/icons/pattern-icon.svg";
 import KinkIcon from "@images/icons/kink-icon.svg";
-import { useCompanions } from "../../store/companions";
+import { lookFromCompanion, useCompanions } from "../../store/companions";
+import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
@@ -484,7 +485,11 @@ export const LoveChatScreen = () => {
             <ChevronBack width={s(35)} height={s(35)} />
           </TouchableOpacity>
           <View style={styles.identity}>
-            <Image source={CHAT_FACE} style={styles.avatar} />
+            <LookFace
+              look={companion ? lookFromCompanion(companion) : null}
+              size={s(50)}
+              fallbackSource={CHAT_FACE}
+            />
             <Text style={styles.name}>{name}</Text>
           </View>
           <TouchableOpacity

@@ -44,7 +44,8 @@ Read this file first. It is the working memory for the next agent: product decis
 | Video call | **None.** Voice only. |
 | Chat data | Local mock (Kevin / Chad / Amanda). No GraphQL chat API. |
 | Launch | Not shipping. Must run complete on one phone. |
-| 3D beauty | **Ignore for now** (user, 2026-08-24). |
+| 3D beauty | **Ignore polish** (user, 2026-08-24). Options must work; demo presentable. |
+| 3D gender | **Male-only.** Only `bozo-male.glb` exists. Female / Non-binary disabled with “Demo: male avatar only for now”. Do not pretend gender swaps the model. |
 | Real BLE / toy hardware | **Ignore for now** (user, 2026-08-24). Use **fake Bluetooth**. |
 | LLM | User wants a real OpenAI-compatible API, “just add a key.” Service exists; **Love/Message UI still uses local scripted replies** until wired. |
 | Companion Sync | Love chat or Message thread already has a person. Sync **starts with that person** (Love SYNC overlay). No picker. Control Sync has no person, so the selection stack is OK. |
@@ -64,7 +65,7 @@ npm run ios          # or Xcode; bundle id org.reactjs.native.pleasurehouse.--PL
 - Boot splash: `OpenAnimationScreen` in `App.tsx` (~1.6s + `AsyncStorage` `user`).
 - Fast path into the app: Login → **Bypass login**.
 - iPhone 15 Simulator UDID used in past sessions: `D4A6B178-D63E-41F3-8E7D-E7E966E3CF46` (may have changed).
-- Avatar 3D: Metro serves `http://<metro-host>:8081/ph-avatar/viewer.html`. `metro.config.js` also starts `scripts/avatar-static-server.js` (port **8099**). Preview WebView now uses the **Metro URL**, so a physical phone works if it can reach the Mac’s Metro. GLB is **not** bundled in the app binary.
+- Avatar 3D: Metro serves `http://<metro-host>:8081/ph-avatar/viewer.html`. `metro.config.js` also starts `scripts/avatar-static-server.js` (port **8099**). Preview WebView uses the **Metro URL** from `SourceCode.scriptURL`. **Physical iPhone:** same Wi‑Fi as the Mac running `npm start`. In Safari on the phone, open `http://<mac-lan-ip>:8081/ph-avatar/viewer.html` — if that fails, the in-app preview will fail too (error + Retry). USB-only without that host reachable is not enough. GLB is **not** bundled in the app binary.
 
 ### Env / secrets
 
@@ -248,7 +249,23 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 
 ## 7. Next work (priority the user already stated)
 
-Overnight QA close-out (global Love pill, dead taps, Control→Kink hub, fake tabs, Profile/Sync/Switch-account copy, tab focus, Call/Sync timer persist, `end()` clears companionId) is done. Remaining product work:
+Overnight QA close-out (global Love pill, dead taps, Control→Kink hub, fake tabs, Profile/Sync/Switch-account copy, tab focus, Call/Sync timer persist, `end()` clears companionId) is done.
+
+### Avatar / 捏人 demo (2026-08-24)
+
+P0 presentable, not beauty polish:
+
+- Preview uses Metro `http://<metro-host>:8081/ph-avatar/viewer.html`. **Physical iPhone must reach that host** (same Wi‑Fi as `npm start`). Failures show readable error + Retry, not a blank “Loading 3D model…”.
+- Appearance cards change **outfit / `appearanceIndex` only**. Do not call `applyCharacterPreset` from those cards.
+- After Waiting → Love/Home, created companions use `LookFace` (skin/hair/eyes/outfit) on Home strip + Love header/pill. Home hero still uses `AvatarPreview` for the active companion.
+- Viewer skin `lerp(white)` is 0.08 (was 0.55). RN swatches match `viewer-page.html` hexes.
+- Body tab sets `revealBody` so clothes go translucent and body meshes show.
+- Waiting **saves immediately**, then animates; back/swipe is blocked until navigate.
+- Wizard progress is 8 equal steps. Identity: Male selected looks selected; invalid birthday blocks Continue.
+
+Do not regress SessionLovePill / Sync / Auto.
+
+Remaining product work:
 
 1. **Wire LLM into Love + Message**  
    - `src/screens/love/chat.tsx` `send`  
@@ -256,7 +273,7 @@ Overnight QA close-out (global Love pill, dead taps, Control→Kink hub, fake ta
    Call `completeCompanionChat` from `src/services/llm.ts`. Fall back to `companionReply` if no key / fetch fail.  
    Add a Profile row “Companion AI” to paste API key, base URL, model (`saveLlmConfig`). OpenAI-compatible (OpenAI / Groq / OpenRouter).
 2. **Keep fake BLE; finish leftover play surfaces** that still don’t call `setMotorInput`: Bliss timer, Deep Discovery timer, Sound meter, Canvas pan, Motion (partial), Alarm, Performance-play prev/next.
-3. **Do not** polish 3D. **Do not** implement real toy BLE unless asked.
+3. **Do not** sculpt a female GLB or polish 3D beauty. **Do not** implement real toy BLE unless asked.
 4. Optional later: bundle GLB for offline phone; real WebRTC; real LLM streaming.
 
 ---

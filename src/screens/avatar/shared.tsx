@@ -18,6 +18,11 @@ export const GRADIENT_OVERLAY = ["#5E5DBF", "rgba(50, 41, 105, 0)"] as const;
 
 type HeaderIcon = "back" | "close" | "none";
 
+export const WIZARD_PROGRESS_STEPS = 8;
+
+export const wizardProgressFill = (step: number) =>
+  Math.round((328 * step) / WIZARD_PROGRESS_STEPS);
+
 type WizardShellProps = {
   title: string;
   titleFont?: "quicksand" | "opensans";

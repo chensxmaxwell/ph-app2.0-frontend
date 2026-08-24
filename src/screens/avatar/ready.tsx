@@ -5,7 +5,7 @@ import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import { useAvatarWizard } from "./context";
 import { s } from "./scale";
-import { WizardShell, useLeaveGuard } from "./shared";
+import { WizardShell, useLeaveGuard, wizardProgressFill } from "./shared";
 
 export const AvatarReadyScreen = () => {
   const navigation = useNavigation();
@@ -19,7 +19,7 @@ export const AvatarReadyScreen = () => {
   return (
     <WizardShell
       title="Craft your ideal lover"
-      progressFill={86}
+      progressFill={wizardProgressFill(2)}
       leftIcon="close"
       onLeftPress={requestLeave}
       primaryLabel="Let’s go"
