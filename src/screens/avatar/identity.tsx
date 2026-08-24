@@ -12,15 +12,16 @@ import { useNavigation } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import ChevronDown from "@images/avatar/chevron-down.svg";
+import { useWizardChrome } from "./chrome";
 import { GENDER_OPTIONS, GenderOption, useAvatarWizard } from "./context";
 import { s } from "./scale";
 import {
   FieldHint,
   FieldLabel,
   PillField,
+  StepNote,
   WizardShell,
-  useLeaveGuard,
-  wizardProgressFill,
+  progressFor,
 } from "./shared";
 
 const isPlausibleBirthday = (value: string): boolean => {
@@ -48,27 +49,30 @@ const isPlausibleBirthday = (value: string): boolean => {
 
 export const AvatarIdentityScreen = () => {
   const navigation = useNavigation();
-  const { draft, patchDraft, resetDraft, isDirty } = useAvatarWizard();
+  const { draft, patchDraft } = useAvatarWizard();
+  const { mode, title, requestLeave, goBackStep, modal } = useWizardChrome();
   const [nameFocused, setNameFocused] = useState(true);
   const [genderOpen, setGenderOpen] = useState(false);
-  const { requestLeave, modal } = useLeaveGuard(isDirty, () => {
-    resetDraft();
-    navigation.goBack();
-  });
   const birthdayLooksInvalid = !isPlausibleBirthday(draft.birthday);
   const canContinue =
     draft.name.trim().length > 0 && !birthdayLooksInvalid;
 
   return (
     <WizardShell
-      title="Craft your ideal lover"
-      progressFill={wizardProgressFill(1)}
+      title={title}
+      progressFill={progressFor(mode, "identity")}
       leftIcon="back"
-      onLeftPress={requestLeave}
+      rightIcon="close"
+      onLeftPress={goBackStep}
+      onRightPress={requestLeave}
       primaryLabel="Continue"
       primaryDisabled={!canContinue}
       onPrimary={() => {
         if (!canContinue) {
+          return;
+        }
+        if (mode === "editPersona") {
+          navigation.navigate(SCREENS.AVATAR_PERSONALITY);
           return;
         }
         navigation.navigate(SCREENS.AVATAR_READY);
@@ -79,6 +83,10 @@ export const AvatarIdentityScreen = () => {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.content}
       >
+        <StepNote>
+          Name, birthday, and gender for this person. Gender does not change the
+          3D model — demo is male-only.
+        </StepNote>
         <FieldLabel>Name</FieldLabel>
         <FieldHint>
           Whisper their name into existence, a name that will echo through your
@@ -179,7 +187,7 @@ export const AvatarIdentityScreen = () => {
 
 const styles = StyleSheet.create({
   content: {
-    paddingTop: s(45),
+    paddingTop: s(24),
     alignItems: "center",
     gap: s(12),
   },

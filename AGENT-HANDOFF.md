@@ -251,17 +251,16 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 
 Overnight QA close-out (global Love pill, dead taps, Control→Kink hub, fake tabs, Profile/Sync/Switch-account copy, tab focus, Call/Sync timer persist, `end()` clears companionId) is done.
 
-### Avatar / 捏人 demo (2026-08-24)
+### Avatar / companion lifecycle (2026-08-24)
 
-P0 presentable, not beauty polish:
+Treat **Create → Save → Edit look → Edit persona → Save again** as one product. Same `companionId`. `upsertCompanion` never clones.
 
-- Preview uses Metro `http://<metro-host>:8081/ph-avatar/viewer.html`. **Physical iPhone must reach that host** (same Wi‑Fi as `npm start`). Failures show readable error + Retry, not a blank “Loading 3D model…”.
-- Appearance cards change **outfit / `appearanceIndex` only**. Do not call `applyCharacterPreset` from those cards.
-- After Waiting → Love/Home, created companions use `LookFace` (skin/hair/eyes/outfit) on Home strip + Love header/pill. Home hero still uses `AvatarPreview` for the active companion.
-- Viewer skin `lerp(white)` is 0.08 (was 0.55). RN swatches match `viewer-page.html` hexes.
-- Body tab sets `revealBody` so clothes go translucent and body meshes show.
-- Waiting **saves immediately**, then animates; back/swipe is blocked until navigate.
-- Wizard progress is 8 equal steps. Identity: Male selected looks selected; invalid birthday blocks Continue.
+- **Create wizard** (`mode: create`): Identity → Ready → Appearance → Customize → Personality → Story → Intimate → Candle → Waiting. Back = previous step; close = discard if dirty. Each step says 3D vs chat persona. Male-only 3D.
+- **First save:** Waiting upserts companion + matching Message thread immediately, blocks system back, then opens Love. Home strip + Love header/pill use `LookFace`.
+- **Edit look** (`mode: editLook`): Appearance → Customize → **Save look**. Loads existing look. Cancel restores baseline.
+- **Edit persona** (`mode: editPersona`): Identity → Personality → Story → Intimate → **Save persona**. Does not open the full new-avatar wizard.
+- **Entry:** Love `···` → Edit avatar / Edit persona (dismisses Love overlay first). Chat settings: same if a companion exists; otherwise Edit traits (`create.tsx`) or Create avatar (wizard with that thread id).
+- Preview Metro path unchanged. Outfit cards still do not wipe Customize.
 
 Do not regress SessionLovePill / Sync / Auto.
 

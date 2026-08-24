@@ -12,6 +12,13 @@ import { colors } from "@common/styles/colors";
 import ChevronBack from "@images/avatar/chevron-back.svg";
 import Xmark from "@images/avatar/xmark.svg";
 import { s } from "./scale";
+import {
+  CREATE_STEPS,
+  EDIT_LOOK_STEPS,
+  EDIT_PERSONA_STEPS,
+  WizardMode,
+  WizardStepKey,
+} from "./types";
 
 export const GRADIENT_BASE = ["#2B2358", "#2B2358"] as const;
 export const GRADIENT_OVERLAY = ["#5E5DBF", "rgba(50, 41, 105, 0)"] as const;
@@ -20,8 +27,30 @@ type HeaderIcon = "back" | "close" | "none";
 
 export const WIZARD_PROGRESS_STEPS = 8;
 
-export const wizardProgressFill = (step: number) =>
-  Math.round((328 * step) / WIZARD_PROGRESS_STEPS);
+export const wizardProgressFill = (step: number, total = WIZARD_PROGRESS_STEPS) =>
+  Math.round((328 * step) / Math.max(1, total));
+
+export const progressFor = (mode: WizardMode, key: WizardStepKey) => {
+  const steps = stepsForMode(mode);
+  const index = (steps as readonly string[]).indexOf(key);
+  const step = index >= 0 ? index + 1 : 1;
+  return wizardProgressFill(step, steps.length);
+};
+
+const stepsForMode = (mode: WizardMode) => {
+  switch (mode) {
+    case "create":
+      return CREATE_STEPS;
+    case "editLook":
+      return EDIT_LOOK_STEPS;
+    case "editPersona":
+      return EDIT_PERSONA_STEPS;
+    default: {
+      const exhaustive: never = mode;
+      return exhaustive;
+    }
+  }
+};
 
 type WizardShellProps = {
   title: string;
@@ -207,6 +236,10 @@ export const FieldLabel = ({ children }: { children: ReactNode }) => (
 
 export const FieldHint = ({ children }: { children: ReactNode }) => (
   <Text style={styles.fieldHint}>{children}</Text>
+);
+
+export const StepNote = ({ children }: { children: ReactNode }) => (
+  <Text style={styles.stepNote}>{children}</Text>
 );
 
 export const PillField = ({
@@ -416,6 +449,16 @@ const styles = StyleSheet.create({
     textAlign: "center",
     width: s(329),
     alignSelf: "center",
+  },
+  stepNote: {
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 12,
+    lineHeight: 15,
+    textAlign: "center",
+    width: s(329),
+    alignSelf: "center",
+    marginBottom: s(8),
   },
   pillField: {
     width: s(329),

@@ -4,7 +4,9 @@ import { useNavigation } from "@react-navigation/native";
 import { Slider } from "@miblanchard/react-native-slider";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
+import { useWizardChrome } from "./chrome";
 import { AvatarDraft, lookFromDraft, useAvatarWizard } from "./context";
+import { useSaveAndExit } from "./use-save-companion";
 import {
   EYE_COLORS,
   HAIR_COLORS,
@@ -13,7 +15,7 @@ import {
 import { FittedAvatarPreview } from "./engine/AvatarPreview";
 import { HairStyleIcon, toHairStyle } from "./hair-style-icon";
 import { s } from "./scale";
-import { WizardShell, useLeaveGuard, wizardProgressFill } from "./shared";
+import { StepNote, WizardShell, progressFor } from "./shared";
 
 const CATEGORIES = ["Hair", "Face", "Skin", "Body", "Eyes", "Age"] as const;
 type Category = (typeof CATEGORIES)[number];
@@ -140,13 +142,10 @@ const SliderRow = ({
 
 export const AvatarCustomizeScreen = () => {
   const navigation = useNavigation();
-  const { draft, patchDraft, resetDraft, isDirty } = useAvatarWizard();
+  const { draft, patchDraft } = useAvatarWizard();
+  const { mode, title, requestLeave, goBackStep, modal } = useWizardChrome();
+  const saveAndExit = useSaveAndExit();
   const [category, setCategory] = useState<Category>("Hair");
-  const { requestLeave, modal } = useLeaveGuard(isDirty, () => {
-    resetDraft();
-    navigation.getParent()?.goBack();
-  });
-  const title = draft.name.trim() || "[Name]";
   const sliders = slidersForCategory(category);
   const hairColor = HAIR_COLORS[draft.hairColor] ?? HAIR_COLORS[1];
 
@@ -246,17 +245,26 @@ export const AvatarCustomizeScreen = () => {
     <WizardShell
       title={title}
       titleFont="opensans"
-      progressFill={wizardProgressFill(4)}
+      progressFill={progressFor(mode, "customize")}
       leftIcon="back"
       rightIcon="close"
       closeCircle
-      onLeftPress={() => navigation.goBack()}
+      onLeftPress={goBackStep}
       onRightPress={requestLeave}
-      primaryLabel="Finish customization"
-      onPrimary={() => navigation.navigate(SCREENS.AVATAR_PERSONALITY)}
+      primaryLabel={mode === "editLook" ? "Save look" : "Finish customization"}
+      onPrimary={() => {
+        if (mode === "editLook") {
+          saveAndExit();
+          return;
+        }
+        navigation.navigate(SCREENS.AVATAR_PERSONALITY);
+      }}
     >
       {modal}
       <View style={styles.content}>
+        <StepNote>
+          Hair, skin, body, and eyes change the 3D look only — not chat persona.
+        </StepNote>
         <FittedAvatarPreview
           look={lookFromDraft(draft)}
           viewMode={previewViewMode(category)}

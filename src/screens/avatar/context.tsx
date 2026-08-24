@@ -3,10 +3,18 @@ import React, {
   createContext,
   useContext,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
-import { AvatarLook, CHARACTER_PRESETS, DEFAULT_LOOK, pickLook } from "./engine/viewer-html";
+import { Companion } from "../../store/companions";
+import {
+  AvatarLook,
+  CHARACTER_PRESETS,
+  DEFAULT_LOOK,
+  pickLook,
+} from "./engine/viewer-html";
+import { WizardMode } from "./types";
 
 export const PERSONALITY_OPTIONS = [
   "Loyal & protective",
@@ -34,7 +42,7 @@ export type AvatarDraft = AvatarLook & {
   experimentalVanilla: number;
 };
 
-const DEFAULT_DRAFT: AvatarDraft = {
+export const DEFAULT_DRAFT: AvatarDraft = {
   ...DEFAULT_LOOK,
   name: "",
   birthday: "",
@@ -46,9 +54,40 @@ const DEFAULT_DRAFT: AvatarDraft = {
   experimentalVanilla: 0.5,
 };
 
+export const toGenderOption = (value: string): GenderOption => {
+  switch (value) {
+    case "Male":
+    case "Female":
+    case "Non-binary":
+      return value;
+    default:
+      return "Male";
+  }
+};
+
+export const toPersonalityOptions = (values: string[]): PersonalityOption[] =>
+  values.filter((item): item is PersonalityOption =>
+    (PERSONALITY_OPTIONS as readonly string[]).includes(item)
+  );
+
+export const draftFromCompanion = (companion: Companion): AvatarDraft => ({
+  ...pickLook(companion),
+  name: companion.name,
+  birthday: companion.birthday,
+  gender: toGenderOption(companion.gender),
+  personalities: toPersonalityOptions(companion.personalities),
+  story: companion.story,
+  passionateTender: companion.passionateTender,
+  dominantSubmissive: companion.dominantSubmissive,
+  experimentalVanilla: companion.experimentalVanilla,
+});
+
 type AvatarWizardContextValue = {
   draft: AvatarDraft;
+  mode: WizardMode;
+  companionId: string;
   patchDraft: (patch: Partial<AvatarDraft>) => void;
+  restoreBaseline: () => void;
   resetDraft: () => void;
   isDirty: boolean;
 };
@@ -57,22 +96,41 @@ const AvatarWizardContext = createContext<AvatarWizardContextValue | null>(
   null
 );
 
-export const AvatarWizardProvider = ({ children }: { children: ReactNode }) => {
-  const [draft, setDraft] = useState<AvatarDraft>(DEFAULT_DRAFT);
+export const AvatarWizardProvider = ({
+  children,
+  mode,
+  companionId,
+  initialDraft,
+}: {
+  children: ReactNode;
+  mode: WizardMode;
+  companionId: string;
+  initialDraft: AvatarDraft;
+}) => {
+  const baselineRef = useRef(initialDraft);
+  const [draft, setDraft] = useState<AvatarDraft>(initialDraft);
 
   const patchDraft = (patch: Partial<AvatarDraft>) => {
     setDraft((current) => ({ ...current, ...patch }));
   };
 
-  const resetDraft = () => {
-    setDraft(DEFAULT_DRAFT);
+  const restoreBaseline = () => {
+    setDraft(baselineRef.current);
   };
 
-  const isDirty = isDraftDirty(draft);
+  const isDirty = isDraftDirty(draft, baselineRef.current);
 
   const value = useMemo(
-    () => ({ draft, patchDraft, resetDraft, isDirty }),
-    [draft, isDirty]
+    () => ({
+      draft,
+      mode,
+      companionId,
+      patchDraft,
+      restoreBaseline,
+      resetDraft: restoreBaseline,
+      isDirty,
+    }),
+    [companionId, draft, isDirty, mode]
   );
 
   return (
@@ -125,9 +183,9 @@ const DRAFT_ONLY_FIELDS: Record<DraftOnlyKey, true> = {
   experimentalVanilla: true,
 };
 
-const isDraftDirty = (draft: AvatarDraft): boolean => {
+const isDraftDirty = (draft: AvatarDraft, baseline: AvatarDraft): boolean => {
   const lookKeys = Object.keys(AVATAR_LOOK_FIELDS) as Array<keyof AvatarLook>;
-  if (lookKeys.some((key) => draft[key] !== DEFAULT_DRAFT[key])) {
+  if (lookKeys.some((key) => draft[key] !== baseline[key])) {
     return true;
   }
 
@@ -136,21 +194,21 @@ const isDraftDirty = (draft: AvatarDraft): boolean => {
     switch (key) {
       case "name":
       case "birthday":
-        if (draft[key].trim() !== DEFAULT_DRAFT[key].trim()) {
+        if (draft[key].trim() !== baseline[key].trim()) {
           return true;
         }
         break;
       case "gender":
       case "story":
-        if (draft[key] !== DEFAULT_DRAFT[key]) {
+        if (draft[key] !== baseline[key]) {
           return true;
         }
         break;
       case "personalities":
         if (
-          draft.personalities.length !== DEFAULT_DRAFT.personalities.length ||
+          draft.personalities.length !== baseline.personalities.length ||
           draft.personalities.some(
-            (item, index) => item !== DEFAULT_DRAFT.personalities[index]
+            (item, index) => item !== baseline.personalities[index]
           )
         ) {
           return true;
@@ -159,7 +217,7 @@ const isDraftDirty = (draft: AvatarDraft): boolean => {
       case "passionateTender":
       case "dominantSubmissive":
       case "experimentalVanilla":
-        if (draft[key] !== DEFAULT_DRAFT[key]) {
+        if (draft[key] !== baseline[key]) {
           return true;
         }
         break;

@@ -114,8 +114,17 @@ type ChatContextValue = {
       gender: string;
       birthday: string;
       description: string;
+      personality?: string;
     }
   ) => void;
+  upsertCompanionThread: (companion: {
+    id: string;
+    name: string;
+    gender: string;
+    birthday: string;
+    personalities: string[];
+    story: string;
+  }) => void;
   humanLimitReached: (thread: ChatThread) => boolean;
 };
 
@@ -500,6 +509,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         gender: string;
         birthday: string;
         description: string;
+        personality?: string;
       }
     ) => {
       updateThread(threadId, (thread) => ({
@@ -508,11 +518,70 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         gender: input.gender,
         birthday: input.birthday,
         description: input.description,
+        personality: input.personality ?? thread.personality,
         preview: thread.preview,
         time: "Now",
       }));
     },
     [updateThread]
+  );
+
+  const upsertCompanionThread = useCallback(
+    (companion: {
+      id: string;
+      name: string;
+      gender: string;
+      birthday: string;
+      personalities: string[];
+      story: string;
+    }) => {
+      const name = companion.name.trim() || "Kevin";
+      const personality = companion.personalities.join(", ");
+      setThreads((current) => {
+        const existing = current.find((thread) => thread.id === companion.id);
+        if (existing) {
+          return current.map((thread) =>
+            thread.id === companion.id
+              ? {
+                  ...thread,
+                  name,
+                  gender: companion.gender,
+                  birthday: companion.birthday,
+                  description: companion.story,
+                  personality,
+                  time: "Now",
+                }
+              : thread
+          );
+        }
+        return [
+          {
+            id: companion.id,
+            name,
+            kind: "bot" as const,
+            preview: `Start chatting with ${name}.`,
+            time: "Now",
+            pinned: false,
+            listen: false,
+            synced: false,
+            request: "none" as const,
+            gender: companion.gender,
+            birthday: companion.birthday,
+            description: companion.story,
+            personality,
+            messages: [
+              {
+                id: nextId(),
+                from: "them" as const,
+                text: `Hey, it's ${name}. Start whenever you're ready.`,
+              },
+            ],
+          },
+          ...current,
+        ];
+      });
+    },
+    []
   );
 
   const humanLimitReached = useCallback(
@@ -550,12 +619,14 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       setInCall: setInCallThreadId,
       createBot,
       updateBot,
+      upsertCompanionThread,
       humanLimitReached,
     }),
     [
       cancelFriendRequest,
       createBot,
       updateBot,
+      upsertCompanionThread,
       directory,
       editLastMine,
       getThread,

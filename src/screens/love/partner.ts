@@ -26,6 +26,6 @@ export const resolveLovePerson = ({
   return {
     companion,
     companionId: companion?.id ?? companionId,
-    name: name?.trim() || chatName?.trim() || companion?.name || "Kevin",
+    name: companion?.name || name?.trim() || chatName?.trim() || "Kevin",
   };
 };

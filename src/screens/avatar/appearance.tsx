@@ -3,42 +3,37 @@ import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
+import { useWizardChrome } from "./chrome";
 import { APPEARANCE_COUNT, lookFromDraft, useAvatarWizard } from "./context";
 import { FittedAvatarPreview } from "./engine/AvatarPreview";
 import { OutfitCard, toOutfitIndex } from "./outfit-card";
 import { s } from "./scale";
-import { WizardShell, useLeaveGuard, wizardProgressFill } from "./shared";
+import { StepNote, WizardShell, progressFor } from "./shared";
 
 export const AvatarAppearanceScreen = () => {
   const navigation = useNavigation();
-  const { draft, patchDraft, resetDraft, isDirty } = useAvatarWizard();
-  const { requestLeave, modal } = useLeaveGuard(isDirty, () => {
-    resetDraft();
-    navigation.getParent()?.goBack();
-  });
-  const title = draft.name.trim() || "[Name]";
+  const { draft, patchDraft } = useAvatarWizard();
+  const { mode, title, requestLeave, goBackStep, modal } = useWizardChrome();
 
   return (
     <WizardShell
       title={title}
       titleFont="opensans"
-      progressFill={wizardProgressFill(3)}
+      progressFill={progressFor(mode, "appearance")}
       leftIcon="back"
       rightIcon="close"
       closeCircle
-      onLeftPress={() => {
-        if (navigation.canGoBack()) {
-          navigation.goBack();
-          return;
-        }
-        navigation.navigate(SCREENS.AVATAR_READY);
-      }}
+      onLeftPress={goBackStep}
       onRightPress={requestLeave}
       primaryLabel="Continue"
       onPrimary={() => navigation.navigate(SCREENS.AVATAR_CUSTOMIZE)}
     >
       {modal}
       <View style={styles.content}>
+        <StepNote>
+          This changes the 3D outfit only — not chat persona, hair, skin, or
+          body.
+        </StepNote>
         <FittedAvatarPreview look={lookFromDraft(draft)} aspect={226 / 489} />
         <Text style={styles.outfitLabel}>Outfit</Text>
         <Text style={styles.outfitHint}>

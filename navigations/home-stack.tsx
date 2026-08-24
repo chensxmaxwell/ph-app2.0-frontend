@@ -135,7 +135,12 @@ export type HomeStackScreenProps = {
   DisplayPattern: DisplayPatternScreenProps;
   CreatePattern: undefined;
   Playground: undefined;
-  AvatarStack: undefined;
+  AvatarStack:
+    | {
+        mode?: "create" | "editLook" | "editPersona";
+        companionId?: string;
+      }
+    | undefined;
   LoveChat:
     | {
         companionId?: string;

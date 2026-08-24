@@ -27,10 +27,25 @@ type CompanionsContextValue = {
   companions: Companion[];
   activeCompanion: Companion | null;
   addCompanion: (companion: Companion) => void;
+  upsertCompanion: (companion: Companion) => void;
+  updateCompanion: (id: string, patch: Partial<Companion>) => void;
   setActiveCompanionId: (id: string | null) => void;
 };
 
 const CompanionsContext = createContext<CompanionsContextValue | null>(null);
+
+const mergeCompanion = (
+  current: Companion[],
+  companion: Companion
+): Companion[] => {
+  const index = current.findIndex((item) => item.id === companion.id);
+  if (index === -1) {
+    return [...current, companion];
+  }
+  const next = [...current];
+  next[index] = { ...current[index], ...companion, id: companion.id };
+  return next;
+};
 
 export const CompanionsProvider = ({ children }: { children: ReactNode }) => {
   const [companions, setCompanions] = useState<Companion[]>([]);
@@ -73,9 +88,21 @@ export const CompanionsProvider = ({ children }: { children: ReactNode }) => {
   const activeCompanion =
     companions.find((companion) => companion.id === activeCompanionId) ?? null;
 
-  const addCompanion = (companion: Companion) => {
-    setCompanions((current) => [...current, companion]);
+  const upsertCompanion = (companion: Companion) => {
+    setCompanions((current) => mergeCompanion(current, companion));
     setActiveCompanionId(companion.id);
+  };
+
+  const addCompanion = (companion: Companion) => {
+    upsertCompanion(companion);
+  };
+
+  const updateCompanion = (id: string, patch: Partial<Companion>) => {
+    setCompanions((current) =>
+      current.map((item) =>
+        item.id === id ? { ...item, ...patch, id } : item
+      )
+    );
   };
 
   const value = useMemo(
@@ -83,6 +110,8 @@ export const CompanionsProvider = ({ children }: { children: ReactNode }) => {
       companions,
       activeCompanion,
       addCompanion,
+      upsertCompanion,
+      updateCompanion,
       setActiveCompanionId,
     }),
     [companions, activeCompanion]

@@ -6,19 +6,19 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import WaitGlow from "@images/avatar/wait-glow.svg";
-import { useCompanions } from "../../store/companions";
 import { useLoveSession } from "../love/session";
-import { lookFromDraft, useAvatarWizard } from "./context";
+import { useAvatarWizard } from "./context";
 import { s } from "./scale";
+import { useSaveCompanion } from "./use-save-companion";
 
 export const AvatarWaitingScreen = () => {
   const navigation = useNavigation();
-  const { draft, resetDraft } = useAvatarWizard();
-  const { addCompanion } = useCompanions();
+  const { draft, companionId, restoreBaseline } = useAvatarWizard();
+  const save = useSaveCompanion();
   const { start } = useLoveSession();
   const didSaveRef = useRef(false);
   const allowLeaveRef = useRef(false);
-  const companionIdRef = useRef(`${Date.now()}`);
+  const savedIdRef = useRef(companionId);
 
   useEffect(() => {
     navigation.setOptions({ gestureEnabled: false });
@@ -42,28 +42,16 @@ export const AvatarWaitingScreen = () => {
       return;
     }
     didSaveRef.current = true;
-    const companionId = companionIdRef.current;
-    const companion = {
-      id: companionId,
-      name: draft.name.trim() || "Kevin",
-      birthday: draft.birthday,
-      gender: draft.gender,
-      personalities: draft.personalities,
-      story: draft.story,
-      passionateTender: draft.passionateTender,
-      dominantSubmissive: draft.dominantSubmissive,
-      experimentalVanilla: draft.experimentalVanilla,
-      ...lookFromDraft(draft),
-    };
-    addCompanion(companion);
+    const companion = save();
+    savedIdRef.current = companion.id;
     start({
       layer: "chat",
-      companionId,
+      companionId: companion.id,
       name: companion.name,
       fromCreation: true,
       replace: true,
     });
-    resetDraft();
+    restoreBaseline();
 
     const timer = setTimeout(() => {
       allowLeaveRef.current = true;
@@ -74,7 +62,7 @@ export const AvatarWaitingScreen = () => {
             { name: SCREENS.NAV_BAR },
             {
               name: SCREENS.LOVE_CHAT,
-              params: { companionId, fromCreation: true },
+              params: { companionId: companion.id, fromCreation: true },
             },
           ],
         })
@@ -86,6 +74,8 @@ export const AvatarWaitingScreen = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const name = draft.name.trim() || "Kevin";
+
   return (
     <View style={styles.root}>
       <LinearGradient
@@ -96,7 +86,7 @@ export const AvatarWaitingScreen = () => {
         <WaitGlow width={s(740)} height={s(388)} />
       </View>
       <SafeAreaView style={styles.safe}>
-        <Text style={styles.title}>Please wait...</Text>
+        <Text style={styles.title}>Saving {name}…</Text>
       </SafeAreaView>
     </View>
   );

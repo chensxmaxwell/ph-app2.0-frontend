@@ -36,6 +36,7 @@ import PatternIcon from "@images/icons/pattern-icon.svg";
 import KinkIcon from "@images/icons/kink-icon.svg";
 import { lookFromCompanion, useCompanions } from "../../store/companions";
 import { LookFace } from "../avatar/look-face";
+import { openAvatarWizard } from "../avatar/open";
 import { s } from "../avatar/scale";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
@@ -112,6 +113,7 @@ const Dialog = ({
   body,
   primary,
   secondary,
+  extras,
   onPrimary,
   onSecondary,
 }: {
@@ -119,6 +121,7 @@ const Dialog = ({
   body: string;
   primary: string;
   secondary?: string;
+  extras?: { label: string; onPress: () => void }[];
   onPrimary: () => void;
   onSecondary?: () => void;
 }) => (
@@ -126,6 +129,15 @@ const Dialog = ({
     <View style={styles.dialog}>
       <Text style={styles.dialogTitle}>{title}</Text>
       <Text style={styles.dialogBody}>{body}</Text>
+      {extras?.map((action) => (
+        <TouchableOpacity
+          key={action.label}
+          style={styles.dialogPrimary}
+          onPress={action.onPress}
+        >
+          <Text style={styles.dialogPrimaryText}>{action.label}</Text>
+        </TouchableOpacity>
+      ))}
       <TouchableOpacity style={styles.dialogPrimary} onPress={onPrimary}>
         <Text style={styles.dialogPrimaryText}>{primary}</Text>
       </TouchableOpacity>
@@ -630,6 +642,36 @@ export const LoveChatScreen = () => {
             companion?.story?.trim() ||
             companion?.personalities?.join(", ") ||
             `${name} is your companion.`
+          }
+          extras={
+            companion
+              ? [
+                  {
+                    label: "Edit avatar",
+                    onPress: () => {
+                      setInfoOpen(false);
+                      minimize();
+                      openAvatarWizard(
+                        navigation,
+                        { mode: "editLook", companionId: companion.id },
+                        true
+                      );
+                    },
+                  },
+                  {
+                    label: "Edit persona",
+                    onPress: () => {
+                      setInfoOpen(false);
+                      minimize();
+                      openAvatarWizard(
+                        navigation,
+                        { mode: "editPersona", companionId: companion.id },
+                        true
+                      );
+                    },
+                  },
+                ]
+              : undefined
           }
           primary="Close"
           onPrimary={() => setInfoOpen(false)}

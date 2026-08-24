@@ -26,7 +26,10 @@ export const Home = () => {
   const openLove = useOpenLove();
 
   const openAvatarCreation = () => {
-    parentNavigation?.navigate(SCREENS.AVATAR_STACK);
+    parentNavigation?.navigate(
+      SCREENS.AVATAR_STACK as never,
+      { mode: "create" } as never
+    );
   };
 
   const renderCreatedCompanions = () =>

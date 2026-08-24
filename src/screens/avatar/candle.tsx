@@ -5,36 +5,37 @@ import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import Candle from "@images/avatar/candle.svg";
 import Flame from "@images/avatar/flame.svg";
+import { useWizardChrome } from "./chrome";
 import { useAvatarWizard } from "./context";
 import { s } from "./scale";
-import { WizardShell, useLeaveGuard, wizardProgressFill } from "./shared";
+import { StepNote, WizardShell, progressFor } from "./shared";
 
 export const AvatarCandleScreen = () => {
   const navigation = useNavigation();
-  const { draft, resetDraft, isDirty } = useAvatarWizard();
-  const { requestLeave, modal } = useLeaveGuard(isDirty, () => {
-    resetDraft();
-    navigation.getParent()?.goBack();
-  });
+  const { draft } = useAvatarWizard();
+  const { mode, title, requestLeave, goBackStep, modal } = useWizardChrome();
   const name = draft.name.trim() || "[Name]";
 
   return (
     <WizardShell
-      title="Craft your ideal lover"
-      progressFill={wizardProgressFill(8)}
-      leftIcon="close"
-      onLeftPress={requestLeave}
+      title={title}
+      progressFill={progressFor(mode, "candle")}
+      leftIcon="back"
+      rightIcon="close"
+      onLeftPress={goBackStep}
+      onRightPress={requestLeave}
       primaryLabel="Blow the candle"
       onPrimary={() => navigation.navigate(SCREENS.AVATAR_WAITING)}
-      secondaryLabel="Return"
-      onSecondary={() => navigation.goBack()}
     >
       {modal}
       <View style={styles.content}>
+        <StepNote>
+          A send-off only. Look and persona are already set and will be saved
+          next.
+        </StepNote>
         <Text style={styles.heading}>{name} is here to meet you</Text>
         <Text style={styles.body}>
-          Blow the candle to save {name} and open chat. This is a send-off —
-          look and persona are already set.
+          Blow the candle to save {name} and open chat.
         </Text>
         <View style={styles.candle}>
           <View style={styles.flame}>
@@ -49,7 +50,7 @@ export const AvatarCandleScreen = () => {
 
 const styles = StyleSheet.create({
   content: {
-    paddingTop: s(66),
+    paddingTop: s(40),
     alignItems: "center",
   },
   heading: {
