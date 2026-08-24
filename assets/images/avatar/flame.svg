@@ -1,0 +1,24 @@
+<svg preserveAspectRatio="none" width="62" height="94" viewBox="0 0 62 94" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Group 37750">
+<g id="Ellipse 284" filter="url(#filter0_f_0_34)">
+<ellipse cx="31" cy="47" rx="11" ry="27" fill="#CCA0DD"/>
+</g>
+<ellipse id="Ellipse 285" cx="31" cy="47" rx="11" ry="27" fill="#CCA0DD"/>
+<g id="Ellipse 286" filter="url(#filter1_f_0_34)">
+<ellipse cx="31" cy="56.5" rx="7" ry="17.5" fill="#F3F3F3"/>
+</g>
+<ellipse id="Ellipse 287" cx="31" cy="56.5" rx="7" ry="17.5" fill="#F3F3F3"/>
+</g>
+<defs>
+<filter id="filter0_f_0_34" x="0" y="0" width="62" height="94" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape"/>
+<feGaussianBlur stdDeviation="10" result="effect1_foregroundBlur_0_34"/>
+</filter>
+<filter id="filter1_f_0_34" x="19" y="34" width="24" height="45" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape"/>
+<feGaussianBlur stdDeviation="2.5" result="effect1_foregroundBlur_0_34"/>
+</filter>
+</defs>
+</svg>

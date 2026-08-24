@@ -1,0 +1,12 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="1.328" height="4" viewBox="0 0 1.328 4" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Cap">
+<g id="Shape">
+</g>
+<mask id="mask0_0_26" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="2" height="4">
+<path id="Shape_2" d="M0 0V4C0.804688 3.66122 1.328 2.87313 1.328 2C1.328 1.12687 0.804688 0.338779 0 0" fill="black"/>
+</mask>
+<g mask="url(#mask0_0_26)">
+<path id="Fill" d="M-5 -5H6.328V9H-5V-5Z" fill="black" fill-opacity="0.4"/>
+</g>
+</g>
+</svg>

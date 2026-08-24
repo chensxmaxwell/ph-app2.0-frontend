@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<style>
+  html, body, canvas { margin: 0; padding: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+  #status {
+    position: absolute; left: 16px; right: 16px; top: 46%;
+    text-align: center; color: #f3f3f3;
+    background: rgba(0,0,0,0.42);
+    border-radius: 10px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.85);
+    font: 13px/1.3 -apple-system, BlinkMacSystemFont, sans-serif;
+    pointer-events: none;
+    padding: 8px 16px;
+    margin: 0 auto;
+    max-width: 280px;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="status">Loading 3D model…</div>
+<script src="three.min.js"></script>
+<script src="GLTFLoader.js?v=3"></script>
+<script>
+(function () {
+  var HAIR_COLORS = ["#1a1410","#5c3310","#d4b483","#8b2a1a","#e891b0","#d0d0d0"];
+  var SKIN_COLORS = ["#f3d0bc","#e2b089","#c17a45","#8a4f28"];
+  var EYE_COLORS = ["#3a2418","#3f6b3a","#2e4d7a","#5a3a1e","#111111"];
+  var look = {
+    appearanceIndex: 2, hairStyle: 2, hairColor: 1, skinTone: 1, eyeColor: 0,
+    upperArms: 0.45, chest: 0.5, forearms: 0.45, backAndHips: 0.48,
+    faceWidth: 0.48, jaw: 0.46, chin: 0.5, eyeSize: 0.5, age: 0.28, viewMode: "full"
+  };
+
+  var renderer, scene, camera;
+  var modelRoot, morphMeshes = [];
+  var modelRestY = 0;
+  var skinMats = [];
+  var hairMats = [];
+  var eyeMats = [];
+  var headBones = [];
+  var headRests = [];
+  var modelHeight = 1.75;
+  var pendingLook = null;
+  var ready = false;
+  var clock = 0;
+
+  function setStatus(text) {
+    var el = document.getElementById("status");
+    if (el) el.textContent = text || "";
+    if (!text && el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  function clamp01(v) { return Math.max(0, Math.min(1, Number(v) || 0)); }
+  function hexColor(hex) { return new THREE.Color(hex); }
+
+  function materialsOf(obj) {
+    if (!obj.material) return [];
+    return Array.isArray(obj.material) ? obj.material : [obj.material];
+  }
+
+  function setMorph(mesh, name, value) {
+    if (!mesh.morphTargetDictionary) return;
+    var idx = mesh.morphTargetDictionary[name];
+    if (idx === undefined) return;
+    mesh.morphTargetInfluences[idx] = clamp01(value);
+  }
+
+  function pruneToShapes(mesh) {
+    var dict = mesh.morphTargetDictionary || {};
+    var geo = mesh.geometry;
+    if (!geo || !geo.morphAttributes) return;
+    var keepIdx = [];
+    var nextDict = {};
+    Object.keys(dict).forEach(function (name) {
+      if (!name || name.indexOf("Shape_") !== 0) return;
+      var index = dict[name];
+      if (typeof index !== "number") return;
+      var positions = geo.morphAttributes.position;
+      if (positions && !positions[index]) return;
+      var normals = geo.morphAttributes.normal;
+      if (normals && !normals[index]) return;
+      nextDict[name] = keepIdx.length;
+      keepIdx.push(index);
+    });
+    ["position", "normal"].forEach(function (key) {
+      var arr = geo.morphAttributes[key];
+      if (!arr) return;
+      geo.morphAttributes[key] = keepIdx.map(function (i) { return arr[i]; });
+    });
+    if (!geo.morphAttributes.normal || !geo.morphAttributes.normal.length) {
+      delete geo.morphAttributes.normal;
+    }
+    mesh.morphTargetDictionary = nextDict;
+    mesh.morphTargetInfluences = keepIdx.map(function () { return 0; });
+  }
+
+  function applyMeshLook(mesh, next) {
+    var arms = (clamp01(next.upperArms) + clamp01(next.forearms)) * 0.5;
+    var hips = clamp01(next.backAndHips);
+    setMorph(mesh, "Shape_Squareness", clamp01(next.faceWidth));
+    setMorph(mesh, "Shape_Stern", clamp01(next.jaw));
+    setMorph(mesh, "Shape_Sharpness", clamp01(next.chin));
+    setMorph(mesh, "Shape_IrisSize", clamp01(next.eyeSize));
+    setMorph(mesh, "Shape_EyeLidHeight", clamp01(next.eyeSize) * 0.75);
+    setMorph(mesh, "Shape_EyesSquare", clamp01(next.faceWidth) * 0.35);
+    setMorph(mesh, "Shape_NoseWidth", clamp01(next.faceWidth) * 0.45);
+    setMorph(mesh, "Shape_MouthWide", clamp01(next.faceWidth) * 0.38);
+    setMorph(mesh, "Shape_MouthThin", (1 - clamp01(next.chin)) * 0.32);
+    setMorph(mesh, "Shape_RaiseBrows", clamp01(next.eyeSize) * 0.28);
+    setMorph(mesh, "Shape_LowerBrows", clamp01(next.jaw) * 0.28);
+    setMorph(mesh, "Shape_NoseTiltDown", clamp01(next.chin) * 0.22);
+    setMorph(mesh, "Shape_Chest", clamp01(next.chest));
+    setMorph(mesh, "Shape_Muscle", arms);
+    setMorph(mesh, "Shape_ButtSize", hips);
+    setMorph(mesh, "Shape_WaistSize", hips * 0.72);
+    setMorph(mesh, "Shape_Curvy", hips * 0.4);
+    setMorph(mesh, "Shape_Belly", Math.max(0, hips - 0.55) * 0.7);
+    setMorph(mesh, "Shape_Weight", clamp01(next.age) * 0.28 + Math.max(0, hips - 0.65) * 0.35);
+    setMorph(mesh, "Shape_NeckThickness", clamp01(next.jaw) * 0.4);
+    setMorph(mesh, "Shape_BodyType", arms * 0.35);
+  }
+
+  function prefixIndex(name, prefix) {
+    if (!name || name.indexOf(prefix) !== 0) return -1;
+    var parsed = parseInt(name.slice(prefix.length), 10);
+    return isNaN(parsed) ? -1 : parsed;
+  }
+
+  var EXPOSED_BODY_TOKENS = ["Hand", "Finger", "Neck", "Wrist"];
+  var _bodyBox = new THREE.Box3();
+  var _bodySize = new THREE.Vector3();
+  var _bodyCenter = new THREE.Vector3();
+  var _torsoCenter = new THREE.Vector3();
+  var _unionSize = new THREE.Vector3();
+
+  function nameHasExposedSkin(name) {
+    var i;
+    for (i = 0; i < EXPOSED_BODY_TOKENS.length; i++) {
+      if (name.indexOf(EXPOSED_BODY_TOKENS[i]) !== -1) return true;
+    }
+    return false;
+  }
+
+  function meshWorldBox(obj, outBox) {
+    if (obj.geometry) {
+      if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+      if (obj.geometry.boundingBox) {
+        outBox.copy(obj.geometry.boundingBox);
+        outBox.applyMatrix4(obj.matrixWorld);
+        return outBox;
+      }
+    }
+    outBox.setFromObject(obj);
+    return outBox;
+  }
+
+  function isLikelyHandByBounds(box, torsoCenter, bodyHeight) {
+    box.getSize(_bodySize);
+    box.getCenter(_bodyCenter);
+    var maxDim = Math.max(_bodySize.x, _bodySize.y, _bodySize.z);
+    var dx = _bodyCenter.x - torsoCenter.x;
+    var dz = _bodyCenter.z - torsoCenter.z;
+    var away = Math.sqrt(dx * dx + dz * dz);
+    var small = maxDim < bodyHeight * 0.22;
+    var offTorso = away > bodyHeight * 0.14;
+    return small && offTorso;
+  }
+
+  function applyVisibility(next) {
+    if (!modelRoot) return;
+    var hair = next.hairStyle | 0;
+    var outfit = next.appearanceIndex | 0;
+    var bodyMeshes = [];
+    modelRoot.updateMatrixWorld(true);
+    modelRoot.traverse(function (obj) {
+      if (!obj.isMesh) return;
+      var name = obj.name || "";
+      if (name.indexOf("Icosphere") === 0) {
+        obj.visible = false;
+        return;
+      }
+      var hairIdx = prefixIndex(name, "Hair_");
+      if (hairIdx >= 0) {
+        obj.visible = hairIdx === hair;
+        obj.scale.set(1, 1, 1);
+        return;
+      }
+      var outfitIdx = prefixIndex(name, "Outfit_");
+      if (outfitIdx >= 0) {
+        obj.visible = outfitIdx === outfit;
+        obj.scale.set(1, 1, 1);
+        return;
+      }
+      if (name.indexOf("Head_") === 0 || name.indexOf("Eyes_") === 0) {
+        obj.visible = true;
+        return;
+      }
+      if (name.indexOf("Body_") === 0) {
+        bodyMeshes.push(obj);
+        return;
+      }
+      obj.visible = true;
+    });
+
+    var union = new THREE.Box3();
+    bodyMeshes.forEach(function (obj) {
+      meshWorldBox(obj, _bodyBox);
+      union.union(_bodyBox);
+    });
+    var bodyHeight = 1.7;
+    if (!union.isEmpty()) {
+      union.getCenter(_torsoCenter);
+      union.getSize(_unionSize);
+      bodyHeight = Math.max(0.8, _unionSize.y);
+    }
+
+    bodyMeshes.forEach(function (obj) {
+      var name = obj.name || "";
+      if (nameHasExposedSkin(name)) {
+        obj.visible = true;
+        return;
+      }
+      if (!union.isEmpty() && isLikelyHandByBounds(meshWorldBox(obj, _bodyBox), _torsoCenter, bodyHeight)) {
+        obj.visible = true;
+        return;
+      }
+      obj.visible = false;
+    });
+  }
+
+  function tintLook(next) {
+    var age = clamp01(next.age);
+    var white = new THREE.Color(0xffffff);
+    var skin = hexColor(SKIN_COLORS[next.skinTone] || SKIN_COLORS[1]);
+    skin.lerp(white, 0.55);
+    skinMats.forEach(function (mat) {
+      mat.color.copy(skin);
+      mat.roughness = 0.46 + age * 0.08;
+      mat.needsUpdate = true;
+    });
+    var hair = hexColor(HAIR_COLORS[next.hairColor] || HAIR_COLORS[0]);
+    hairMats.forEach(function (mat) {
+      mat.color.copy(hair);
+      mat.roughness = 0.42 + age * 0.12;
+      mat.needsUpdate = true;
+    });
+    var iris = hexColor(EYE_COLORS[next.eyeColor] || EYE_COLORS[0]);
+    iris.lerp(new THREE.Color(0xffffff), 0.08);
+    eyeMats.forEach(function (mat) {
+      mat.color.copy(iris);
+      mat.roughness = 0.14;
+      mat.metalness = 0.08;
+      mat.needsUpdate = true;
+    });
+  }
+
+  function canvasTexture(draw, size) {
+    var c = document.createElement("canvas");
+    c.width = c.height = size || 256;
+    draw(c.getContext("2d"), c.width);
+    var tex = new THREE.CanvasTexture(c);
+    tex.encoding = THREE.sRGBEncoding;
+    tex.anisotropy = 4;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  function makeEnvMap() {
+    if (!THREE.PMREMGenerator) return null;
+    var envScene = new THREE.Scene();
+    var sky = new THREE.Mesh(
+      new THREE.SphereGeometry(12, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0xcbbdd8, side: THREE.BackSide })
+    );
+    envScene.add(sky);
+    var floor = new THREE.Mesh(
+      new THREE.CylinderGeometry(12, 12, 0.2, 24),
+      new THREE.MeshBasicMaterial({ color: 0x2a2038 })
+    );
+    floor.position.y = -4;
+    envScene.add(floor);
+    var warm = new THREE.Mesh(
+      new THREE.SphereGeometry(2.2, 12, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffd8b8 })
+    );
+    warm.position.set(4, 6, 3);
+    envScene.add(warm);
+    var pmrem = new THREE.PMREMGenerator(renderer);
+    var rt = pmrem.fromScene(envScene, 0.06);
+    pmrem.dispose();
+    return rt.texture;
+  }
+
+  function injectSkinWrap(mat) {
+    mat.onBeforeCompile = function (shader) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <output_fragment>",
+        [
+          "outgoingLight += vec3(0.26, 0.08, 0.05) * (1.0 - pow(max(dot(normal, vec3(0.15, 0.35, 0.92)), 0.0), 1.35)) * 0.22;",
+          "#include <output_fragment>"
+        ].join("\n")
+      );
+    };
+  }
+
+  function upgradeSkinMat(oldMat, envMap) {
+    var mat = new THREE.MeshPhysicalMaterial();
+    if (oldMat && oldMat.map) mat.map = oldMat.map;
+    if (oldMat && oldMat.normalMap) {
+      mat.normalMap = oldMat.normalMap;
+      mat.normalScale = new THREE.Vector2(0.9, 0.9);
+    }
+    if (oldMat && oldMat.color) mat.color.copy(oldMat.color);
+    mat.roughness = 0.46;
+    mat.metalness = 0;
+    mat.clearcoat = 0.12;
+    mat.clearcoatRoughness = 0.62;
+    mat.envMapIntensity = 0.2;
+    mat.morphTargets = true;
+    mat.skinning = false;
+    if (envMap) mat.envMap = envMap;
+    if (mat.sheen && mat.sheen.isColor) mat.sheen.setRGB(0.32, 0.12, 0.08);
+    injectSkinWrap(mat);
+    return mat;
+  }
+
+  function addGroundContact() {
+    var tex = canvasTexture(function (ctx, size) {
+      var g = ctx.createRadialGradient(size / 2, size / 2, 4, size / 2, size / 2, size / 2);
+      g.addColorStop(0, "rgba(8,4,16,0.45)");
+      g.addColorStop(1, "rgba(8,4,16,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, size, size);
+    }, 128);
+    tex.encoding = THREE.LinearEncoding;
+    var mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.95, 0.48),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false })
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = 0.008;
+    scene.add(mesh);
+  }
+
+  function applyLook(next) {
+    look = Object.assign(look, next || {});
+    if (!ready) { pendingLook = look; return; }
+    applyVisibility(look);
+    morphMeshes.forEach(function (mesh) { applyMeshLook(mesh, look); });
+    tintLook(look);
+    frameCamera(look.viewMode === "bust" ? "bust" : "full");
+  }
+
+  function cameraDistance(coverHeight, fov) {
+    var half = (fov * Math.PI / 180) * 0.5;
+    return (coverHeight * 0.5) / Math.tan(half);
+  }
+
+  function frameCamera(mode) {
+    if (!camera) return;
+    var h = modelHeight;
+    if (mode === "bust") {
+      camera.fov = 28;
+      camera.position.set(h * 0.05, h * 0.82, cameraDistance(h * 0.48, camera.fov));
+      camera.lookAt(0, h * 0.8, 0);
+    } else {
+      camera.fov = 26;
+      camera.position.set(h * 0.06, h * 0.5, cameraDistance(h * 1.18, camera.fov));
+      camera.lookAt(0, h * 0.5, 0);
+    }
+    camera.updateProjectionMatrix();
+  }
+
+  function resize() {
+    if (!renderer || !camera) return;
+    var dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    renderer.setPixelRatio(dpr);
+    renderer.setSize(window.innerWidth, window.innerHeight, false);
+    camera.aspect = window.innerWidth / Math.max(1, window.innerHeight);
+    camera.updateProjectionMatrix();
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    clock += 0.016;
+    if (modelRoot) {
+      var breathe = Math.sin(clock * 1.25);
+      var shift = Math.sin(clock * 0.48);
+      modelRoot.rotation.y = shift * 0.038;
+      modelRoot.rotation.z = Math.sin(clock * 0.37) * 0.014;
+      modelRoot.position.y = modelRestY + breathe * 0.01;
+      var sy = 1 + breathe * 0.007;
+      modelRoot.scale.set(1 / Math.sqrt(sy), sy, 1 / Math.sqrt(sy));
+    }
+    var i;
+    for (i = 0; i < headBones.length; i++) {
+      headBones[i].rotation.x = headRests[i].x + Math.sin(clock * 0.9) * 0.012;
+      headBones[i].rotation.y = headRests[i].y + Math.sin(clock * 0.45) * 0.035;
+    }
+    renderer.render(scene, camera);
+  }
+
+  function fail(err) {
+    var message = "load";
+    if (err && err.message) message = err.message;
+    else if (err && err.type) message = err.type + " " + (err.target && err.target.status);
+    else message = String(err || "load");
+    setStatus("Could not load 3D model: " + message);
+    if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage("error:" + message);
+  }
+
+  if (!window.THREE || !THREE.GLTFLoader) {
+    fail(new Error("Three.js failed to load"));
+  } else {
+    var canvas = document.getElementById("c");
+    try {
+      renderer = new THREE.WebGLRenderer({
+        canvas: canvas,
+        alpha: true,
+        antialias: false,
+        powerPreference: "high-performance"
+      });
+    } catch (err) {
+      fail(err);
+    }
+    if (!renderer) {
+      fail(new Error("WebGL renderer missing"));
+    } else {
+    renderer.setClearColor(0x000000, 0);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.LinearToneMapping;
+    renderer.toneMappingExposure = 1.12;
+    if ("physicallyCorrectLights" in renderer) renderer.physicallyCorrectLights = true;
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(24, 1, 0.05, 40);
+    var envMap = makeEnvMap();
+    scene.add(new THREE.HemisphereLight(0xffefe4, 0x2a2036, 0.62));
+    var key = new THREE.DirectionalLight(0xffe6d2, 1.25);
+    key.position.set(0.7, 1.9, 1.5);
+    scene.add(key);
+    var fill = new THREE.DirectionalLight(0x9eb0d4, 0.4);
+    fill.position.set(-1.4, 0.6, 0.5);
+    scene.add(fill);
+    var rim = new THREE.DirectionalLight(0xffc4d8, 0.7);
+    rim.position.set(0.1, 1.2, -1.7);
+    scene.add(rim);
+    addGroundContact();
+    resize();
+    window.addEventListener("resize", resize);
+
+    new THREE.GLTFLoader().load(
+      "bozo-male.glb?v=9",
+      function (gltf) {
+        try {
+          modelRoot = gltf.scene;
+          modelRoot.traverse(function (obj) {
+            if (obj.isBone && obj.name === "head") {
+              headBones.push(obj);
+              headRests.push({
+                x: obj.rotation.x,
+                y: obj.rotation.y,
+                z: obj.rotation.z
+              });
+            }
+            if (!obj.isMesh) return;
+            obj.frustumCulled = true;
+            var name = obj.name || "";
+            if (name.indexOf("Icosphere") === 0) {
+              obj.visible = false;
+              return;
+            }
+            materialsOf(obj).forEach(function (mat, matIdx) {
+              if (!mat || typeof mat !== "object") return;
+              var matLabel = mat.name || "";
+              if (matLabel.indexOf("MAT_Skin") === 0) {
+                var skin = upgradeSkinMat(mat, envMap);
+                if (Array.isArray(obj.material)) obj.material[matIdx] = skin;
+                else obj.material = skin;
+                skinMats.push(skin);
+              } else if (matLabel.indexOf("MAT_Hair") === 0) {
+                mat.skinning = false;
+                mat.morphTargets = !!obj.morphTargetInfluences;
+                mat.roughness = 0.42;
+                mat.metalness = 0.04;
+                mat.transparent = true;
+                mat.alphaTest = 0.35;
+                mat.side = THREE.DoubleSide;
+                if (envMap) mat.envMap = envMap;
+                mat.envMapIntensity = 0.08;
+                hairMats.push(mat);
+              } else if (matLabel.indexOf("MAT_Iris") === 0) {
+                mat.roughness = 0.18;
+                mat.metalness = 0.04;
+                mat.envMapIntensity = 0.25;
+                if (envMap) mat.envMap = envMap;
+                eyeMats.push(mat);
+              } else {
+                mat.skinning = false;
+                mat.morphTargets = !!obj.morphTargetInfluences;
+                if (envMap) {
+                  mat.envMap = envMap;
+                  mat.envMapIntensity = 0.12;
+                }
+              }
+            });
+            if (obj.morphTargetInfluences && obj.morphTargetDictionary) {
+              pruneToShapes(obj);
+              if (obj.morphTargetInfluences.length) morphMeshes.push(obj);
+            }
+          });
+          applyVisibility(look);
+          var box = new THREE.Box3();
+          var sample = new THREE.Vector3();
+          modelRoot.updateMatrixWorld(true);
+          modelRoot.traverse(function (obj) {
+            if (!obj.isMesh || !obj.visible || !obj.geometry || !obj.geometry.attributes.position) return;
+            var n = obj.name || "";
+            if (n.indexOf("Body_") !== 0 && n.indexOf("Head_") !== 0 && n.indexOf("Eyes_") !== 0 && n.indexOf("Outfit_") !== 0) {
+              return;
+            }
+            var pos = obj.geometry.attributes.position;
+            var stride = Math.max(1, Math.floor(pos.count / 400));
+            var i;
+            for (i = 0; i < pos.count; i += stride) {
+              sample.fromBufferAttribute(pos, i);
+              sample.applyMatrix4(obj.matrixWorld);
+              box.expandByPoint(sample);
+            }
+          });
+          if (box.isEmpty()) {
+            box.setFromObject(modelRoot);
+          }
+          var size = box.getSize(new THREE.Vector3());
+          var center = box.getCenter(new THREE.Vector3());
+          modelRoot.position.x -= center.x;
+          modelRoot.position.z -= center.z;
+          modelRoot.position.y -= box.min.y;
+          modelRestY = modelRoot.position.y;
+          modelHeight = Math.max(0.8, size.y);
+          scene.add(modelRoot);
+          ready = true;
+          setStatus("");
+          try {
+            applyLook(pendingLook || look);
+          } catch (lookErr) {
+            fail(lookErr);
+            return;
+          }
+          if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage("ready");
+          animate();
+        } catch (err) {
+          fail(err);
+        }
+      },
+      function (evt) {
+        if (evt.total) setStatus("Loading 3D model… " + Math.round((evt.loaded / evt.total) * 100) + "%");
+      },
+      fail
+    );
+    }
+  }
+
+  window.applyLook = applyLook;
+})();
+</script>
+</body>
+</html>

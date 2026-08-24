@@ -1,0 +1,205 @@
+import React, { useState } from "react";
+import {
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { useNavigation } from "@react-navigation/native";
+import { colors } from "@common/styles/colors";
+import { SCREENS } from "@common/constant";
+import ChevronDown from "@images/avatar/chevron-down.svg";
+import { GENDER_OPTIONS, GenderOption, useAvatarWizard } from "./context";
+import { s } from "./scale";
+import {
+  FieldHint,
+  FieldLabel,
+  PillField,
+  WizardShell,
+  useLeaveGuard,
+} from "./shared";
+
+const isPlausibleBirthday = (value: string): boolean => {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return true;
+  }
+  const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed);
+  if (!match) {
+    return false;
+  }
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const year = Number(match[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return false;
+  }
+  const parsed = new Date(year, month - 1, day);
+  return (
+    parsed.getFullYear() === year &&
+    parsed.getMonth() === month - 1 &&
+    parsed.getDate() === day
+  );
+};
+
+export const AvatarIdentityScreen = () => {
+  const navigation = useNavigation();
+  const { draft, patchDraft, resetDraft, isDirty } = useAvatarWizard();
+  const [nameFocused, setNameFocused] = useState(true);
+  const [genderOpen, setGenderOpen] = useState(false);
+  const { requestLeave, modal } = useLeaveGuard(isDirty, () => {
+    resetDraft();
+    navigation.goBack();
+  });
+  const canContinue = draft.name.trim().length > 0;
+  const birthdayLooksInvalid = !isPlausibleBirthday(draft.birthday);
+
+  return (
+    <WizardShell
+      title="Craft your ideal lover"
+      progressFill={33}
+      leftIcon="back"
+      onLeftPress={requestLeave}
+      primaryLabel="Continue"
+      primaryDisabled={!canContinue}
+      onPrimary={() => {
+        if (!canContinue) {
+          return;
+        }
+        navigation.navigate(SCREENS.AVATAR_READY);
+      }}
+    >
+      {modal}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.content}
+      >
+        <FieldLabel>Name</FieldLabel>
+        <FieldHint>
+          Whisper their name into existence, a name that will echo through your
+          heart’s most tender moments.
+        </FieldHint>
+        <PillField focused={nameFocused}>
+          <TextInput
+            value={draft.name}
+            onChangeText={(name) => patchDraft({ name })}
+            onFocus={() => setNameFocused(true)}
+            onBlur={() => setNameFocused(false)}
+            placeholder="Kevin"
+            placeholderTextColor={colors.grayLighter}
+            style={styles.input}
+          />
+        </PillField>
+
+        <View style={styles.section}>
+          <FieldLabel>Birthday</FieldLabel>
+          <View style={styles.fieldGap} />
+          <PillField>
+            <TextInput
+              value={draft.birthday}
+              onChangeText={(birthday) => patchDraft({ birthday })}
+              placeholder="mm/dd/yyyy"
+              placeholderTextColor={colors.grayLighter}
+              style={styles.input}
+              keyboardType="numbers-and-punctuation"
+            />
+          </PillField>
+          {birthdayLooksInvalid ? (
+            <Text style={styles.birthdayHint}>Use mm/dd/yyyy</Text>
+          ) : null}
+        </View>
+
+        <View style={styles.section}>
+          <FieldLabel>Gender</FieldLabel>
+          <View style={styles.fieldGap} />
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => setGenderOpen((open) => !open)}
+          >
+            <PillField>
+              <View style={styles.genderRow}>
+                <Text
+                  style={[
+                    styles.input,
+                    draft.gender ? styles.genderValue : null,
+                  ]}
+                >
+                  {draft.gender}
+                </Text>
+                <ChevronDown width={s(35)} height={s(35)} />
+              </View>
+            </PillField>
+          </TouchableOpacity>
+          {genderOpen
+            ? GENDER_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={styles.genderOption}
+                  onPress={() => {
+                    patchDraft({ gender: option as GenderOption });
+                    setGenderOpen(false);
+                  }}
+                >
+                  <Text style={styles.genderOptionText}>{option}</Text>
+                </TouchableOpacity>
+              ))
+            : null}
+        </View>
+      </KeyboardAvoidingView>
+    </WizardShell>
+  );
+};
+
+const styles = StyleSheet.create({
+  content: {
+    paddingTop: s(45),
+    alignItems: "center",
+    gap: s(12),
+  },
+  section: {
+    marginTop: s(40),
+    alignItems: "center",
+    width: "100%",
+  },
+  fieldGap: {
+    height: s(24),
+  },
+  birthdayHint: {
+    marginTop: s(8),
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 13,
+  },
+  input: {
+    color: colors.white,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 13,
+    padding: 0,
+    width: "100%",
+  },
+  genderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  genderValue: {
+    color: colors.grayLighter,
+  },
+  genderOption: {
+    width: s(329),
+    height: s(40),
+    borderRadius: s(20),
+    backgroundColor: colors.grayLightest,
+    marginTop: s(8),
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  genderOptionText: {
+    color: colors.white,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 13,
+  },
+});
