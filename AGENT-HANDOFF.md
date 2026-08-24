@@ -274,10 +274,29 @@ Do these unless they change their mind:
 
 ---
 
-## 10. GitHub
+## 10. Git / GitHub
 
-This tree started as an unzipped folder **without** git. Handoff + first commit should live on GitHub under the authenticated user `chensxmaxwell`. After push, put the URL here:
+Local git is initialized on `main`. First commit: `8f2dc87` (670 files). **`.env` is not in git.** `node_modules` and `ios/Pods` are not in git.
 
-- Repo (fill after push): `https://github.com/chensxmaxwell/<repo-name>`
+**GitHub remote is not up yet.** Blockers as of 2026-08-24:
 
-Clone, then `npm install` and `npm run ios`.
+- Cursor GitHub MCP is logged in as `chensxmaxwell`, but the token **cannot create repos** (`403 Resource not accessible by personal access token`).
+- This Mac’s git credential helper has a stale PAT for `ceciliaxie0517` (`401 Bad credentials`). There is no `gh` CLI.
+
+To finish the upload (owner, ~1 minute):
+
+1. In a browser, signed in as the GitHub account that should own the app, open [github.com/new](https://github.com/new).
+2. Name: `ph-app2.0-frontend`. **Private.** Do **not** add a README / `.gitignore` / license (empty repo).
+3. Tell the next agent the URL, or run:
+
+```bash
+cd /Users/maxwell/Downloads/ph-app2.0-frontend-main
+git remote add origin https://github.com/<you>/ph-app2.0-frontend.git
+git push -u origin main
+```
+
+If push asks for a password, use a GitHub **personal access token** with `repo` scope, not the account password. After push, put the URL here:
+
+- Repo: *(not pushed yet)*
+
+Then clone elsewhere with `git clone <url>`, copy `.env` from this machine (never commit it), `npm install`, `npm run ios`.

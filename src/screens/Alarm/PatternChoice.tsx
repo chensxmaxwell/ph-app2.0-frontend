@@ -72,7 +72,7 @@ const ChoosePatternScreen = () => {
         )}
         {item.name ? (
           <Text style={styles.patternName}>{item.name}</Text>
-        )}
+        ) : null}
         <View style={styles.heartIcon}>
           {selectedPattern === item.id ? (
             <HeartFull width={35} height={35} />
