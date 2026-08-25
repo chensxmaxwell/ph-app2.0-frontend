@@ -17,6 +17,9 @@ import { BaseText } from "@common/components/base-text";
 import { spacings } from "@common/styles/spacings";
 import { ConnectionPill } from "@common/components/connection-pill";
 
+const CARD_ICON_SIZE = 72;
+const CARD_TITLE_GAP = 12;
+
 const AutoRing = ({ active }: { active: boolean }) => {
   const spin = useRef(new Animated.Value(0)).current;
 
@@ -80,7 +83,7 @@ export const Control = () => {
         >
           <View style={styles.iconStage}>
             {isAuto ? <AutoRing active={Boolean(active)} /> : null}
-            <Icon />
+            <Icon width={CARD_ICON_SIZE} height={CARD_ICON_SIZE} />
           </View>
           <BaseText style={styles.controlTitle}>{title}</BaseText>
         </TouchableOpacity>
@@ -139,7 +142,7 @@ const styles = StyleSheet.create({
   cards: {
     backgroundColor: colors.grayLight,
     borderRadius: 10,
-    justifyContent: "center",
+    justifyContent: "flex-start",
     paddingHorizontal: spacings.w18,
     minWidth: 160,
     minHeight: 156,
@@ -152,34 +155,40 @@ const styles = StyleSheet.create({
   cardHit: {
     flex: 1,
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "flex-start",
     width: "100%",
+    gap: CARD_TITLE_GAP,
   },
   cardOn: {
     borderWidth: 1,
     borderColor: colors.accentLightPink,
   },
   iconStage: {
-    width: 72,
-    height: 72,
+    width: CARD_ICON_SIZE,
+    height: CARD_ICON_SIZE,
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
+    flexShrink: 0,
   },
   autoRing: {
     position: "absolute",
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: CARD_ICON_SIZE,
+    height: CARD_ICON_SIZE,
+    borderRadius: CARD_ICON_SIZE / 2,
     borderWidth: 2,
     borderColor: "rgba(204, 160, 221, 0.25)",
     borderTopColor: colors.white,
     borderRightColor: colors.accentLightPink,
+    zIndex: 1,
   },
   controlTitle: {
     fontWeight: fontWeights.bold,
     flexWrap: "wrap",
     color: colors.white,
     fontSize: fontSizes.smallX,
+    textAlign: "center",
+    zIndex: 1,
   },
   intensityRow: {
     flexDirection: "row",
