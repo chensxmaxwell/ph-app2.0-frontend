@@ -83,7 +83,9 @@ export const Control = () => {
         >
           <View style={styles.iconStage}>
             {isAuto ? <AutoRing active={Boolean(active)} /> : null}
-            <Icon width={CARD_ICON_SIZE} height={CARD_ICON_SIZE} />
+            <View style={styles.iconClip} pointerEvents="none">
+              <Icon width={CARD_ICON_SIZE} height={CARD_ICON_SIZE} />
+            </View>
           </View>
           <BaseText style={styles.controlTitle}>{title}</BaseText>
         </TouchableOpacity>
@@ -168,8 +170,14 @@ const styles = StyleSheet.create({
     height: CARD_ICON_SIZE,
     alignItems: "center",
     justifyContent: "center",
-    overflow: "hidden",
     flexShrink: 0,
+  },
+  iconClip: {
+    width: CARD_ICON_SIZE,
+    height: CARD_ICON_SIZE,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
   },
   autoRing: {
     position: "absolute",
