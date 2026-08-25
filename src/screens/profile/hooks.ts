@@ -1,6 +1,12 @@
 import { gql, useMutation, useQuery } from "@apollo/client";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  ANONYMOUS_USER_NAME,
+  SessionUser,
+  isBypassUser,
+  resolveHomeDisplayName,
+} from "./display-name";
 
 export const useProfile = () => {
   const GET_USER = gql`
@@ -53,71 +59,84 @@ export const useProfile = () => {
     }
   `;
 
+  const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
+  const [sessionReady, setSessionReady] = useState(false);
   const [user, setUser] = useState({
     id: "",
-    email: "123456@gmail.com",
+    email: "",
   });
-
   const [profile, setProfile] = useState({
-    name: "Amanda Guo",
-    gender: "Female",
-    birthday: "13/04/2022",
+    name: "",
+    gender: "",
+    birthday: "",
     height: "",
     weight: "",
   });
+
+  useEffect(() => {
+    AsyncStorage.getItem("user")
+      .then((raw) => {
+        if (!raw) {
+          return;
+        }
+        const parsed = JSON.parse(raw) as SessionUser;
+        setSessionUser(parsed);
+        if (parsed.id || parsed.email) {
+          setUser({
+            id: parsed.id ?? "",
+            email: parsed.email ?? "",
+          });
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => setSessionReady(true));
+  }, []);
+
+  const bypass = isBypassUser(sessionUser);
+  const skipRemote = !sessionReady || bypass || !sessionUser;
 
   const {
     loading: userLoading,
     error: userError,
     data: userData,
-  } = useQuery(GET_USER);
+  } = useQuery(GET_USER, { skip: skipRemote });
 
   useEffect(() => {
     if (userError) return;
     if (!userLoading && userData) {
-      console.log("userData: ", userData);
-
       setUser({
         id: userData.currentUser.id,
         email: userData.currentUser.email,
       });
     }
-  }, [userLoading, userData]);
+  }, [userLoading, userData, userError]);
 
   const {
     loading: profileLoading,
     error: profileError,
     data: profileData,
     refetch,
-  } = useQuery(GET_PROFILE);
+  } = useQuery(GET_PROFILE, { skip: skipRemote });
 
   const [addProfileMutation] = useMutation(ADD_PROFILE);
 
   useEffect(() => {
-    if (profileError) return;
+    if (skipRemote || profileError) return;
     if (!profileLoading && profileData) {
-      console.log("profileData: ", profileData);
-
       if (!profileData.getUserProfile) {
         addProfileMutation({
           variables: {
             input: {
-              nickName: "Amanda Guo",
+              nickName: ANONYMOUS_USER_NAME,
               personalInfo: {
                 birthday: "01/01/2000",
               },
             },
           },
-        })
-          .then((res) => {
-            console.log("Profile created:", res.data);
-          })
-          .catch((err) => {
-            console.error("Error creating profile:", err);
-          });
+        }).catch(() => undefined);
       }
     }
-  }, [profileLoading, profileData]);
+  }, [addProfileMutation, profileError, profileLoading, profileData, skipRemote]);
 
   const [updateProfileMutation] = useMutation(UPDATE_PROFILE);
 
@@ -138,7 +157,6 @@ export const useProfile = () => {
       });
 
       if (data) {
-        console.log("Profile updated successfully: ", data);
         await refetch();
       }
     } catch (error) {
@@ -147,14 +165,22 @@ export const useProfile = () => {
   };
 
   useEffect(() => {
-    if (!profileLoading && profileData) {
-      setProfile((prevProfile) => ({
-        ...prevProfile,
-        name: profileData.getUserProfile?.nickName,
-        birthday: profileData.getUserProfile?.personalInfo?.birthday,
-      }));
+    if (skipRemote || !profileData?.getUserProfile) {
+      return;
     }
-  }, [profileData]);
+    setProfile((prevProfile) => ({
+      ...prevProfile,
+      name: profileData.getUserProfile?.nickName ?? prevProfile.name,
+      birthday:
+        profileData.getUserProfile?.personalInfo?.birthday ??
+        prevProfile.birthday,
+    }));
+  }, [profileData, skipRemote]);
+
+  const displayName = resolveHomeDisplayName({
+    user: sessionUser,
+    profileName: profile.name,
+  });
 
   const isValidDate = (dateStr: string): boolean => {
     const regex = /^(0[1-9]|[12][0-9]|3[01])\/(0[1-9]|1[0-2])\/\d{4}$/;
@@ -172,17 +198,14 @@ export const useProfile = () => {
   };
 
   const formatDate = (dateStr: string): string => {
-    const [day, month, year] = dateStr.split("/").map(Number);
-
-    const date = new Date(year, month - 1, day);
-    if (
-      date.getFullYear() !== year ||
-      date.getMonth() !== month - 1 ||
-      date.getDate() !== day
-    ) {
+    if (!dateStr) {
+      return "—";
+    }
+    if (!isValidDate(dateStr)) {
       return "Invalid Date";
     }
 
+    const [day, month, year] = dateStr.split("/").map(Number);
     const monthNames = [
       "Jan",
       "Feb",
@@ -215,5 +238,13 @@ export const useProfile = () => {
     return `${day}${getOrdinalSuffix(day)} ${monthNames[month - 1]} ${year}`;
   };
 
-  return { user, profile, setProfile, updateProfile, isValidDate, formatDate };
+  return {
+    user,
+    profile,
+    displayName,
+    setProfile,
+    updateProfile,
+    isValidDate,
+    formatDate,
+  };
 };

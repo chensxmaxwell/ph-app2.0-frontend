@@ -31,14 +31,12 @@ import { useOpenLove } from "../love/pill";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
 import { ChatBubble, ChatThread } from "./types";
-
-const FACE = require("../../../assets/images/message/kevin.png");
-const PHOTO = require("../../../assets/images/message/kevin-photo.png");
+import { faceSourceForId } from "./faces";
 
 type ThreadRoute = RouteProp<{ ChatThread: { threadId: string } }, "ChatThread">;
 
 const faceFor = (thread: ChatThread) =>
-  thread.kind === "human" ? PHOTO : FACE;
+  faceSourceForId(thread.id, thread.kind);
 
 const Dialog = ({
   title,

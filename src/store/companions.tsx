@@ -26,6 +26,7 @@ export type Companion = AvatarLook & {
 type CompanionsContextValue = {
   companions: Companion[];
   activeCompanion: Companion | null;
+  activeCompanionId: string | null;
   addCompanion: (companion: Companion) => void;
   upsertCompanion: (companion: Companion) => void;
   updateCompanion: (id: string, patch: Partial<Companion>) => void;
@@ -109,12 +110,13 @@ export const CompanionsProvider = ({ children }: { children: ReactNode }) => {
     () => ({
       companions,
       activeCompanion,
+      activeCompanionId,
       addCompanion,
       upsertCompanion,
       updateCompanion,
       setActiveCompanionId,
     }),
-    [companions, activeCompanion]
+    [activeCompanion, activeCompanionId, companions]
   );
 
   return (

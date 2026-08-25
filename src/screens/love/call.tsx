@@ -21,6 +21,7 @@ import { colors } from "@common/styles/colors";
 import Minimize from "@images/minimize.svg";
 import PhoneDown from "@images/love/phone-down.svg";
 import { useCompanions } from "../../store/companions";
+import { useChat } from "../chat/store";
 import { s } from "../avatar/scale";
 import { dismissLoveOverlays } from "./overlay";
 import { resolveLovePerson } from "./partner";
@@ -48,6 +49,7 @@ export const LoveCallScreen = () => {
   const insets = useSafeAreaInsets();
   const route = useRoute<CallRoute>();
   const { companions, activeCompanion } = useCompanions();
+  const { threads } = useChat();
   const {
     start,
     patchChat,
@@ -59,9 +61,10 @@ export const LoveCallScreen = () => {
     clearLayerTimer,
   } = useLoveSession();
   const { companionId: partnerId, name } = resolveLovePerson({
-    companionId: route.params?.companionId ?? companionId,
+    companionId: companionId ?? route.params?.companionId ?? chat?.companionId,
     name: route.params?.name,
     companions,
+    threads,
     activeCompanion,
     chatName: chat?.name,
   });

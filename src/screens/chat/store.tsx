@@ -36,7 +36,7 @@ const seedThreads = (): ChatThread[] => [
     gender: "Male",
     birthday: "05/25/1976",
     description:
-      "Lorem ipsum odor amet, consectetuer adipiscing elit. Scelerisque himenaeos vulputate aenean, venenatis nisi volutpat curae ridiculus!.",
+      "Kevin is playful, attentive, and a little mischievous. He notices the small things and keeps the conversation close.",
     personality: "Playful, attentive, a little mischievous.",
     messages: [
       { id: "k1", from: "them", text: "How’s it going gorgeous?" },
@@ -57,7 +57,32 @@ const seedThreads = (): ChatThread[] => [
     request: "incoming",
     gender: "Male",
     birthday: "13th April 2001",
+    description: "Chad is direct, confident, and a little competitive.",
+    personality: "Direct, confident, a little competitive.",
     messages: [],
+  },
+  {
+    id: "amanda",
+    name: "Amanda",
+    kind: "bot",
+    preview: "Hey, it's Amanda. I saved you a seat.",
+    time: "Now",
+    pinned: false,
+    listen: false,
+    synced: false,
+    request: "none",
+    gender: "Female",
+    birthday: "13th April 2001",
+    description:
+      "Amanda likes late-night talks and getting straight to what you want.",
+    personality: "Warm, witty, and a little teasing.",
+    messages: [
+      {
+        id: "a1",
+        from: "them",
+        text: "Hey, it's Amanda. I saved you a seat.",
+      },
+    ],
   },
 ];
 
@@ -132,6 +157,14 @@ const ChatContext = createContext<ChatContextValue | null>(null);
 
 const nextId = () => `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
+const mergeSeedThreads = (stored: ChatThread[]) => {
+  const seeds = seedThreads();
+  const missing = seeds.filter(
+    (seed) => !stored.some((thread) => thread.id === seed.id)
+  );
+  return missing.length ? [...stored, ...missing] : stored;
+};
+
 export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const [threads, setThreads] = useState<ChatThread[]>(seedThreads);
   const [directory] = useState<DirectoryPerson[]>(seedDirectory);
@@ -151,7 +184,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
           isPremium?: boolean;
         };
         if (Array.isArray(parsed.threads) && parsed.threads.length > 0) {
-          setThreads(parsed.threads);
+          setThreads(mergeSeedThreads(parsed.threads));
         }
         if (typeof parsed.isPremium === "boolean") {
           setIsPremium(parsed.isPremium);

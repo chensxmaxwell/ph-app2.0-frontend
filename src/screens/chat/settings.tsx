@@ -25,9 +25,7 @@ import { openAvatarWizard } from "../avatar/open";
 import { s } from "../avatar/scale";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
-
-const FACE = require("../../../assets/images/message/kevin.png");
-const PHOTO = require("../../../assets/images/message/kevin-photo.png");
+import { faceSourceForId } from "./faces";
 
 type SettingsRoute = RouteProp<
   { ChatSettings: { threadId: string } },
@@ -89,7 +87,7 @@ export const ChatSettingsScreen = () => {
             </View>
           ) : (
             <Image
-              source={thread.kind === "human" ? PHOTO : FACE}
+              source={faceSourceForId(thread.id, thread.kind)}
               style={styles.portrait}
             />
           )}

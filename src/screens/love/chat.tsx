@@ -38,6 +38,8 @@ import { lookFromCompanion, useCompanions } from "../../store/companions";
 import { LookFace } from "../avatar/look-face";
 import { openAvatarWizard } from "../avatar/open";
 import { s } from "../avatar/scale";
+import { useChat } from "../chat/store";
+import { faceSourceForId } from "../chat/faces";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
 import { resolveLovePerson } from "./partner";
@@ -46,7 +48,6 @@ import { useLoveSession } from "./session";
 import { LoveChatItem, LoveMode } from "./types";
 import { ttsSpeak, ttsStop } from "../../services/tts";
 
-const CHAT_FACE = require("../../../assets/images/love/chat-face.png");
 const USER_FACE = require("../../../assets/images/love/face.png");
 
 type ChatRoute = RouteProp<
@@ -202,11 +203,20 @@ export const LoveChatScreen = () => {
   const insets = useSafeAreaInsets();
   const route = useRoute<ChatRoute>();
   const { companions, activeCompanion } = useCompanions();
-  const { chat, start, patchChat, minimize, end } = useLoveSession();
-  const { companion, companionId: partnerId, name } = resolveLovePerson({
-    companionId: route.params?.companionId,
-    name: route.params?.name,
+  const { threads } = useChat();
+  const { chat, start, patchChat, minimize, end, companionId: sessionCompanionId } =
+    useLoveSession();
+  const {
+    companion,
+    companionId: partnerId,
+    name,
+    personality,
+    story,
+  } = resolveLovePerson({
+    companionId: sessionCompanionId ?? route.params?.companionId ?? chat?.companionId,
+    name: route.params?.name ?? chat?.name,
     companions,
+    threads,
     activeCompanion,
     chatName: chat?.name,
   });
@@ -236,10 +246,15 @@ export const LoveChatScreen = () => {
       keepLayer: true,
       companionId: partnerId,
       name,
+      personality,
+      story,
       fromCreation,
       syncing: startedSyncing,
+      replace: Boolean(
+        partnerId && chat?.companionId && partnerId !== chat.companionId
+      ),
     });
-  }, [fromCreation, name, partnerId, start, startedSyncing]);
+  }, [chat?.companionId, fromCreation, name, partnerId, personality, start, startedSyncing, story]);
 
   const busy = mode !== "none" || synced || inCall;
 
@@ -350,8 +365,8 @@ export const LoveChatScreen = () => {
       name,
       userText: text,
       history,
-      personality: companion?.personalities?.join(", "),
-      story: companion?.story,
+      personality: personality,
+      story: story,
     }).then((reply) => {
       patchChat((current) => ({
         ...current,
@@ -500,7 +515,7 @@ export const LoveChatScreen = () => {
             <LookFace
               look={companion ? lookFromCompanion(companion) : null}
               size={s(50)}
-              fallbackSource={CHAT_FACE}
+              fallbackSource={faceSourceForId(partnerId)}
             />
             <Text style={styles.name}>{name}</Text>
           </View>
@@ -640,7 +655,9 @@ export const LoveChatScreen = () => {
           title={name}
           body={
             companion?.story?.trim() ||
+            story?.trim() ||
             companion?.personalities?.join(", ") ||
+            personality ||
             `${name} is your companion.`
           }
           extras={

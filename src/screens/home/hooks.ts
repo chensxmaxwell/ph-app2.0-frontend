@@ -3,16 +3,10 @@ import Heart from "@images/heart.svg";
 import MockProfile from "@images/mock_profile.svg";
 import MockProfile1 from "@images/mock_profile1.svg";
 import MockProfile2 from "@images/mock_profile2.svg";
-import MockProfile3 from "@images/mock_profile3.svg";
-import MockProfile4 from "@images/mock_profile4.svg";
-import MockProfile5 from "@images/mock_profile5.svg";
-import MockProfile6 from "@images/mock_profile6.svg";
-import MockProfile7 from "@images/mock_profile7.svg";
-import MockProfile8 from "@images/mock_profile8.svg";
-import MockProfile9 from "@images/mock_profile9.svg";
 import HeartFull from "@images/heartFull.svg";
 import { SCREENS } from "../../../src/common/constant";
 import { NavigationProp } from "@react-navigation/native";
+import { MOCK_HOME_COMPANIONS } from "./mock-companions";
 
 type HomeEvent = {
   type: string;
@@ -25,81 +19,17 @@ type HomeEvent = {
 };
 
 export const useHome = () => {
-  // TODO* replace this mock data with real data
-  const companions: chatBotType[] = [
-    {
-      name: "Samantha",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile,
-    },
-    {
-      name: "Riley",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile4,
-    },
-    {
-      name: "Jordan",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile2,
-    },
-    {
-      name: "Alex",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile5,
-    },
-    {
-      name: "Casey",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile9,
-    },
-    {
-      name: "Quinn",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile6,
-    },
-    {
-      name: "Reese",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile7,
-    },
-    {
-      name: "Morgan",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile8,
-    },
-  ];
+  const mockFaces = [MockProfile, MockProfile1, MockProfile2];
+  const companions: chatBotType[] = MOCK_HOME_COMPANIONS.map((person, index) => ({
+    id: person.id,
+    name: person.name,
+    gender: "M",
+    birthdate: "1995-01-01",
+    photos: [],
+    tags: ["funny", "smart", "adventurous"],
+    language: "en",
+    profilePicture: mockFaces[index],
+  }));
   // TODO* replace this mock data with real data
   const events: HomeEvent[] = [
     {
@@ -172,6 +102,7 @@ export const useHome = () => {
 };
 
 type chatBotType = {
+  id: string;
   name: string;
   gender: string;
   birthdate: string;

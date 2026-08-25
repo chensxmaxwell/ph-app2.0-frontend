@@ -4,14 +4,19 @@ import React, {
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
 } from "react";
-import { LoveChatState, LoveLayer } from "./types";
+import { shouldReuseLoveChat } from "./session-logic";
+import { LoveChatItem, LoveChatState, LoveLayer } from "./types";
 
 type StartOptions = {
   layer: LoveLayer;
   companionId?: string;
   name?: string;
+  personality?: string;
+  story?: string;
+  messages?: LoveChatItem[];
   fromCreation?: boolean;
   syncing?: boolean;
   keepLayer?: boolean;
@@ -45,45 +50,56 @@ const nextId = () => `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 export const seedLoveChat = ({
   companionId,
   name = "Kevin",
+  personality,
+  story,
+  messages: existingMessages,
   fromCreation = false,
   syncing = false,
 }: {
   companionId?: string;
   name?: string;
+  personality?: string;
+  story?: string;
+  messages?: LoveChatItem[];
   fromCreation?: boolean;
   syncing?: boolean;
 }): LoveChatState => {
-  const messages = fromCreation
-    ? [
-        {
-          kind: "bubble" as const,
-          id: nextId(),
-          from: "them" as const,
-          text: `Start chatting with ${name}.`,
-        },
-      ]
-    : syncing
-    ? [
-        {
-          kind: "bubble" as const,
-          id: nextId(),
-          from: "them" as const,
-          text: `Hey, it's ${name}. Want to sync?`,
-        },
-        { kind: "sync" as const, id: nextId() },
-      ]
-    : [
-        {
-          kind: "bubble" as const,
-          id: nextId(),
-          from: "them" as const,
-          text: `Hey, it's ${name}. I'm here.`,
-        },
-      ];
+  const messages =
+    existingMessages && existingMessages.length > 0
+      ? existingMessages
+      : fromCreation
+      ? [
+          {
+            kind: "bubble" as const,
+            id: nextId(),
+            from: "them" as const,
+            text: `Start chatting with ${name}.`,
+          },
+        ]
+      : syncing
+      ? [
+          {
+            kind: "bubble" as const,
+            id: nextId(),
+            from: "them" as const,
+            text: `Hey, it's ${name}. Want to sync?`,
+          },
+          { kind: "sync" as const, id: nextId() },
+        ]
+      : [
+          {
+            kind: "bubble" as const,
+            id: nextId(),
+            from: "them" as const,
+            text: `Hey, it's ${name}. I'm here.`,
+          },
+        ];
 
   return {
     companionId,
     name,
+    personality,
+    story,
     messages,
     synced: syncing,
     inCall: false,
@@ -100,6 +116,7 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
   const [chat, setChat] = useState<LoveChatState | null>(null);
   const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
   const [syncStartedAt, setSyncStartedAt] = useState<number | null>(null);
+  const chatsByCompanionId = useRef<Record<string, LoveChatState>>({});
 
   const start = useCallback((options: StartOptions) => {
     setMinimized(false);
@@ -113,26 +130,54 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
       return options.layer;
     });
     setChat((current) => {
-      const sameCompanion =
-        current &&
-        (!options.companionId ||
-          !current.companionId ||
-          current.companionId === options.companionId);
-      if (current && sameCompanion && !options.replace) {
+      if (current?.companionId) {
+        chatsByCompanionId.current[current.companionId] = current;
+      }
+      const reuse = shouldReuseLoveChat({
+        currentCompanionId: current?.companionId,
+        nextCompanionId: options.companionId,
+        replace: options.replace,
+      });
+      if (current && reuse) {
         return {
           ...current,
           name: options.name ?? current.name,
+          personality: options.personality ?? current.personality,
+          story: options.story ?? current.story,
           companionId: options.companionId ?? current.companionId,
           synced: options.layer === "sync" ? true : current.synced,
           inCall: options.layer === "call" ? true : current.inCall,
         };
       }
-      return seedLoveChat({
-        companionId: options.companionId,
-        name: options.name,
-        fromCreation: options.fromCreation,
-        syncing: options.syncing || options.layer === "sync",
-      });
+      const saved =
+        !options.replace &&
+        !options.fromCreation &&
+        options.companionId
+          ? chatsByCompanionId.current[options.companionId]
+          : undefined;
+      const next = saved
+        ? {
+            ...saved,
+            name: options.name ?? saved.name,
+            personality: options.personality ?? saved.personality,
+            story: options.story ?? saved.story,
+            companionId: options.companionId,
+            synced: options.syncing || options.layer === "sync" ? true : saved.synced,
+            inCall: options.layer === "call" ? true : saved.inCall,
+          }
+        : seedLoveChat({
+            companionId: options.companionId,
+            name: options.name,
+            personality: options.personality,
+            story: options.story,
+            messages: options.messages,
+            fromCreation: options.fromCreation,
+            syncing: options.syncing || options.layer === "sync",
+          });
+      if (next.companionId) {
+        chatsByCompanionId.current[next.companionId] = next;
+      }
+      return next;
     });
     if (options.replace) {
       setCallStartedAt(null);

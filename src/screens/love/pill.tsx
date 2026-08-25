@@ -8,10 +8,16 @@ import {
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import { lookFromCompanion, useCompanions } from "../../store/companions";
+import { useChat } from "../chat/store";
 import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
-import { getHomeStackNavigation, restoreLoveOverlays } from "./overlay";
-import { LovePersonParams, resolveLovePerson } from "./partner";
+import { faceSourceForId } from "../chat/faces";
+import { dismissLoveOverlays, getHomeStackNavigation, restoreLoveOverlays } from "./overlay";
+import {
+  LovePersonParams,
+  loveMessagesFromThread,
+  resolveLovePerson,
+} from "./partner";
 import { useLoveSession } from "./session";
 
 export type LoveChatParams = LovePersonParams;
@@ -19,28 +25,31 @@ export type LoveChatParams = LovePersonParams;
 export const useOpenLove = () => {
   const navigation = useNavigation();
   const { activeCompanion, companions, setActiveCompanionId } = useCompanions();
+  const { threads } = useChat();
   const { start, restore, minimized, companionId, layer, chat } =
     useLoveSession();
 
   return (params?: LoveChatParams) => {
+    const requestedId = params?.companionId?.trim();
     const person = resolveLovePerson({
-      companionId:
-        params?.companionId ?? activeCompanion?.id ?? companionId,
+      companionId: requestedId || activeCompanion?.id || companionId,
       name: params?.name,
       companions,
+      threads,
       activeCompanion,
       chatName: chat?.name,
     });
-    if (person.companion?.id) {
-      setActiveCompanionId(person.companion.id);
+    if (person.companionId) {
+      setActiveCompanionId(person.companionId);
     }
 
+    const switching = Boolean(
+      person.companionId && companionId && person.companionId !== companionId
+    );
     const nav =
       getHomeStackNavigation() ?? (navigation as NavigationProp<ParamListBase>);
-    if (
-      minimized &&
-      (!params?.companionId || params.companionId === companionId)
-    ) {
+
+    if (minimized && !switching && (!requestedId || requestedId === companionId)) {
       restore();
       restoreLoveOverlays(nav, layer, person.companionId, person.name);
       return;
@@ -50,11 +59,12 @@ export const useOpenLove = () => {
       layer: params?.syncing ? "sync" : "chat",
       companionId: person.companionId,
       name: person.name,
+      personality: person.personality,
+      story: person.story,
+      messages: loveMessagesFromThread(person.thread),
       fromCreation: params?.fromCreation,
       syncing: params?.syncing,
-      replace: Boolean(
-        person.companionId && person.companionId !== companionId
-      ),
+      replace: switching,
     });
     const overlayParams = {
       companionId: person.companionId,
@@ -62,7 +72,14 @@ export const useOpenLove = () => {
       fromCreation: params?.fromCreation,
       syncing: params?.syncing,
     };
-    nav.navigate(SCREENS.LOVE_CHAT as never, overlayParams as never);
+    if (switching) {
+      dismissLoveOverlays(nav, {
+        name: SCREENS.LOVE_CHAT,
+        params: overlayParams,
+      });
+    } else {
+      nav.navigate(SCREENS.LOVE_CHAT as never, overlayParams as never);
+    }
     if (params?.syncing) {
       nav.navigate(SCREENS.LOVE_SYNC as never, overlayParams as never);
     }
@@ -79,16 +96,22 @@ export const LovePill = ({ onPress, style }: LovePillProps) => {
   const { companions, activeCompanion } = useCompanions();
   const { companionId } = useLoveSession();
   const companion =
-    companions.find((item) => item.id === companionId) ?? activeCompanion;
+    companions.find((item) => item.id === companionId) ??
+    companions.find((item) => item.id === activeCompanion?.id);
   const look = companion ? lookFromCompanion(companion) : null;
+  const personId = companionId ?? activeCompanion?.id;
 
   return (
     <TouchableOpacity
       style={[styles.pill, style]}
-      onPress={onPress ?? (() => openLove())}
+      onPress={onPress ?? (() => openLove({ companionId: personId }))}
       activeOpacity={0.85}
     >
-      <LookFace look={look} size={s(37)} />
+      <LookFace
+        look={look}
+        size={s(37)}
+        fallbackSource={faceSourceForId(personId)}
+      />
     </TouchableOpacity>
   );
 };

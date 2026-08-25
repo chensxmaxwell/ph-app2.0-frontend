@@ -23,6 +23,7 @@ import Speaker from "@images/speaker.svg";
 import MicroPhoneUnmute from "@images/microphone-unmute.svg";
 import MicroPhoneMute from "@images/microphone-mute.svg";
 import { useCompanions } from "../../store/companions";
+import { useChat } from "../chat/store";
 import { s } from "../avatar/scale";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
@@ -53,6 +54,7 @@ export const LoveSyncScreen = () => {
   const insets = useSafeAreaInsets();
   const route = useRoute<SyncRoute>();
   const { companions, activeCompanion } = useCompanions();
+  const { threads } = useChat();
   const {
     start,
     patchChat,
@@ -64,9 +66,10 @@ export const LoveSyncScreen = () => {
     clearLayerTimer,
   } = useLoveSession();
   const { companionId: partnerId, name } = resolveLovePerson({
-    companionId: route.params?.companionId ?? companionId,
+    companionId: companionId ?? route.params?.companionId ?? chat?.companionId,
     name: route.params?.name,
     companions,
+    threads,
     activeCompanion,
     chatName: chat?.name,
   });

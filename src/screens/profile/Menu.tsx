@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   ScrollView,
 } from "react-native";
-import { useEffect, useState } from "react";
 import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
 import { useNavigation } from "@react-navigation/native";
@@ -20,7 +19,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const MenuScreen = () => {
   const navigation = useNavigation<NavigationType>();
-  const { user, profile, formatDate } = useProfile();
+  const { user, profile, displayName, formatDate } = useProfile();
 
   const rootNavigation = () => {
     let current = navigation as NavigationType;
@@ -76,18 +75,24 @@ const MenuScreen = () => {
           style={styles.profileImage}
           source={require("../../../assets/images/Avatar_default.png")}
         />
-        <Text style={styles.nameText}>{profile?.name ?? "Loading..."}</Text>
+        <Text style={styles.nameText}>{displayName}</Text>
         <Text style={styles.emailText}>{user?.email ?? "Loading..."}</Text>
       </View>
 
       {/* Buttons Section */}
       <View style={styles.infoSection}>
-        <View style={styles.infoChip}>
-          <Text style={styles.infoChipText}>{profile.gender}</Text>
-        </View>
-        <View style={styles.infoChip}>
-          <Text style={styles.infoChipText}>{formatDate(profile.birthday)}</Text>
-        </View>
+        {profile.gender ? (
+          <View style={styles.infoChip}>
+            <Text style={styles.infoChipText}>{profile.gender}</Text>
+          </View>
+        ) : null}
+        {profile.birthday ? (
+          <View style={styles.infoChip}>
+            <Text style={styles.infoChipText}>
+              {formatDate(profile.birthday)}
+            </Text>
+          </View>
+        ) : null}
         <TouchableOpacity
           style={styles.button}
           onPress={() => navigation.navigate(SCREENS.PROFILE_EDIT)}

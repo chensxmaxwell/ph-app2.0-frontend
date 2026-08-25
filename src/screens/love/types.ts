@@ -20,6 +20,8 @@ export type LoveChatItem = LoveBubble | LoveSyncLine;
 export type LoveChatState = {
   companionId?: string;
   name: string;
+  personality?: string;
+  story?: string;
   messages: LoveChatItem[];
   synced: boolean;
   inCall: boolean;

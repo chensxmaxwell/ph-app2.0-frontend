@@ -23,12 +23,10 @@ import PencilIcon from "@images/message/pencil.svg";
 import PersonPlus from "@images/message/person-plus.svg";
 import { useChat } from "./store";
 import { ChatThread } from "./types";
-
-const FACE = require("../../../assets/images/message/kevin.png");
-const PHOTO = require("../../../assets/images/message/kevin-photo.png");
+import { faceSourceForId } from "./faces";
 
 const faceFor = (thread: ChatThread) =>
-  thread.kind === "human" ? PHOTO : FACE;
+  faceSourceForId(thread.id, thread.kind);
 
 export const Chat = () => {
   const navigation = useNavigation();
