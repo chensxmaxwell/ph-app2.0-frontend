@@ -18,7 +18,7 @@ import { spacings } from "@common/styles/spacings";
 import { ConnectionPill } from "@common/components/connection-pill";
 
 const CARD_ICON_SIZE = 72;
-const CARD_TITLE_GAP = 12;
+const CARD_TITLE_GAP = 20;
 
 const AutoRing = ({ active }: { active: boolean }) => {
   const spin = useRef(new Animated.Value(0)).current;
