@@ -164,6 +164,64 @@ const ChatContext = createContext<ChatContextValue | null>(null);
 
 const nextId = () => `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
+const DEFAULT_BOT_IDS: Record<string, string> = {
+  kevin: "kevin",
+  chad: "chad",
+  amanda: "amanda",
+};
+
+const defaultBotIdForName = (name?: string) =>
+  DEFAULT_BOT_IDS[(name ?? "").trim().toLowerCase()];
+
+const findSameBot = (
+  threads: ChatThread[],
+  id: string,
+  name: string
+) => {
+  const byId = threads.find((thread) => thread.id === id);
+  if (byId) {
+    return byId;
+  }
+  const canonical = defaultBotIdForName(name);
+  if (canonical) {
+    return (
+      threads.find((thread) => thread.id === canonical) ||
+      threads.find(
+        (thread) =>
+          thread.name.trim().toLowerCase() === name.trim().toLowerCase()
+      )
+    );
+  }
+  return undefined;
+};
+
+const dedupeThreads = (threads: ChatThread[]) => {
+  const result: ChatThread[] = [];
+  const taken = new Set<string>();
+  for (const thread of threads) {
+    const key = defaultBotIdForName(thread.name) ?? thread.id;
+    if (taken.has(key)) {
+      const index = result.findIndex(
+        (item) => (defaultBotIdForName(item.name) ?? item.id) === key
+      );
+      if (index === -1) {
+        continue;
+      }
+      const current = result[index];
+      const richer =
+        thread.messages.length > current.messages.length ? thread : current;
+      result[index] = { ...richer, id: key };
+      continue;
+    }
+    taken.add(key);
+    result.push({
+      ...thread,
+      id: defaultBotIdForName(thread.name) ?? thread.id,
+    });
+  }
+  return result;
+};
+
 const mergeSeedThreads = (stored: ChatThread[]) => {
   const seeds = seedThreads();
   const byId = new Map(stored.map((thread) => [thread.id, thread]));
@@ -186,7 +244,7 @@ const mergeSeedThreads = (stored: ChatThread[]) => {
       });
     }
   }
-  return Array.from(byId.values());
+  return dedupeThreads(Array.from(byId.values()));
 };
 
 export const ChatProvider = ({ children }: { children: ReactNode }) => {
@@ -208,7 +266,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
           isPremium?: boolean;
         };
         if (Array.isArray(parsed.threads) && parsed.threads.length > 0) {
-          setThreads(mergeSeedThreads(parsed.threads));
+          setThreads(dedupeThreads(mergeSeedThreads(parsed.threads)));
         }
         if (typeof parsed.isPremium === "boolean") {
           setIsPremium(parsed.isPremium);
@@ -227,6 +285,13 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       JSON.stringify({ threads, isPremium })
     ).catch(() => undefined);
   }, [hydrated, isPremium, threads]);
+
+  useEffect(() => {
+    const next = dedupeThreads(threads);
+    if (next.length !== threads.length) {
+      setThreads(next);
+    }
+  }, [threads]);
 
   const updateThread = useCallback(
     (threadId: string, updater: (thread: ChatThread) => ChatThread) => {
@@ -528,32 +593,51 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       birthday: string;
       description: string;
     }) => {
-      const id = `bot-${nextId()}`;
-      setThreads((current) => [
-        {
-          id,
-          name: input.name || "Kevin",
-          kind: "bot",
-          preview: `Start chatting with ${input.name || "Kevin"}.`,
-          time: "Now",
-          pinned: false,
-          listen: false,
-          synced: false,
-          request: "none",
-          gender: input.gender,
-          birthday: input.birthday,
-          description: input.description,
-          messages: [
-            {
-              id: nextId(),
-              from: "them",
-              text: `Hey, it's ${input.name || "Kevin"}. Start whenever you're ready.`,
-            },
-          ],
-        },
-        ...current,
-      ]);
-      return id;
+      const name = input.name.trim() || "Kevin";
+      let createdId = defaultBotIdForName(name) ?? `bot-${nextId()}`;
+      setThreads((current) => {
+        const existing = findSameBot(current, createdId, name);
+        if (existing) {
+          createdId = existing.id;
+          return current.map((thread) =>
+            thread.id === existing.id
+              ? {
+                  ...thread,
+                  name,
+                  gender: input.gender,
+                  birthday: input.birthday,
+                  description: input.description,
+                  time: "Now",
+                }
+              : thread
+          );
+        }
+        return [
+          {
+            id: createdId,
+            name,
+            kind: "bot" as const,
+            preview: `Start chatting with ${name}.`,
+            time: "Now",
+            pinned: false,
+            listen: false,
+            synced: false,
+            request: "none" as const,
+            gender: input.gender,
+            birthday: input.birthday,
+            description: input.description,
+            messages: [
+              {
+                id: nextId(),
+                from: "them" as const,
+                text: `Hey, it's ${name}. Start whenever you're ready.`,
+              },
+            ],
+          },
+          ...current,
+        ];
+      });
+      return createdId;
     },
     []
   );
@@ -595,10 +679,10 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       const name = companion.name.trim() || "Kevin";
       const personality = companion.personalities.join(", ");
       setThreads((current) => {
-        const existing = current.find((thread) => thread.id === companion.id);
+        const existing = findSameBot(current, companion.id, name);
         if (existing) {
           return current.map((thread) =>
-            thread.id === companion.id
+            thread.id === existing.id
               ? {
                   ...thread,
                   name,
