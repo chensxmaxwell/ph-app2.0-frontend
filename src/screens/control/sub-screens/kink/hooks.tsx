@@ -62,7 +62,11 @@ export const useKink = () => {
       Icon: Plus,
       title: 'Generate',
       description: 'Generate your own fun',
-      onPress: () => navigation.navigate(SCREENS.KINK),
+      onPress: () =>
+        navigation.navigate(SCREENS.KINK, {
+          screen: SCREENS.KINK_EMOTIONSELECTION,
+          initial: true,
+        }),
       hideFavorite: true,
     },
     withFavorite('Hardcore', {
