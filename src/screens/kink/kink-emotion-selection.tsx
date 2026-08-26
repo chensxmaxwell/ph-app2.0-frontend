@@ -22,6 +22,7 @@ import Sad from "@images/Kink/sad.svg";
 import Meh from "@images/Kink/meh.svg";
 import Happy from "@images/Kink/happy.svg";
 import { useAppContext } from "./kink-context";
+import { closeGenerate } from "./close-generate";
 
 const emotions = [
   { text: "Angry", icon: Angry },
@@ -116,7 +117,7 @@ const EmotionSelectionScreen = () => {
         <Text style={styles.headerTitle}>Generate your own kink</Text>
         <TouchableOpacity
           style={styles.backIcon}
-          onPress={() => navigation.goBack()}
+          onPress={() => closeGenerate(navigation)}
         >
           <Xmark width={35} height={35} />
         </TouchableOpacity>

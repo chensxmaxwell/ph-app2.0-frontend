@@ -11,6 +11,7 @@ import { fontSizes, fontWeights } from "@common/styles/fonts";
 import LinearGradient from "react-native-linear-gradient";
 import { SCREENS } from "@common/constant";
 import { useNavigation } from "@react-navigation/native";
+import { closeGenerate } from "./close-generate";
 import Xmark from "@images/xmark.svg";
 import WaveformAdjustable from "./wave";
 
@@ -39,7 +40,7 @@ const IntensitySelectionScreen = () => {
         <Text style={styles.headerTitle}>Generate your own kink</Text>
         <TouchableOpacity
           style={styles.backIcon}
-          onPress={() => navigation.navigate(SCREENS.KINK_SELECTION)}
+          onPress={() => closeGenerate(navigation)}
         >
           <Xmark width={35} height={35} />
         </TouchableOpacity>

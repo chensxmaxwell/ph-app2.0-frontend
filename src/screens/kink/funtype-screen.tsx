@@ -13,6 +13,7 @@ import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
 import { SCREENS } from "@common/constant";
 import { useAppContext } from "./kink-context";
+import { closeGenerate } from "./close-generate";
 
 const options = [
   "Orgasm Control",
@@ -55,7 +56,7 @@ const FunTypeSelectionScreen = () => {
         <Text style={styles.headerTitle}>Generate your own kink</Text>
         <TouchableOpacity
           style={styles.backIcon}
-          onPress={() => navigation.goBack()}
+          onPress={() => closeGenerate(navigation)}
         >
           <Xmark width={35} height={35} />
         </TouchableOpacity>

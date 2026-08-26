@@ -7,6 +7,7 @@ import { useNavigation } from "@react-navigation/native";
 import Xmark from "@images/xmark.svg";
 import { SCREENS } from "@common/constant";
 import { useAppContext } from "./kink-context";
+import { closeGenerate } from "./close-generate";
 
 const sensitivityText = [
   "You Are Not Sensitive At All.",
@@ -43,7 +44,7 @@ const SensitivitySelectionScreen = () => {
         <Text style={styles.headerTitle}>Generate your own kink</Text>
         <TouchableOpacity
           style={styles.backIcon}
-          onPress={() => navigation.navigate(SCREENS.KINK_SELECTION)}
+          onPress={() => closeGenerate(navigation)}
         >
           <Xmark width={35} height={35} />
         </TouchableOpacity>
