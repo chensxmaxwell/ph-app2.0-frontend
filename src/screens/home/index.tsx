@@ -12,10 +12,34 @@ import { spacings } from "@common/styles/spacings";
 import { useNavigation, NavigationProp, ParamListBase } from "@react-navigation/native";
 import { lookFromCompanion, useCompanions } from "../../store/companions";
 import { s } from "../avatar/scale";
-import { AvatarPreview } from "../avatar/engine/AvatarPreview";
 import { LookFace } from "../avatar/look-face";
+import {
+  HERO_AVATAR_SIZE,
+  ROW_AVATAR_SIZE,
+  circleAvatarStyle,
+} from "../avatar/circle-avatar";
+import { faceSourceForId } from "../chat/faces";
 import { useOpenLove } from "../love/pill";
 import { useProfile } from "../profile/hooks";
+import type { AvatarLook } from "../avatar/engine/viewer-html";
+
+const heroSize = s(HERO_AVATAR_SIZE);
+
+const HomeFace = ({
+  companionId,
+  look,
+  size,
+}: {
+  companionId: string;
+  look?: AvatarLook | null;
+  size: number;
+}) => (
+  <LookFace
+    look={look}
+    size={size}
+    fallbackSource={faceSourceForId(companionId)}
+  />
+);
 
 export const Home = () => {
   const { companions, events, navigateToNestedScreen } = useHome();
@@ -49,10 +73,14 @@ export const Home = () => {
     createdCompanions.map((companion) => (
       <TouchableOpacity
         key={companion.id}
-        style={styles.companionPicture}
+        style={[styles.companionPicture, circleAvatarStyle(ROW_AVATAR_SIZE)]}
         onPress={() => openCompanion(companion.id, companion.name)}
       >
-        <LookFace look={lookFromCompanion(companion)} size={70} />
+        <HomeFace
+          companionId={companion.id}
+          look={lookFromCompanion(companion)}
+          size={ROW_AVATAR_SIZE}
+        />
       </TouchableOpacity>
     ));
 
@@ -65,12 +93,10 @@ export const Home = () => {
       .map((companion) => (
         <TouchableOpacity
           key={companion.id}
-          style={styles.companionPicture}
+          style={[styles.companionPicture, circleAvatarStyle(ROW_AVATAR_SIZE)]}
           onPress={() => openCompanion(companion.id, companion.name)}
         >
-          {companion.profilePicture && (
-            <companion.profilePicture height="100%" width="100%" />
-          )}
+          <HomeFace companionId={companion.id} look={null} size={ROW_AVATAR_SIZE} />
         </TouchableOpacity>
       ));
 
@@ -126,22 +152,25 @@ export const Home = () => {
               onPress={() =>
                 openCompanion(activeCompanion.id, activeCompanion.name)
               }
+              style={[styles.heroFace, circleAvatarStyle(heroSize)]}
             >
-              <AvatarPreview
+              <HomeFace
+                companionId={activeCompanion.id}
                 look={lookFromCompanion(activeCompanion)}
-                width={s(300)}
-                height={s(300)}
+                size={heroSize}
               />
             </TouchableOpacity>
           ) : selectedMock ? (
             <TouchableOpacity
               activeOpacity={0.9}
               onPress={() => openCompanion(selectedMock.id, selectedMock.name)}
-              style={styles.mockHero}
+              style={[styles.heroFace, circleAvatarStyle(heroSize)]}
             >
-              {selectedMock.profilePicture ? (
-                <selectedMock.profilePicture height="100%" width="100%" />
-              ) : null}
+              <HomeFace
+                companionId={selectedMock.id}
+                look={null}
+                size={heroSize}
+              />
             </TouchableOpacity>
           ) : (
             <House />
@@ -153,6 +182,7 @@ export const Home = () => {
             <ScrollView
               horizontal
               style={styles.companionsScrollView}
+              contentContainerStyle={styles.companionRow}
               showsHorizontalScrollIndicator={false}
             >
               {renderCreatedCompanions()}
@@ -203,11 +233,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     overflow: "visible",
   },
-  mockHero: {
-    width: s(180),
-    height: s(180),
-    borderRadius: s(90),
-    overflow: "hidden",
+  heroFace: {
     marginTop: spacings.h16,
   },
   cardContainer: {
@@ -234,25 +260,21 @@ const styles = StyleSheet.create({
     paddingLeft: spacings.w12,
   },
   companionsScrollView: {
-    display: "flex",
+    flexGrow: 0,
+  },
+  companionRow: {
     flexDirection: "row",
+    alignItems: "center",
   },
   companionPicture: {
-    width: 70,
-    height: 70,
     marginRight: spacings.w12,
-    overflow: "hidden",
-    borderRadius: 50,
-  },
-  companionImage: {
-    width: "100%",
-    height: "100%",
   },
   addCompanion: {
-    width: 70,
-    height: 70,
+    width: ROW_AVATAR_SIZE,
+    height: ROW_AVATAR_SIZE,
     marginRight: spacings.w12,
-    borderRadius: 50,
+    borderRadius: ROW_AVATAR_SIZE / 2,
+    flexShrink: 0,
     backgroundColor: colors.grayLightest,
     alignItems: "center",
     justifyContent: "center",

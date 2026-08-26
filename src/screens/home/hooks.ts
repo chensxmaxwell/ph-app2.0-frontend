@@ -1,8 +1,5 @@
 import Alarm from "@images/alarm.svg";
 import Heart from "@images/heart.svg";
-import MockProfile from "@images/mock_profile.svg";
-import MockProfile1 from "@images/mock_profile1.svg";
-import MockProfile2 from "@images/mock_profile2.svg";
 import HeartFull from "@images/heartFull.svg";
 import { SCREENS } from "../../../src/common/constant";
 import { NavigationProp } from "@react-navigation/native";
@@ -19,8 +16,7 @@ type HomeEvent = {
 };
 
 export const useHome = () => {
-  const mockFaces = [MockProfile, MockProfile1, MockProfile2];
-  const companions: chatBotType[] = MOCK_HOME_COMPANIONS.map((person, index) => ({
+  const companions: chatBotType[] = MOCK_HOME_COMPANIONS.map((person) => ({
     id: person.id,
     name: person.name,
     gender: "M",
@@ -28,7 +24,6 @@ export const useHome = () => {
     photos: [],
     tags: ["funny", "smart", "adventurous"],
     language: "en",
-    profilePicture: mockFaces[index],
   }));
   // TODO* replace this mock data with real data
   const events: HomeEvent[] = [
@@ -115,7 +110,6 @@ type chatBotType = {
   profilePhoto?: string;
   examples?: exampleSchemaType[];
   language: string;
-  profilePicture?: any;
 };
 
 type exampleSchemaType = {

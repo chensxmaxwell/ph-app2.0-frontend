@@ -1,6 +1,13 @@
-import React from "react";
+import React, { useRef } from "react";
 import { Image, ImageSourcePropType, StyleSheet, View } from "react-native";
-import Svg, { Circle, Ellipse, Path } from "react-native-svg";
+import Svg, {
+  Circle,
+  ClipPath,
+  Defs,
+  Ellipse,
+  G,
+  Path,
+} from "react-native-svg";
 import {
   AvatarLook,
   EYE_COLORS,
@@ -9,10 +16,13 @@ import {
 } from "./engine/viewer-html";
 import { toHairStyle } from "./hair-style-icon";
 import { toOutfitIndex } from "./outfit-card";
+import { circleAvatarFillStyle, circleAvatarStyle } from "./circle-avatar";
 
 const FACE = require("../../../assets/images/love/face.png");
 
 const OUTFIT_ACCENTS = ["#3d6cb0", "#6b7c4f", "#4a3a7a", "#2c2c38"] as const;
+
+let lookFaceClipSeq = 0;
 
 const HairCap = ({
   style,
@@ -66,12 +76,17 @@ export const LookFace = ({
   size: number;
   fallbackSource?: ImageSourcePropType;
 }) => {
+  const clipId = useRef(`lookFaceClip${lookFaceClipSeq++}`).current;
+
   if (!look) {
     return (
-      <Image
-        source={fallbackSource}
-        style={{ width: size, height: size, borderRadius: size / 2 }}
-      />
+      <View style={[styles.clip, circleAvatarStyle(size)]}>
+        <Image
+          source={fallbackSource}
+          resizeMode="cover"
+          style={circleAvatarFillStyle(size)}
+        />
+      </View>
     );
   }
 
@@ -82,24 +97,32 @@ export const LookFace = ({
   const hairStyle = toHairStyle(look.hairStyle);
 
   return (
-    <View
-      style={[
-        styles.clip,
-        { width: size, height: size, borderRadius: size / 2 },
-      ]}
-    >
-      <Svg width={size} height={size} viewBox="0 0 64 64">
-        <Circle cx="32" cy="32" r="32" fill={skin} />
-        <HairCap style={hairStyle} color={hair} />
-        <Circle cx="24" cy="34" r="3.2" fill={eyes} />
-        <Circle cx="40" cy="34" r="3.2" fill={eyes} />
-        <Path d="M0 48 C18 42 46 42 64 48 V64 H0 Z" fill={outfit} />
-        <Path
-          d="M22 46 C28 50 36 50 42 46"
-          stroke="rgba(20,16,40,0.28)"
-          strokeWidth="1.6"
-          fill="none"
-        />
+    <View style={[styles.clip, circleAvatarStyle(size)]}>
+      <Svg
+        width={size}
+        height={size}
+        viewBox="0 0 64 64"
+        preserveAspectRatio="xMidYMid slice"
+        style={circleAvatarFillStyle(size)}
+      >
+        <Defs>
+          <ClipPath id={clipId}>
+            <Circle cx="32" cy="32" r="32" />
+          </ClipPath>
+        </Defs>
+        <G clipPath={`url(#${clipId})`}>
+          <Circle cx="32" cy="32" r="32" fill={skin} />
+          <HairCap style={hairStyle} color={hair} />
+          <Circle cx="24" cy="34" r="3.2" fill={eyes} />
+          <Circle cx="40" cy="34" r="3.2" fill={eyes} />
+          <Path d="M0 48 C18 42 46 42 64 48 V64 H0 Z" fill={outfit} />
+          <Path
+            d="M22 46 C28 50 36 50 42 46"
+            stroke="rgba(20,16,40,0.28)"
+            strokeWidth="1.6"
+            fill="none"
+          />
+        </G>
       </Svg>
     </View>
   );
