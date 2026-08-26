@@ -1,5 +1,4 @@
 import { NavigationProp, ParamListBase } from "@react-navigation/native";
-import { SCREENS } from "@common/constant";
 
 export const closeGenerate = (
   navigation: NavigationProp<ParamListBase>
@@ -9,5 +8,5 @@ export const closeGenerate = (
     parent.goBack();
     return;
   }
-  navigation.navigate(SCREENS.KINK_HUB);
+  navigation.goBack();
 };

@@ -37,7 +37,7 @@ const SyncIntro = () => {
         </Text>
         <TouchableOpacity
           style={styles.continueButton}
-          onPress={() => navigation.navigate(SCREENS.SYNC_SELECTION_SCREEN)}
+          onPress={() => navigation.goBack()}
         >
           <Text style={styles.continueText}>Continue</Text>
         </TouchableOpacity>

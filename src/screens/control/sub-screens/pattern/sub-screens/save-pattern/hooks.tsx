@@ -1,5 +1,5 @@
 import { NavigationType } from "../../../../../../../App";
-import { useNavigation } from "@react-navigation/native";
+import { CommonActions, useNavigation } from "@react-navigation/native";
 import { SCREENS } from "@common/constant";
 import { GlobalContext } from "../../../../../../store";
 import { useContext } from "react";
@@ -29,10 +29,21 @@ export const usePattern = () => {
       return prevState;
     });
 
-    navigation.navigate(SCREENS.NEW_PATTERN);
+    navigation.dispatch(
+      CommonActions.reset({
+        index: 2,
+        routes: [
+          { name: SCREENS.NAV_BAR },
+          { name: SCREENS.PATTERN },
+          { name: SCREENS.NEW_PATTERN },
+        ],
+      })
+    );
   };
 
-  const handleReturnPress = () => {};
+  const handleReturnPress = () => {
+    navigation.goBack();
+  };
 
   return {
     handleSavePatternPress,

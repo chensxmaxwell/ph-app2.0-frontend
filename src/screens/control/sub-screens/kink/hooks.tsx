@@ -65,7 +65,6 @@ export const useKink = () => {
       onPress: () =>
         navigation.navigate(SCREENS.KINK, {
           screen: SCREENS.KINK_EMOTIONSELECTION,
-          initial: true,
         }),
       hideFavorite: true,
     },
