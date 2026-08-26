@@ -18,7 +18,7 @@ import {
   FriendRequest,
 } from "./types";
 
-const STORAGE_KEY = "ph.chat.v1";
+const STORAGE_KEY = "ph.chat.v2";
 
 export const FREE_HUMAN_MESSAGE_LIMIT = 1;
 
@@ -27,7 +27,7 @@ const seedThreads = (): ChatThread[] => [
     id: "kevin",
     name: "Kevin",
     kind: "bot",
-    preview: "How’s it going gorgeous?",
+    preview: "Then stay. I've got you.",
     time: "Yesterday",
     pinned: true,
     listen: false,
@@ -39,33 +39,40 @@ const seedThreads = (): ChatThread[] => [
       "Kevin is playful, attentive, and a little mischievous. He notices the small things and keeps the conversation close.",
     personality: "Playful, attentive, a little mischievous.",
     messages: [
-      { id: "k1", from: "them", text: "How’s it going gorgeous?" },
-      { id: "k2", from: "me", text: "Hey Kevin." },
-      { id: "k3", from: "them", text: "I'm here. Tell me about your day." },
+      { id: "k1", from: "them", text: "How's it going gorgeous?" },
+      { id: "k2", from: "me", text: "Just got home. You still up?" },
+      { id: "k3", from: "them", text: "Always am when you show up. Tell me about your day." },
+      { id: "k4", from: "me", text: "Long one. Glad you're here." },
+      { id: "k5", from: "them", text: "Then stay. I've got you." },
     ],
   },
   {
     id: "chad",
     name: "Chad",
-    kind: "human",
-    email: "123456@gmail.com",
-    preview: "Chad wants to chat",
-    time: "Now",
+    kind: "bot",
+    preview: "You. Same as last time.",
+    time: "2:14 PM",
     pinned: false,
     listen: false,
     synced: false,
-    request: "incoming",
+    request: "none",
     gender: "Male",
     birthday: "13th April 2001",
     description: "Chad is direct, confident, and a little competitive.",
     personality: "Direct, confident, a little competitive.",
-    messages: [],
+    messages: [
+      { id: "c1", from: "them", text: "You finally opened this." },
+      { id: "c2", from: "me", text: "Didn't want to keep you waiting." },
+      { id: "c3", from: "them", text: "Good. I don't do small talk for long." },
+      { id: "c4", from: "me", text: "Then skip it. What's on your mind?" },
+      { id: "c5", from: "them", text: "You. Same as last time." },
+    ],
   },
   {
     id: "amanda",
     name: "Amanda",
     kind: "bot",
-    preview: "Hey, it's Amanda. I saved you a seat.",
+    preview: "Keep it. I like this one.",
     time: "Now",
     pinned: false,
     listen: false,
@@ -77,11 +84,11 @@ const seedThreads = (): ChatThread[] => [
       "Amanda likes late-night talks and getting straight to what you want.",
     personality: "Warm, witty, and a little teasing.",
     messages: [
-      {
-        id: "a1",
-        from: "them",
-        text: "Hey, it's Amanda. I saved you a seat.",
-      },
+      { id: "a1", from: "them", text: "Hey, it's Amanda. I saved you a seat." },
+      { id: "a2", from: "me", text: "Of course you did." },
+      { id: "a3", from: "them", text: "Don't act surprised. You always come back." },
+      { id: "a4", from: "me", text: "Bad habit." },
+      { id: "a5", from: "them", text: "Keep it. I like this one." },
     ],
   },
 ];
@@ -159,10 +166,27 @@ const nextId = () => `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
 const mergeSeedThreads = (stored: ChatThread[]) => {
   const seeds = seedThreads();
-  const missing = seeds.filter(
-    (seed) => !stored.some((thread) => thread.id === seed.id)
-  );
-  return missing.length ? [...stored, ...missing] : stored;
+  const byId = new Map(stored.map((thread) => [thread.id, thread]));
+  for (const seed of seeds) {
+    const existing = byId.get(seed.id);
+    if (!existing) {
+      byId.set(seed.id, seed);
+      continue;
+    }
+    if (!existing.messages.length && seed.messages.length) {
+      byId.set(seed.id, {
+        ...existing,
+        preview: existing.preview || seed.preview,
+        messages: seed.messages,
+        request:
+          existing.request === "incoming" && seed.request === "none"
+            ? seed.request
+            : existing.request,
+        kind: existing.kind === "human" && seed.kind === "bot" ? seed.kind : existing.kind,
+      });
+    }
+  }
+  return Array.from(byId.values());
 };
 
 export const ChatProvider = ({ children }: { children: ReactNode }) => {

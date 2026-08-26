@@ -121,7 +121,7 @@ export const ChatThreadScreen = () => {
     thread.request === "incoming" ||
     thread.request === "sent" ||
     limited ||
-    thread.messages.length <= 1;
+    thread.messages.length === 0;
   const lastThem = [...thread.messages]
     .reverse()
     .find((item) => item.from === "them");
