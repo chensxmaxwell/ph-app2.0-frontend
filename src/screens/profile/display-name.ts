@@ -19,7 +19,8 @@ export const isBypassUser = (user?: SessionUser | null) => {
   );
 };
 
-export const resolveHomeDisplayName = ({
+/** Profile/user screen only. Home never shows a user display name. */
+export const resolveProfileDisplayName = ({
   user,
   profileName,
 }: {

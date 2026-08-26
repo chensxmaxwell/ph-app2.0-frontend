@@ -5,7 +5,7 @@ import {
   ANONYMOUS_USER_NAME,
   SessionUser,
   isBypassUser,
-  resolveHomeDisplayName,
+  resolveProfileDisplayName,
 } from "./display-name";
 
 export const useProfile = () => {
@@ -177,7 +177,7 @@ export const useProfile = () => {
     }));
   }, [profileData, skipRemote]);
 
-  const displayName = resolveHomeDisplayName({
+  const displayName = resolveProfileDisplayName({
     user: sessionUser,
     profileName: profile.name,
   });

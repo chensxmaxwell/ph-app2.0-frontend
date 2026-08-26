@@ -4,7 +4,7 @@ import { shouldReuseLoveChat } from "../src/screens/love/session-logic";
 import {
   ANONYMOUS_USER_NAME,
   isBypassUser,
-  resolveHomeDisplayName,
+  resolveProfileDisplayName,
 } from "../src/screens/profile/display-name";
 import { MOCK_HOME_COMPANIONS } from "../src/screens/home/mock-companions";
 import type { Companion } from "../src/store/companions";
@@ -153,10 +153,10 @@ describe("shouldReuseLoveChat", () => {
   });
 });
 
-describe("home display name", () => {
+describe("profile display name", () => {
   it("shows Anonymous User for bypass login", () => {
     expect(
-      resolveHomeDisplayName({
+      resolveProfileDisplayName({
         user: { id: "bypass", email: "bypass@local", token: "bypass" },
         profileName: "Amanda Guo",
       })
@@ -166,7 +166,7 @@ describe("home display name", () => {
 
   it("shows the real profile name for a logged-in user", () => {
     expect(
-      resolveHomeDisplayName({
+      resolveProfileDisplayName({
         user: { id: "user-1", email: "max@example.com" },
         profileName: "Maxwell Chen",
       })
@@ -175,7 +175,7 @@ describe("home display name", () => {
 
   it("does not default a missing profile to Amanda Guo", () => {
     expect(
-      resolveHomeDisplayName({
+      resolveProfileDisplayName({
         user: { id: "user-1", email: "max@example.com" },
         profileName: "",
       })

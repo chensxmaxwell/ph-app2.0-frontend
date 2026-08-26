@@ -11,19 +11,11 @@ import { BaseText } from "@common/components/base-text";
 import { spacings } from "@common/styles/spacings";
 import { useNavigation, NavigationProp, ParamListBase } from "@react-navigation/native";
 import { lookFromCompanion, useCompanions } from "../../store/companions";
-import { s } from "../avatar/scale";
 import { LookFace } from "../avatar/look-face";
-import {
-  HERO_AVATAR_SIZE,
-  ROW_AVATAR_SIZE,
-  circleAvatarStyle,
-} from "../avatar/circle-avatar";
+import { ROW_AVATAR_SIZE, circleAvatarStyle } from "../avatar/circle-avatar";
 import { faceSourceForId } from "../chat/faces";
 import { useOpenLove } from "../love/pill";
-import { useProfile } from "../profile/hooks";
 import type { AvatarLook } from "../avatar/engine/viewer-html";
-
-const heroSize = s(HERO_AVATAR_SIZE);
 
 const HomeFace = ({
   companionId,
@@ -43,20 +35,12 @@ const HomeFace = ({
 
 export const Home = () => {
   const { companions, events, navigateToNestedScreen } = useHome();
-  const { displayName } = useProfile();
-  const {
-    companions: createdCompanions,
-    activeCompanion,
-    activeCompanionId,
-  } = useCompanions();
+  const { companions: createdCompanions } = useCompanions();
   const navigation = useNavigation();
   const parentNavigation = navigation.getParent() as
     | NavigationProp<ParamListBase>
     | undefined;
   const openLove = useOpenLove();
-  const selectedMock = companions.find(
-    (companion) => companion.id === activeCompanionId
-  );
 
   const openAvatarCreation = () => {
     parentNavigation?.navigate(
@@ -144,37 +128,8 @@ export const Home = () => {
     <ScreenWrapper withNavBar>
       <View style={styles.container}>
         <BaseText style={styles.pleasureHouse}>Pleasure House</BaseText>
-        <BaseText style={styles.userName}>{displayName}</BaseText>
         <View style={styles.hero}>
-          {activeCompanion ? (
-            <TouchableOpacity
-              activeOpacity={0.9}
-              onPress={() =>
-                openCompanion(activeCompanion.id, activeCompanion.name)
-              }
-              style={[styles.heroFace, circleAvatarStyle(heroSize)]}
-            >
-              <HomeFace
-                companionId={activeCompanion.id}
-                look={lookFromCompanion(activeCompanion)}
-                size={heroSize}
-              />
-            </TouchableOpacity>
-          ) : selectedMock ? (
-            <TouchableOpacity
-              activeOpacity={0.9}
-              onPress={() => openCompanion(selectedMock.id, selectedMock.name)}
-              style={[styles.heroFace, circleAvatarStyle(heroSize)]}
-            >
-              <HomeFace
-                companionId={selectedMock.id}
-                look={null}
-                size={heroSize}
-              />
-            </TouchableOpacity>
-          ) : (
-            <House />
-          )}
+          <House />
         </View>
         <View style={styles.cardContainer}>
           <BaseText style={styles.companionsText}>My Companions</BaseText>
@@ -221,20 +176,10 @@ const styles = StyleSheet.create({
     fontFamily: "AngryPortraitToumpano",
     fontSize: fontSizes.largeX,
   },
-  userName: {
-    marginTop: spacings.h6,
-    color: colors.white,
-    fontFamily: "Quicksand-Bold",
-    fontSize: fontSizes.smallX,
-    fontWeight: fontWeights.bold,
-  },
   hero: {
     width: FULL_SIZE,
     alignItems: "center",
     overflow: "visible",
-  },
-  heroFace: {
-    marginTop: spacings.h16,
   },
   cardContainer: {
     display: "flex",
