@@ -27,30 +27,21 @@ const ProfileSettingAbout = () => {
         </TouchableOpacity>
       </View>
       <ScrollView contentContainerStyle={styles.scrollContainer}>
-        <Text style={styles.title}>Title</Text>
+        <Text style={styles.title}>Pleasure House</Text>
         <Text style={styles.content}>
-          Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
-          eiusmod tempor incididunt ut labore et dolore magna aliqua. Fames ac
-          turpis egestas maecenas pharetra convallis posuere. Pellentesque sit
-          amet porttitor eget dolor morbi non. Tincidunt augue interdum velit
-          euismod. Lacus luctus accumsan tortor posuere. Est sit amet facilisis
-          magna etiam tempor. Nec ullamcorper sit amet risus nullam eget felis
-          eget. Cras sed felis eget velit aliquet. Nam aliquam sem et tortor
-          consequat id porta nibh. Consectetur libero id faucibus nisl tincidunt
-          eget nullam non. Volutpat commodo sed egestas egestas fringilla.
-          Habitant morbi tristique senectus et netus. Tellus at urna condimentum
-          mattis. Mi tempus imperdiet nulla malesuada. Eget sit amet tellus
-          cras. Eget est lorem ipsum dolor sit amet consectetur adipiscing elit.
-          In mollis nunc sed id semper risus.
+          Pleasure House is an app for playing with a companion and a connected
+          device. You can create someone to talk to, start a Love session, and
+          drive the toy from Control, Message, or Sync.
         </Text>
         <Text style={styles.content}>
-          Dolor magna eget est lorem ipsum dolor sit amet. Velit ut tortor
-          pretium viverra suspendisse potenti nullam ac tortor. Imperdiet proin
-          fermentum leo vel. Leo urna molestie at elementum eu facilisis. At
-          elementum eu facilisis sed odio morbi. Et sollicitudin ac orci
-          phasellus. Odio euismod lacinia at quis. Suspendisse interdum
-          consectetur libero id faucibus nisl tincidunt eget. Tempus iaculis
-          urna id volutpat lacus laoreet non curabitur gravida.
+          The four tabs are Home, Control, Message, and Profile. Love is a
+          session on top of those tabs, not a fifth one. A minimized session
+          stays visible as a pill so you can jump back in from anywhere.
+        </Text>
+        <Text style={styles.content}>
+          This build is a demo. Pairing uses a simulated connection, and some
+          looks are male-only until more models ship. We will keep the product
+          private, local-first, and easy to leave.
         </Text>
       </ScrollView>
     </ScreenWrapper>
@@ -88,12 +79,11 @@ const styles = StyleSheet.create({
     marginTop: 30,
   },
   content: {
-    fontSize: fontSizes.small,
+    fontSize: 16,
     color: colors.white,
-    fontFamily: "OpenSans-Regular",
+    fontFamily: "Quicksand-Regular",
     lineHeight: 24,
     marginTop: 20,
-    textAlign: "justify",
   },
 });
 
