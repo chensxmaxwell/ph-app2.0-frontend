@@ -12,7 +12,7 @@ import LinearGradient from "react-native-linear-gradient";
 import { SCREENS } from "@common/constant";
 import { useNavigation } from "@react-navigation/native";
 import { closeGenerate } from "./close-generate";
-import Xmark from "@images/xmark.svg";
+import ChevronLeft from "@images/chevron-left-white.svg";
 import WaveformAdjustable from "./wave";
 
 const IntensitySelectionScreen = () => {
@@ -42,7 +42,7 @@ const IntensitySelectionScreen = () => {
           style={styles.backIcon}
           onPress={() => closeGenerate(navigation)}
         >
-          <Xmark width={35} height={35} />
+          <ChevronLeft width={35} height={35} />
         </TouchableOpacity>
 
         <View>

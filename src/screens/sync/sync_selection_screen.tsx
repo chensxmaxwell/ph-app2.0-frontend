@@ -18,17 +18,12 @@ import { SCREENS } from "@common/constant";
 import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
 import { ConnectionPill } from "@common/components/connection-pill";
-
-const images = {
-  avatar1: require("../../../assets/images/avatar.png"),
-  avatar2: require("../../../assets/images/avatar.png"),
-  avatar3: require("../../../assets/images/avatar.png"),
-};
+import { faceSourceForId } from "../chat/faces";
 
 const users = [
-  { id: "kevin", name: "Kevin", avatar: "avatar1" },
-  { id: "chad", name: "Chad", avatar: "avatar2" },
-  { id: "amanda", name: "Amanda", avatar: "avatar3" },
+  { id: "kevin", name: "Kevin" },
+  { id: "chad", name: "Chad" },
+  { id: "amanda", name: "Amanda" },
 ];
 
 const SyncSelectionScreen = () => {
@@ -107,7 +102,7 @@ const SyncSelectionScreen = () => {
               )
             }
           >
-            <Image source={images[item.avatar]} style={styles.avatar} />
+            <Image source={faceSourceForId(item.id)} style={styles.avatar} />
             <Text style={styles.userName}>{item.name}</Text>
             <View style={styles.waveButton}>
               <AntennaIcon width={35} height={35}></AntennaIcon>

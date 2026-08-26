@@ -17,6 +17,7 @@ import MicroPhone_mute from "@images/microphone-mute.svg";
 import { usePatternPlayer } from "../../hooks/usePatternPlayer";
 import { wavePattern } from "../../store/patterns";
 import { useLoveSession } from "../love/session";
+import { faceSourceForId } from "../chat/faces";
 
 const SyncScreen = () => {
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
@@ -121,18 +122,18 @@ const SyncScreen = () => {
     switch (syncState) {
       case "SYNC_INVITATION_SENT":
         backgroundSource = require("../../../assets/images/eclipse-white.png");
-        ringSource = require("../../../assets/images/avatar.png");
+        ringSource = faceSourceForId(params?.companionId);
         break;
       case "SYNC_ACCEPTED":
         backgroundSource = require("../../../assets/images/eclipse-pink.png");
-        ringSource = require("../../../assets/images/avatar.png");
+        ringSource = faceSourceForId(params?.companionId);
         break;
       case "SYNC_REQUEST_RECEIVED":
         backgroundSource = require("../../../assets/images/eclipse-white.png");
-        ringSource = require("../../../assets/images/avatar.png");
+        ringSource = faceSourceForId(params?.companionId);
         break;
       case "USER_BUSY":
-        ringSource = require("../../../assets/images/avatar.png");
+        ringSource = faceSourceForId(params?.companionId);
         break;
       case "SYNC_ACTIVE_CONFIRMATION":
         backgroundSource = require("../../../assets/images/eclipse-pink.png");

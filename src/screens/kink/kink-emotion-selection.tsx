@@ -13,7 +13,7 @@ import { fontSizes, fontWeights } from "@common/styles/fonts";
 import LinearGradient from "react-native-linear-gradient";
 import { SCREENS } from "@common/constant";
 import { useNavigation } from "@react-navigation/native";
-import Xmark from "@images/xmark.svg";
+import ChevronLeft from "@images/chevron-left-white.svg";
 import RotateRingPicker from "@images/Kink/RotateRingPicker.svg";
 import Pointer from "@images/Kink/pointer.svg";
 import Naughty from "@images/Kink/naughty.svg";
@@ -119,7 +119,7 @@ const EmotionSelectionScreen = () => {
           style={styles.backIcon}
           onPress={() => closeGenerate(navigation)}
         >
-          <Xmark width={35} height={35} />
+          <ChevronLeft width={35} height={35} />
         </TouchableOpacity>
       </View>
 
