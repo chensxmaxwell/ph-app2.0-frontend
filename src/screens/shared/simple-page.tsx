@@ -58,10 +58,12 @@ export const SimplePage = ({
               </TouchableOpacity>
             ) : null}
             {secondaryLabel ? (
-              <TouchableOpacity onPress={onSecondary}>
+              <TouchableOpacity onPress={onSecondary} style={styles.secondaryHit}>
                 <Text style={styles.secondaryText}>{secondaryLabel}</Text>
               </TouchableOpacity>
-            ) : null}
+            ) : (
+              <View style={styles.secondaryHit} />
+            )}
           </View>
         ) : null}
       </SafeAreaView>
@@ -115,6 +117,11 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontFamily: "Quicksand-Bold",
     fontSize: 20,
+  },
+  secondaryHit: {
+    minHeight: s(20),
+    alignItems: "center",
+    justifyContent: "center",
   },
   secondaryText: {
     color: colors.white,
