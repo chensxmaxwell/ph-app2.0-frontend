@@ -34,11 +34,12 @@ export const Chat = () => {
   const { threads } = useChat();
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const pinned = useMemo(
-    () => threads.filter((thread) => thread.pinned),
-    [threads]
-  );
-  const recent = threads.filter((thread) => thread.request !== "refused");
+  const rows = useMemo(() => {
+    const visible = threads.filter((thread) => thread.request !== "refused");
+    return [...visible].sort(
+      (left, right) => Number(right.pinned) - Number(left.pinned)
+    );
+  }, [threads]);
 
   const openThread = (threadId: string) => {
     setMenuOpen(false);
@@ -106,34 +107,12 @@ export const Chat = () => {
             </TouchableOpacity>
           </View>
         ) : null}
-        {pinned.length ? (
-          <>
-            <Text style={styles.section}>Pinned</Text>
-            <View style={styles.pinnedCard}>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.pinnedRow}
-              >
-                {pinned.map((thread) => (
-                  <TouchableOpacity
-                    key={`pin-${thread.id}`}
-                    onPress={() => openThread(thread.id)}
-                  >
-                    <Image source={faceFor(thread)} style={styles.pinFace} />
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          </>
-        ) : null}
-        <Text style={[styles.section, styles.recentLabel]}>Recent</Text>
         <ScrollView
-          style={styles.recent}
-          contentContainerStyle={styles.recentContent}
+          style={styles.list}
+          contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
         >
-          {recent.map((thread) => (
+          {rows.map((thread) => (
             <TouchableOpacity
               key={thread.id}
               style={styles.row}
@@ -196,14 +175,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     flex: 1,
   },
-  addButton: {
-    width: s(40),
-    height: s(40),
-    borderRadius: s(20),
-    backgroundColor: colors.grayLight,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   addHit: {
     width: s(44),
     height: s(44),
@@ -238,80 +209,56 @@ const styles = StyleSheet.create({
     fontFamily: "Quicksand-Bold",
     fontSize: 13,
   },
-  section: {
-    marginTop: s(24),
-    color: colors.white,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 20,
-  },
-  pinnedCard: {
-    marginTop: s(16),
-    height: s(100),
-    borderRadius: s(16),
-    backgroundColor: colors.grayLight,
-    justifyContent: "center",
-  },
-  pinnedRow: {
-    paddingHorizontal: s(9),
-    gap: s(16),
-    alignItems: "center",
-  },
-  pinFace: {
-    width: s(70),
-    height: s(70),
-    borderRadius: s(35),
-  },
-  recentLabel: {
-    marginTop: s(24),
-  },
-  recent: {
+  list: {
     flex: 1,
-    marginTop: s(16),
+    marginTop: s(20),
     marginBottom: s(90),
   },
-  recentContent: {
-    gap: s(16),
+  listContent: {
+    gap: s(12),
     paddingBottom: s(24),
   },
   row: {
-    height: s(90),
+    minHeight: s(76),
     borderRadius: s(16),
     backgroundColor: colors.grayLight,
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: s(15),
+    paddingHorizontal: s(14),
+    paddingVertical: s(12),
   },
   rowFace: {
-    width: s(60),
-    height: s(60),
-    borderRadius: s(30),
+    width: s(52),
+    height: s(52),
+    borderRadius: s(26),
   },
   rowCopy: {
     flex: 1,
-    marginLeft: s(18),
+    marginLeft: s(12),
+    minWidth: 0,
   },
   rowTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: s(8),
   },
   rowName: {
     color: colors.white,
     fontFamily: "Quicksand-Bold",
-    fontSize: 13,
+    fontSize: 16,
     flex: 1,
-    marginRight: s(8),
   },
   rowTime: {
     color: colors.grayLighter,
     fontFamily: "Quicksand-Bold",
-    fontSize: 13,
+    fontSize: 12,
   },
   rowPreview: {
-    marginTop: s(8),
+    marginTop: s(6),
     color: colors.grayLighter,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 13,
+    fontFamily: "Quicksand-Medium",
+    fontSize: 14,
   },
 });
 
