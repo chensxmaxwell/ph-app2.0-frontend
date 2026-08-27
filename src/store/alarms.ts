@@ -1,12 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { currentUserId, storageKeyForUser } from "../backend/session";
-import { migrateLegacyAlarmsOnce } from "../backend/store";
 import { BUILTIN_PATTERNS } from "./patterns";
+import { STORE_KEYS, currentUserId, scopedKey } from "../backend/session";
+import { migrateLegacyStores } from "../backend/store";
 
 const alarmKey = async () => {
   const userId = (await currentUserId()) || "anon";
-  await migrateLegacyAlarmsOnce(userId);
-  return storageKeyForUser(userId, "alarms");
+  await migrateLegacyStores(userId);
+  return scopedKey(STORE_KEYS.alarms, userId);
 };
 
 export type SavedAlarm = {

@@ -1,19 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { seedThreads } from "./chat-seed";
-import { storageKeyForUser } from "./session";
 import type { ChatBubble, ChatThread } from "../screens/chat/types";
-
-export const PREFIX = "ph.local.v1";
-const USERS_KEY = `${PREFIX}.users`;
-const OTPS_KEY = `${PREFIX}.otps`;
-const CHAT_MIGRATED_KEY = `${PREFIX}.migrated.ph.chat.v2`;
-const COMPANIONS_MIGRATED_KEY = `${PREFIX}.migrated.ph.companions.v1`;
-const ALARMS_MIGRATED_KEY = `${PREFIX}.migrated.ph.alarms.v1`;
-const DEVICE_MIGRATED_KEY = `${PREFIX}.migrated.ph.device.v1`;
-const LEGACY_CHAT_KEY = "ph.chat.v2";
-const LEGACY_COMPANIONS_KEY = "ph.companions.v1";
-const LEGACY_ALARMS_KEY = "ph.alarms.v1";
-const LEGACY_DEVICE_KEY = "ph.device.v1";
+import { seedThreads } from "./chat-seed";
+import {
+  STORE_KEYS,
+  SessionUser,
+  scopedKey,
+  writeSessionUser,
+} from "./session";
 
 export type LocalUser = {
   id: string;
@@ -21,6 +14,7 @@ export type LocalUser = {
   token: string;
   passwordHash: string;
   google?: boolean;
+  nickName?: string;
 };
 
 export type LocalProfile = {
@@ -37,51 +31,33 @@ export type LocalProfile = {
   };
 };
 
-export type LocalDevice = {
+export type SavedPattern = {
   id: string;
-  userId: string;
-  name?: string;
-  peripheralID?: string;
-  settings?: { intensity?: number; mode?: string };
-  userData?: { timeStamp?: string; data?: string }[];
-  userOnboardingData?: { timeStamp?: string; data?: string }[];
+  title: string;
+  pattern: number[];
 };
 
-export type LocalChatThread = Omit<ChatThread, "messages"> & {
-  userId: string;
-};
-
-export type LocalChatMessage = ChatBubble & {
-  threadId: string;
-  userId: string;
-};
-
-export type LocalCompanion = {
+export type SavedKink = {
   id: string;
-  userId: string;
-  name?: string;
-  gender?: string;
-  birthday?: string;
-  personalities?: string[];
-  story?: string;
-  passionateTender?: number;
-  dominantSubmissive?: number;
-  experimentalVanilla?: number;
-  payload?: string;
+  name: string;
+  emotion?: string | null;
+  intensity?: number;
+  sensitivity?: number;
+  funType?: string;
+  iconIndex?: number;
 };
 
-export type LocalRecord = {
-  id: string;
-  userId: string;
-  kind: string;
-  payload?: string;
+type CompanionBlob = {
+  companions: any[];
+  activeCompanionId: string | null;
 };
 
-export type LocalOtp = {
-  email: string;
-  code: string;
+type ChatBlob = {
+  threads: ChatThread[];
+  isPremium?: boolean;
 };
 
+const MIGRATION_FLAG = "ph.namespace.migrated.v1";
 const PASSWORD_SALT = "ph.local.v1";
 
 export const hashPassword = (password: string) => {
@@ -113,53 +89,17 @@ const writeJson = async (key: string, value: unknown) => {
   await AsyncStorage.setItem(key, JSON.stringify(value));
 };
 
-export const getUsers = async () => readJson<LocalUser[]>(USERS_KEY, []);
-export const setUsers = async (users: LocalUser[]) => writeJson(USERS_KEY, users);
-
-const table = async <T,>(userId: string, name: string, fallback: T): Promise<T> =>
-  readJson<T>(storageKeyForUser(userId, name), fallback);
-
-const setTable = async (userId: string, name: string, value: unknown) =>
-  writeJson(storageKeyForUser(userId, name), value);
-
-export const getProfiles = (userId: string) =>
-  table<LocalProfile[]>(userId, "profiles", []);
-export const setProfiles = (userId: string, rows: LocalProfile[]) =>
-  setTable(userId, "profiles", rows);
-
-export const getDevices = (userId: string) =>
-  table<LocalDevice[]>(userId, "devices", []);
-export const setDevices = (userId: string, rows: LocalDevice[]) =>
-  setTable(userId, "devices", rows);
-
-export const getThreadRows = (userId: string) =>
-  table<LocalChatThread[]>(userId, "chat_threads", []);
-export const setThreadRows = (userId: string, rows: LocalChatThread[]) =>
-  setTable(userId, "chat_threads", rows);
-
-export const getMessageRows = (userId: string) =>
-  table<LocalChatMessage[]>(userId, "chat_messages", []);
-export const setMessageRows = (userId: string, rows: LocalChatMessage[]) =>
-  setTable(userId, "chat_messages", rows);
-
-export const getCompanions = (userId: string) =>
-  table<LocalCompanion[]>(userId, "companions", []);
-export const setCompanions = (userId: string, rows: LocalCompanion[]) =>
-  setTable(userId, "companions", rows);
-
-export const getRecords = (userId: string) =>
-  table<LocalRecord[]>(userId, "records", []);
-export const setRecords = (userId: string, rows: LocalRecord[]) =>
-  setTable(userId, "records", rows);
-
-export const getOtps = () => readJson<LocalOtp[]>(OTPS_KEY, []);
-export const setOtps = (rows: LocalOtp[]) => writeJson(OTPS_KEY, rows);
+export const getUsers = async () =>
+  readJson<LocalUser[]>(STORE_KEYS.accounts, []);
+export const setUsers = async (users: LocalUser[]) =>
+  writeJson(STORE_KEYS.accounts, users);
 
 const seededBypass = (): LocalUser => ({
   id: "bypass",
   email: "bypass@local",
   token: "bypass",
   passwordHash: hashPassword("bypass"),
+  nickName: "Anonymous User",
 });
 
 const seededDemo = (): LocalUser => ({
@@ -167,6 +107,7 @@ const seededDemo = (): LocalUser => ({
   email: "demo@local",
   token: "local.demo",
   passwordHash: hashPassword("demo1234"),
+  nickName: "Demo",
 });
 
 export const ensureSeeded = async () => {
@@ -183,6 +124,17 @@ export const ensureSeeded = async () => {
   if (next.length !== users.length) {
     await setUsers(next);
   }
+  const demo = next.find((user) => user.id === "demo");
+  if (demo) {
+    const profile = await getProfile(demo.id);
+    if (!profile) {
+      await setProfile({
+        userId: demo.id,
+        nickName: "Demo",
+        personalInfo: { birthday: "01/01/2000" },
+      });
+    }
+  }
 };
 
 export const findUserByToken = async (token?: string | null) => {
@@ -190,7 +142,7 @@ export const findUserByToken = async (token?: string | null) => {
   if (!token) {
     return null;
   }
-  const trimmed = token.replace(/^Bearer\s+/i, "").trim();
+  const trimmed = String(token).replace(/^Bearer\s+/i, "").trim();
   if (!trimmed) {
     return null;
   }
@@ -209,209 +161,106 @@ export const findUserByEmail = async (email: string) => {
   await ensureSeeded();
   const users = await getUsers();
   return (
-    users.find((user) => user.email.toLowerCase() === email.trim().toLowerCase()) ??
+    users.find(
+      (user) => user.email.toLowerCase() === email.trim().toLowerCase()
+    ) ?? null
+  );
+};
+
+export const publicUser = (user: LocalUser): SessionUser => ({
+  id: user.id,
+  email: user.email,
+  token: user.token,
+  nickName: user.nickName,
+  name: user.nickName,
+});
+
+export const migrateLegacyStores = async (userId: string) => {
+  if (!userId) {
+    return;
+  }
+  const done = await AsyncStorage.getItem(MIGRATION_FLAG);
+  if (done) {
+    return;
+  }
+  const bases = [
+    STORE_KEYS.companions,
+    STORE_KEYS.chat,
+    STORE_KEYS.alarms,
+    STORE_KEYS.device,
+    STORE_KEYS.patterns,
+    STORE_KEYS.kinks,
+  ];
+  for (const base of bases) {
+    const namespaced = await AsyncStorage.getItem(scopedKey(base, userId));
+    if (namespaced) {
+      continue;
+    }
+    const legacy = await AsyncStorage.getItem(base);
+    if (legacy) {
+      await AsyncStorage.setItem(scopedKey(base, userId), legacy);
+    }
+  }
+  await AsyncStorage.setItem(MIGRATION_FLAG, userId);
+};
+
+export const readUserStore = async <T,>(
+  base: string,
+  userId: string,
+  fallback: T
+): Promise<T> => {
+  await migrateLegacyStores(userId);
+  return readJson(scopedKey(base, userId), fallback);
+};
+
+export const writeUserStore = async (
+  base: string,
+  userId: string,
+  value: unknown
+) => {
+  await writeJson(scopedKey(base, userId), value);
+};
+
+export const getProfile = async (userId: string) =>
+  readUserStore<LocalProfile | null>(STORE_KEYS.profile, userId, null);
+
+export const setProfile = async (profile: LocalProfile) =>
+  writeUserStore(STORE_KEYS.profile, profile.userId, profile);
+
+export const loadChat = async (userId: string): Promise<ChatBlob> => {
+  const data = await readUserStore<ChatBlob | null>(
+    STORE_KEYS.chat,
+    userId,
     null
   );
+  if (data && Array.isArray(data.threads) && data.threads.length > 0) {
+    return data;
+  }
+  const seeded: ChatBlob = { threads: seedThreads(), isPremium: false };
+  await writeUserStore(STORE_KEYS.chat, userId, seeded);
+  return seeded;
 };
 
-const importThread = async (userId: string, thread: ChatThread) => {
-  const threads = await getThreadRows(userId);
-  const messages = await getMessageRows(userId);
-  const { messages: bubbles = [], ...rest } = thread;
-  const existingIndex = threads.findIndex((item) => item.id === thread.id);
-  const row: LocalChatThread = { ...rest, id: thread.id, userId };
-  if (existingIndex === -1) {
-    threads.push(row);
-  } else {
-    threads[existingIndex] = row;
-  }
-  const kept = messages.filter((item) => item.threadId !== thread.id);
-  const imported = bubbles.map((bubble, index) => ({
-    ...bubble,
-    id: bubble.id || `${thread.id}-m${index}`,
-    threadId: thread.id,
-    userId,
-    voice: bubble.voice === true,
-  }));
-  await setThreadRows(userId, threads);
-  await setMessageRows(userId, [...kept, ...imported]);
-};
+export const saveChat = async (userId: string, value: ChatBlob) =>
+  writeUserStore(STORE_KEYS.chat, userId, value);
 
-export const migrateLegacyChatOnce = async (userId: string) => {
-  const already = await AsyncStorage.getItem(CHAT_MIGRATED_KEY);
-  if (already) {
-    return;
-  }
-  try {
-    const raw = await AsyncStorage.getItem(LEGACY_CHAT_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as {
-        threads?: ChatThread[];
-        isPremium?: boolean;
-      };
-      if (Array.isArray(parsed.threads) && parsed.threads.length > 0) {
-        for (const thread of parsed.threads) {
-          await importThread(userId, thread);
-        }
-      }
-      if (typeof parsed.isPremium === "boolean") {
-        const records = await getRecords(userId);
-        const existing = records.find(
-          (item) => item.kind === "settings" && item.id === "premium"
-        );
-        const row: LocalRecord = {
-          id: "premium",
-          userId,
-          kind: "settings",
-          payload: JSON.stringify({ isPremium: parsed.isPremium }),
-        };
-        if (existing) {
-          await setRecords(
-            userId,
-            records.map((item) => (item.id === "premium" ? row : item))
-          );
-        } else {
-          await setRecords(userId, [...records, row]);
-        }
-      }
-    }
-  } catch {
-    // ignore corrupt legacy chat
-  }
-  await AsyncStorage.setItem(CHAT_MIGRATED_KEY, userId);
-};
-
-export const migrateLegacyCompanionsOnce = async (userId: string) => {
-  const already = await AsyncStorage.getItem(COMPANIONS_MIGRATED_KEY);
-  if (already) {
-    return;
-  }
-  try {
-    const raw = await AsyncStorage.getItem(LEGACY_COMPANIONS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as {
-        companions?: LocalCompanion[];
-        activeCompanionId?: string | null;
-      };
-      if (Array.isArray(parsed.companions) && parsed.companions.length > 0) {
-        const rows = parsed.companions.map((companion) => ({
-          ...companion,
-          userId,
-          payload: companion.payload || JSON.stringify({ ...companion, userId }),
-        }));
-        await setCompanions(userId, rows);
-      }
-      if (parsed.activeCompanionId) {
-        const records = await getRecords(userId);
-        await setRecords(userId, [
-          ...records.filter((item) => item.id !== "activeCompanionId"),
-          {
-            id: "activeCompanionId",
-            userId,
-            kind: "settings",
-            payload: parsed.activeCompanionId,
-          },
-        ]);
-      }
-    }
-  } catch {
-    // ignore corrupt companions
-  }
-  await AsyncStorage.setItem(COMPANIONS_MIGRATED_KEY, userId);
-};
-
-export const migrateLegacyAlarmsOnce = async (userId: string) => {
-  const already = await AsyncStorage.getItem(ALARMS_MIGRATED_KEY);
-  if (already) {
-    return;
-  }
-  try {
-    const raw = await AsyncStorage.getItem(LEGACY_ALARMS_KEY);
-    const dest = storageKeyForUser(userId, "alarms");
-    const existing = await AsyncStorage.getItem(dest);
-    if (raw && !existing) {
-      await AsyncStorage.setItem(dest, raw);
-    }
-  } catch {
-    // ignore
-  }
-  await AsyncStorage.setItem(ALARMS_MIGRATED_KEY, userId);
-};
-
-export const migrateLegacyDeviceOnce = async (userId: string) => {
-  const already = await AsyncStorage.getItem(DEVICE_MIGRATED_KEY);
-  if (already) {
-    return;
-  }
-  try {
-    const raw = await AsyncStorage.getItem(LEGACY_DEVICE_KEY);
-    const dest = storageKeyForUser(userId, "device");
-    const existing = await AsyncStorage.getItem(dest);
-    if (raw && !existing) {
-      await AsyncStorage.setItem(dest, raw);
-    }
-  } catch {
-    // ignore
-  }
-  await AsyncStorage.setItem(DEVICE_MIGRATED_KEY, userId);
-};
-
-export const ensureUserData = async (userId: string) => {
-  await ensureSeeded();
-  await migrateLegacyChatOnce(userId);
-  await migrateLegacyCompanionsOnce(userId);
-  await migrateLegacyAlarmsOnce(userId);
-  await migrateLegacyDeviceOnce(userId);
-  const threads = await getThreadRows(userId);
-  if (threads.length === 0) {
-    for (const thread of seedThreads()) {
-      await importThread(userId, thread);
-    }
-  }
-};
-
-export const assembleThread = async (
-  userId: string,
-  thread: LocalChatThread
-): Promise<ChatThread> => {
-  const messages = await getMessageRows(userId);
-  return {
-    ...thread,
-    messages: messages
-      .filter((item) => item.threadId === thread.id)
-      .map(({ threadId: _threadId, userId: _userId, ...bubble }) => ({
-        ...bubble,
-        voice: bubble.voice === true ? true : undefined,
-      })),
-  };
-};
-
-export const listChatThreads = async (userId: string): Promise<ChatThread[]> => {
-  await ensureUserData(userId);
-  const threads = await getThreadRows(userId);
-  const assembled = await Promise.all(
-    threads.map((thread) => assembleThread(userId, thread))
-  );
-  return assembled;
+export const listChatThreads = async (userId: string) => {
+  const blob = await loadChat(userId);
+  return blob.threads;
 };
 
 export const getChatThread = async (userId: string, id: string) => {
-  await ensureUserData(userId);
-  const threads = await getThreadRows(userId);
-  const thread = threads.find((item) => item.id === id);
-  if (!thread) {
-    return null;
-  }
-  return assembleThread(userId, thread);
+  const blob = await loadChat(userId);
+  return blob.threads.find((thread) => thread.id === id) ?? null;
 };
 
 export const upsertThread = async (
   userId: string,
   input: Partial<ChatThread> & { id?: string }
 ) => {
-  await ensureUserData(userId);
+  const blob = await loadChat(userId);
   const id = input.id || nextId("thread");
-  const existing = await getChatThread(userId, id);
+  const existing = blob.threads.find((thread) => thread.id === id);
   const merged: ChatThread = {
     id,
     name: input.name ?? existing?.name ?? "",
@@ -430,8 +279,11 @@ export const upsertThread = async (
     messages:
       input.messages !== undefined ? input.messages : existing?.messages ?? [],
   };
-  await importThread(userId, merged);
-  return getChatThread(userId, id);
+  const threads = existing
+    ? blob.threads.map((thread) => (thread.id === id ? merged : thread))
+    : [merged, ...blob.threads];
+  await saveChat(userId, { ...blob, threads });
+  return merged;
 };
 
 export const appendMessage = async (
@@ -439,47 +291,123 @@ export const appendMessage = async (
   threadId: string,
   message: ChatBubble
 ) => {
-  await ensureUserData(userId);
-  let thread = await getChatThread(userId, threadId);
-  if (!thread) {
-    thread = {
-      id: threadId,
-      name: threadId,
-      kind: "bot",
-      preview: message.text,
-      time: "Now",
-      pinned: false,
-      listen: false,
-      synced: false,
-      request: "none",
-      messages: [],
-    };
-  }
+  const blob = await loadChat(userId);
   const bubble: ChatBubble = {
     ...message,
     id: message.id || nextId("msg"),
-    voice: message.voice === true,
   };
-  const next: ChatThread = {
-    ...thread,
-    preview: message.text,
-    time: "Now",
-    messages: [...thread.messages, bubble],
-  };
-  await importThread(userId, next);
-  return getChatThread(userId, threadId);
+  const existing = blob.threads.find((thread) => thread.id === threadId);
+  const thread: ChatThread = existing
+    ? {
+        ...existing,
+        preview: message.text,
+        time: "Now",
+        messages: [...existing.messages, bubble],
+      }
+    : {
+        id: threadId,
+        name: threadId,
+        kind: "bot",
+        preview: message.text,
+        time: "Now",
+        pinned: false,
+        listen: false,
+        synced: false,
+        request: "none",
+        messages: [bubble],
+      };
+  const threads = existing
+    ? blob.threads.map((item) => (item.id === threadId ? thread : item))
+    : [thread, ...blob.threads];
+  await saveChat(userId, { ...blob, threads });
+  return thread;
 };
 
-export const removeThread = async (userId: string, id: string) => {
-  const threads = await getThreadRows(userId);
-  const messages = await getMessageRows(userId);
-  await setThreadRows(
-    userId,
-    threads.filter((item) => item.id !== id)
+export const loadCompanions = async (userId: string): Promise<CompanionBlob> =>
+  readUserStore<CompanionBlob>(STORE_KEYS.companions, userId, {
+    companions: [],
+    activeCompanionId: null,
+  });
+
+export const saveCompanions = async (userId: string, value: CompanionBlob) =>
+  writeUserStore(STORE_KEYS.companions, userId, value);
+
+export const upsertCompanionRow = async (userId: string, companion: any) => {
+  const blob = await loadCompanions(userId);
+  const id = companion.id || nextId("companion");
+  const next = { ...companion, id };
+  const index = blob.companions.findIndex((item) => item.id === id);
+  const companions =
+    index === -1
+      ? [...blob.companions, next]
+      : blob.companions.map((item, i) => (i === index ? { ...item, ...next } : item));
+  const value = { companions, activeCompanionId: id };
+  await saveCompanions(userId, value);
+  return next;
+};
+
+export const loadSavedPatterns = async (userId: string) =>
+  readUserStore<SavedPattern[]>(STORE_KEYS.patterns, userId, []);
+
+export const saveSavedPatterns = async (
+  userId: string,
+  patterns: SavedPattern[]
+) => writeUserStore(STORE_KEYS.patterns, userId, patterns);
+
+export const upsertSavedPattern = async (
+  userId: string,
+  pattern: SavedPattern
+) => {
+  const current = await loadSavedPatterns(userId);
+  const index = current.findIndex((item) => item.id === pattern.id);
+  const next =
+    index === -1
+      ? [...current, pattern]
+      : current.map((item, i) => (i === index ? pattern : item));
+  await saveSavedPatterns(userId, next);
+  return next;
+};
+
+export const loadSavedKinks = async (userId: string) =>
+  readUserStore<SavedKink[]>(STORE_KEYS.kinks, userId, []);
+
+export const saveSavedKinks = async (userId: string, kinks: SavedKink[]) =>
+  writeUserStore(STORE_KEYS.kinks, userId, kinks);
+
+export const upsertSavedKink = async (userId: string, kink: SavedKink) => {
+  const current = await loadSavedKinks(userId);
+  const index = current.findIndex((item) => item.id === kink.id);
+  const next =
+    index === -1
+      ? [...current, kink]
+      : current.map((item, i) => (i === index ? kink : item));
+  await saveSavedKinks(userId, next);
+  return next;
+};
+
+export const resetPasswordForEmail = async (
+  email: string,
+  newPassword: string
+) => {
+  await ensureSeeded();
+  const users = await getUsers();
+  const index = users.findIndex(
+    (user) => user.email.toLowerCase() === email.trim().toLowerCase()
   );
-  await setMessageRows(
-    userId,
-    messages.filter((item) => item.threadId !== id)
-  );
+  if (index === -1) {
+    return false;
+  }
+  users[index] = {
+    ...users[index],
+    passwordHash: hashPassword(newPassword),
+  };
+  await setUsers(users);
   return true;
+};
+
+export const loginAndSession = async (user: LocalUser) => {
+  const session = publicUser(user);
+  await writeSessionUser(session);
+  await migrateLegacyStores(user.id);
+  return session;
 };

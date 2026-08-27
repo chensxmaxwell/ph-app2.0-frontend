@@ -94,7 +94,7 @@ export const ChatCreateScreen = () => {
             <TouchableOpacity
               style={styles.primary}
               onPress={() =>
-                navigation.navigate(
+                navigation.replace(
                   SCREENS.CHAT_THREAD as never,
                   { threadId: createdId } as never
                 )

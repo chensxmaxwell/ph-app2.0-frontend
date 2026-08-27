@@ -11,16 +11,9 @@ import React, {
 import { ttsSpeak, ttsStop } from "../../services/tts";
 import { companionChatOrFallback } from "../../services/llm";
 import { nextRegeneratedReply } from "../love/replies";
-import client from "../../apolloClient";
-import {
-  CHAT_THREADS,
-  DELETE_CHAT_THREAD,
-  PUT_RECORD,
-  SETTINGS_RECORDS,
-  UPSERT_CHAT_THREAD,
-} from "../../backend/operations";
 import { seedDirectory, seedThreads } from "../../backend/chat-seed";
-import { subscribeSessionUser } from "../../backend/session";
+import { getCurrentUserId, subscribeSessionUser } from "../../backend/session";
+import { loadChat, saveChat } from "../../backend/store";
 import {
   ChatBubble,
   ChatThread,
@@ -79,122 +72,24 @@ type ChatContextValue = {
 };
 
 
-const threadToInput = (thread: ChatThread) => ({
-  id: thread.id,
-  name: thread.name,
-  kind: thread.kind,
-  email: thread.email,
-  preview: thread.preview,
-  time: thread.time,
-  pinned: thread.pinned,
-  listen: thread.listen,
-  synced: thread.synced,
-  request: thread.request,
-  gender: thread.gender,
-  birthday: thread.birthday,
-  description: thread.description,
-  personality: thread.personality,
-  messages: thread.messages.map((item) => ({
-    id: item.id,
-    from: item.from,
-    text: item.text,
-    voice: item.voice === true,
-    edited: item.edited === true,
-    synced: item.synced === true,
-  })),
-});
-
-const threadFromGql = (thread: any): ChatThread => ({
-  id: thread.id,
-  name: thread.name || "",
-  kind: thread.kind === "human" ? "human" : "bot",
-  email: thread.email || undefined,
-  preview: thread.preview || "",
-  time: thread.time || "",
-  pinned: !!thread.pinned,
-  listen: !!thread.listen,
-  synced: !!thread.synced,
-  request: (thread.request || "none") as FriendRequest,
-  gender: thread.gender || undefined,
-  birthday: thread.birthday || undefined,
-  description: thread.description || undefined,
-  personality: thread.personality || undefined,
-  messages: Array.isArray(thread.messages)
-    ? thread.messages.map((item: any) => ({
-        id: item.id,
-        from: item.from === "me" ? "me" : "them",
-        text: item.text || "",
-        voice: item.voice === true ? true : undefined,
-        edited: item.edited === true ? true : undefined,
-        synced: item.synced === true ? true : undefined,
-      }))
-    : [],
-});
-
-const loadThreadsFromBackend = async (): Promise<{
+const loadThreadsFromStore = async (userId: string): Promise<{
   threads: ChatThread[];
   isPremium: boolean;
 }> => {
-  const [threadResult, settingsResult] = await Promise.all([
-    client.query({ query: CHAT_THREADS, fetchPolicy: "no-cache" }),
-    client.query({
-      query: SETTINGS_RECORDS,
-      variables: { kind: "settings" },
-      fetchPolicy: "no-cache",
-    }),
-  ]);
-  const threads = Array.isArray(threadResult.data?.chatThreads)
-    ? threadResult.data.chatThreads.map(threadFromGql)
-    : [];
-  const premium = (settingsResult.data?.records || []).find(
-    (item: { id?: string }) => item.id === "premium"
-  );
-  let isPremium = false;
-  if (premium?.payload) {
-    try {
-      isPremium = !!JSON.parse(premium.payload).isPremium;
-    } catch {
-      isPremium = false;
-    }
-  }
-  return { threads: mergeSeedThreads(dedupeThreads(threads)), isPremium };
+  const blob = await loadChat(userId);
+  const threads = Array.isArray(blob.threads) ? blob.threads : [];
+  return {
+    threads: mergeSeedThreads(dedupeThreads(threads)),
+    isPremium: !!blob.isPremium,
+  };
 };
 
-const persistThreadsToBackend = async (
+const persistThreadsToStore = async (
+  userId: string,
   threads: ChatThread[],
   isPremium: boolean
 ) => {
-  const remote = await client.query({
-    query: CHAT_THREADS,
-    fetchPolicy: "no-cache",
-  });
-  const remoteIds = new Set(
-    (remote.data?.chatThreads || []).map((item: { id: string }) => item.id)
-  );
-  const nextIds = new Set(threads.map((item) => item.id));
-  await Promise.all(
-    Array.from(remoteIds)
-      .filter((id) => !nextIds.has(id))
-      .map((id) =>
-        client.mutate({ mutation: DELETE_CHAT_THREAD, variables: { id } })
-      )
-  );
-  await Promise.all(
-    threads.map((thread) =>
-      client.mutate({
-        mutation: UPSERT_CHAT_THREAD,
-        variables: { input: threadToInput(thread) },
-      })
-    )
-  );
-  await client.mutate({
-    mutation: PUT_RECORD,
-    variables: {
-      kind: "settings",
-      id: "premium",
-      payload: JSON.stringify({ isPremium }),
-    },
-  });
+  await saveChat(userId, { threads, isPremium });
 };
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -310,7 +205,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         setHydrated(true);
         return;
       }
-      loadThreadsFromBackend()
+      loadThreadsFromStore(nextId)
         .then((loaded) => {
           if (userIdRef.current !== nextId) {
             return;
@@ -349,7 +244,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       clearTimeout(persistTimer.current);
     }
     persistTimer.current = setTimeout(() => {
-      persistThreadsToBackend(threads, isPremium).catch(() => undefined);
+      persistThreadsToStore(userIdRef.current, threads, isPremium).catch(() => undefined);
     }, 250);
     return () => {
       if (persistTimer.current) {

@@ -126,7 +126,11 @@ export const useProfile = () => {
         addProfileMutation({
           variables: {
             input: {
-              nickName: ANONYMOUS_USER_NAME,
+              nickName:
+                sessionUser?.nickName?.trim() ||
+                sessionUser?.name?.trim() ||
+                sessionUser?.email?.split("@")[0] ||
+                "User",
               personalInfo: {
                 birthday: "01/01/2000",
               },

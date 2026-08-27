@@ -8,9 +8,14 @@ import React, {
   useState,
 } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { storageKeyForUser, subscribeSessionUser } from "../backend/session";
-import { migrateLegacyDeviceOnce } from "../backend/store";
 import { stopToy } from "./toy";
+import {
+  STORE_KEYS,
+  scopedKey,
+  subscribeSessionUser,
+} from "../backend/session";
+import { migrateLegacyStores } from "../backend/store";
+
 export const DEMO_DEVICE_ID = "ph-demo";
 export const DEMO_DEVICE_NAME = "Pleasure House";
 
@@ -29,16 +34,19 @@ export const DeviceProvider = ({ children }: { children: ReactNode }) => {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [hydrated, setHydrated] = useState(false);
-
   const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsubscribe = subscribeSessionUser((user) => {
-      const nextId = user?.id ?? "anon";
+    return subscribeSessionUser((user) => {
+      const nextId = user?.id ?? null;
       setUserId(nextId);
       setHydrated(false);
-      migrateLegacyDeviceOnce(nextId)
-        .then(() => AsyncStorage.getItem(storageKeyForUser(nextId, "device")))
+      if (!nextId) {
+        setConnected(false);
+        return;
+      }
+      migrateLegacyStores(nextId)
+        .then(() => AsyncStorage.getItem(scopedKey(STORE_KEYS.device, nextId)))
         .then((raw) => {
           if (!raw) {
             setConnected(false);
@@ -50,7 +58,6 @@ export const DeviceProvider = ({ children }: { children: ReactNode }) => {
         .catch(() => setConnected(false))
         .finally(() => setHydrated(true));
     });
-    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -58,7 +65,7 @@ export const DeviceProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
     AsyncStorage.setItem(
-      storageKeyForUser(userId, "device"),
+      scopedKey(STORE_KEYS.device, userId),
       JSON.stringify({ connected })
     ).catch(() => undefined);
   }, [connected, hydrated, userId]);

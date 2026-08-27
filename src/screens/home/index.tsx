@@ -99,12 +99,19 @@ export const Home = () => {
           key={index}
           style={[styles.cards, styles.events]}
           onPress={() => {
+            if (event.type === "Alarm") {
+              parentNavigation?.navigate(SCREENS.PLAYGROUND_STACK, {
+                screen: SCREENS.ALARM_STACK,
+                params: { screen: SCREENS.SETALARM_INTRO },
+              });
+              return;
+            }
             if (event.screen) {
               parentNavigation?.navigate(event.screen, event.params);
               return;
             }
             navigateToNestedScreen({
-              navigation: navigation as NavigationProp<any>,
+              navigation: parentNavigation ?? (navigation as NavigationProp<any>),
               path: dynamicPath,
             });
           }}

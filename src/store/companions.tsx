@@ -7,9 +7,14 @@ import React, {
   useState,
 } from "react";
 import { AvatarLook, pickLook } from "../screens/avatar/engine/viewer-html";
-import client from "../apolloClient";
-import { COMPANIONS, PUT_RECORD, SETTINGS_RECORDS, UPSERT_COMPANION } from "../backend/operations";
-import { subscribeSessionUser } from "../backend/session";
+import {
+  STORE_KEYS,
+  subscribeSessionUser,
+} from "../backend/session";
+import {
+  loadCompanions,
+  saveCompanions,
+} from "../backend/store";
 
 export type Companion = AvatarLook & {
   id: string;
@@ -54,52 +59,26 @@ export const CompanionsProvider = ({ children }: { children: ReactNode }) => {
     null
   );
   const [hydrated, setHydrated] = useState(false);
-
-  const companionFromRow = (row: any): Companion | null => {
-    if (row?.payload) {
-      try {
-        return JSON.parse(row.payload) as Companion;
-      } catch {
-        // fall through
-      }
-    }
-    if (!row?.id) {
-      return null;
-    }
-    return row as Companion;
-  };
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsubscribe = subscribeSessionUser((user) => {
+    return subscribeSessionUser((user) => {
+      const nextId = user?.id ?? null;
+      setUserId(nextId);
       setHydrated(false);
-      if (!user?.id) {
+      if (!nextId) {
         setCompanions([]);
         setActiveCompanionId(null);
-        setHydrated(true);
         return;
       }
-      Promise.all([
-        client.query({ query: COMPANIONS, fetchPolicy: "no-cache" }),
-        client.query({
-          query: SETTINGS_RECORDS,
-          variables: { kind: "settings" },
-          fetchPolicy: "no-cache",
-        }),
-      ])
-        .then(([companionResult, settingsResult]) => {
-          const rows = companionResult.data?.companions || [];
-          const parsed = rows
-            .map(companionFromRow)
-            .filter(Boolean) as Companion[];
-          setCompanions(parsed);
-          const active = (settingsResult.data?.records || []).find(
-            (item: { id?: string }) => item.id === "activeCompanionId"
-          );
-          if (active?.payload) {
-            setActiveCompanionId(active.payload);
+      loadCompanions(nextId)
+        .then((parsed) => {
+          if (Array.isArray(parsed.companions)) {
+            setCompanions(parsed.companions as Companion[]);
           } else {
-            setActiveCompanionId(null);
+            setCompanions([]);
           }
+          setActiveCompanionId(parsed.activeCompanionId ?? null);
         })
         .catch(() => {
           setCompanions([]);
@@ -107,24 +86,16 @@ export const CompanionsProvider = ({ children }: { children: ReactNode }) => {
         })
         .finally(() => setHydrated(true));
     });
-    return unsubscribe;
   }, []);
 
   useEffect(() => {
-    if (!hydrated) {
+    if (!hydrated || !userId) {
       return;
     }
-    client
-      .mutate({
-        mutation: PUT_RECORD,
-        variables: {
-          kind: "settings",
-          id: "activeCompanionId",
-          payload: activeCompanionId || "",
-        },
-      })
-      .catch(() => undefined);
-  }, [activeCompanionId, hydrated]);
+    saveCompanions(userId, { companions, activeCompanionId }).catch(
+      () => undefined
+    );
+  }, [activeCompanionId, companions, hydrated, userId]);
 
   const activeCompanion =
     companions.find((companion) => companion.id === activeCompanionId) ?? null;
@@ -132,64 +103,18 @@ export const CompanionsProvider = ({ children }: { children: ReactNode }) => {
   const upsertCompanion = (companion: Companion) => {
     setCompanions((current) => mergeCompanion(current, companion));
     setActiveCompanionId(companion.id);
-    client
-      .mutate({
-        mutation: UPSERT_COMPANION,
-        variables: {
-          input: {
-            id: companion.id,
-            name: companion.name,
-            gender: companion.gender,
-            birthday: companion.birthday,
-            personalities: companion.personalities,
-            story: companion.story,
-            passionateTender: companion.passionateTender,
-            dominantSubmissive: companion.dominantSubmissive,
-            experimentalVanilla: companion.experimentalVanilla,
-            payload: JSON.stringify(companion),
-          },
-        },
-      })
-      .catch(() => undefined);
   };
 
   const addCompanion = (companion: Companion) => {
     upsertCompanion(companion);
   };
 
-  const persistCompanion = (companion: Companion) => {
-    client
-      .mutate({
-        mutation: UPSERT_COMPANION,
-        variables: {
-          input: {
-            id: companion.id,
-            name: companion.name,
-            gender: companion.gender,
-            birthday: companion.birthday,
-            personalities: companion.personalities,
-            story: companion.story,
-            passionateTender: companion.passionateTender,
-            dominantSubmissive: companion.dominantSubmissive,
-            experimentalVanilla: companion.experimentalVanilla,
-            payload: JSON.stringify(companion),
-          },
-        },
-      })
-      .catch(() => undefined);
-  };
-
   const updateCompanion = (id: string, patch: Partial<Companion>) => {
-    setCompanions((current) => {
-      const next = current.map((item) =>
+    setCompanions((current) =>
+      current.map((item) =>
         item.id === id ? { ...item, ...patch, id } : item
-      );
-      const updated = next.find((item) => item.id === id);
-      if (updated) {
-        persistCompanion(updated);
-      }
-      return next;
-    });
+      )
+    );
   };
 
   const value = useMemo(

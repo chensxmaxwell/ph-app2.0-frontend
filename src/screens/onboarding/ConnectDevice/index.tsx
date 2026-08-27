@@ -1,4 +1,4 @@
-import React, { memo, useEffect } from 'react';
+import React, { memo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
 import { PeripheralWrapper, useBleManager } from '../../../hooks/useBleManager';
 import { DEMO_DEVICE_ID, DEMO_DEVICE_NAME, useDevice } from '../../../store/device';
@@ -72,18 +72,8 @@ export const ConnectDevice = () => {
         }
     };
 
-    useEffect(() => {
-        if (checkBleState()) {
-          startScan();
-        }
-    
-        // Cleanup function to stop the scan
-        return () => {
-          if (scaning) {
-            stopScan();
-          }
-        };
-    }, [bleState]);
+    // Demo row is enough for an IPA with an empty location permission
+    // string. Do not auto-start a BLE scan on mount.
 
     return (
         <View style={styles.container}>

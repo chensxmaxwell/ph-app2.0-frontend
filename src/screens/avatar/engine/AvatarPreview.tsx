@@ -11,13 +11,17 @@ import {
 import { WebView } from "react-native-webview";
 import { colors } from "@common/styles/colors";
 import { AvatarLook } from "./viewer-html";
+import { LookFace } from "../look-face";
 
 export const avatarViewerUri = (nonce = 0) => {
   const scriptURL = NativeModules.SourceCode?.scriptURL || "";
   const match = String(scriptURL).match(/^(https?):\/\/([^/:]+)(?::(\d+))?/);
-  const protocol = match?.[1] || "http";
-  const host = match?.[2] || "localhost";
-  const metroPort = match?.[3] || "8081";
+  if (!match) {
+    return null;
+  }
+  const protocol = match[1];
+  const host = match[2];
+  const metroPort = match[3] || "8081";
   return `${protocol}://${host}:${metroPort}/ph-avatar/viewer.html?v=bozo10&r=${nonce}`;
 };
 
@@ -53,7 +57,7 @@ export const AvatarPreview = ({
   const fail = (raw: string) => {
     const detail = raw.trim() || "Unknown preview error";
     setStatus("error");
-    setErrorMessage(`${detail}\n${metroHint(viewerUri)}`);
+    setErrorMessage(`${detail}\n${viewerUri ? metroHint(viewerUri) : "3D preview is unavailable in this Release build."}`);
   };
 
   const pushLook = () => {
@@ -69,7 +73,7 @@ export const AvatarPreview = ({
   }, [payload, status]);
 
   useEffect(() => {
-    if (status !== "loading") {
+    if (!viewerUri || status !== "loading") {
       return;
     }
     const timer = setTimeout(() => {
@@ -83,6 +87,16 @@ export const AvatarPreview = ({
     setStatus("loading");
     setNonce((current) => current + 1);
   };
+
+  // Release IPA has no Metro :8081. Bundling viewer.html + 4MB GLB is left
+  // for a later pass; show a still portrait so Release does not white-screen.
+  if (!viewerUri) {
+    return (
+      <View style={[styles.wrap, { width, height, alignItems: "center", justifyContent: "center" }]}>
+        <LookFace look={look} size={Math.min(width, height)} />
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.wrap, { width, height }]}>

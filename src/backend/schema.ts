@@ -3,6 +3,7 @@ export const typeDefs = `
     id: ID!
     email: String
     token: String
+    nickName: String
   }
 
   type PersonalInfo {
@@ -21,24 +22,10 @@ export const typeDefs = `
     personalInfo: PersonalInfo
   }
 
-  type DeviceSettings {
-    intensity: Int
-    mode: String
-  }
-
-  type DeviceData {
-    timeStamp: String
-    data: String
-  }
-
   type Device {
     id: ID!
-    userId: ID
     name: String
     peripheralID: String
-    settings: DeviceSettings
-    userData: [DeviceData]
-    userOnboardingData: [DeviceData]
   }
 
   type ChatBubble {
@@ -82,13 +69,6 @@ export const typeDefs = `
     payload: String
   }
 
-  type RecordItem {
-    id: ID!
-    userId: ID
-    kind: String!
-    payload: String
-  }
-
   input LoginInput {
     email: String!
     password: String!
@@ -119,11 +99,6 @@ export const typeDefs = `
     personalInfo: PersonalInfoInput
   }
 
-  input UpdateDeviceInput {
-    timeStamp: String
-    data: String
-  }
-
   input ChatBubbleInput {
     id: ID
     from: String!
@@ -131,24 +106,6 @@ export const typeDefs = `
     voice: Boolean
     edited: Boolean
     synced: Boolean
-  }
-
-  input ChatThreadInput {
-    id: ID
-    name: String
-    kind: String
-    email: String
-    preview: String
-    time: String
-    pinned: Boolean
-    listen: Boolean
-    synced: Boolean
-    request: String
-    gender: String
-    birthday: String
-    description: String
-    personality: String
-    messages: [ChatBubbleInput]
   }
 
   input CompanionInput {
@@ -169,10 +126,7 @@ export const typeDefs = `
     getUserProfile: UserProfile
     getDeviceByUser: Device
     chatThreads: [ChatThread]
-    chatThread(id: ID!): ChatThread
     companions: [Companion]
-    companion(id: ID!): Companion
-    records(kind: String): [RecordItem]
   }
 
   type Mutation {
@@ -181,18 +135,10 @@ export const typeDefs = `
     registerUser(registerInput: RegisterInput!): User
     addUserProfile(input: UserProfileInput!): UserProfile
     updateUserProfile(input: UserProfileInput!): UserProfile
-    updateDevice(
-      userData: [UpdateDeviceInput]
-      userOnboardingData: [UpdateDeviceInput]
-    ): Device
     verifyOTP(otp: String): Boolean
     resendOTPVerificationCode(email: String): Boolean
-    upsertChatThread(input: ChatThreadInput!): ChatThread
+    resetPassword(email: String!, newPassword: String!): Boolean
     postChatMessage(threadId: ID!, message: ChatBubbleInput!): ChatThread
-    deleteChatThread(id: ID!): Boolean
     upsertCompanion(input: CompanionInput!): Companion
-    deleteCompanion(id: ID!): Boolean
-    putRecord(kind: String!, id: ID, payload: String): RecordItem
-    deleteRecord(id: ID!): Boolean
   }
 `;

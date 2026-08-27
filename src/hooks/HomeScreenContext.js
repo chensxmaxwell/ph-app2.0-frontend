@@ -129,6 +129,7 @@ export const HomeScreenProvider = ({ children }) => {
   }, [bleConnected, demoConnected, motorInput, peripheralId, writeToMotor]);
 
   const { loading, error, data, refetch } = useQuery(GET_DEVICE_BY_USER, {
+    skip: true,
     notifyOnNetworkStatusChange: true,
   });
 

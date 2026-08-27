@@ -1,4 +1,4 @@
-import React, { useContext, useState } from "react";
+import React, { useContext, useEffect, useState } from "react";
 import Pattern1 from "@images/pattern1.svg";
 import Pattern2 from "@images/pattern2.svg";
 import Pattern3 from "@images/pattern3.svg";
@@ -14,6 +14,8 @@ import { useNavigation } from "@react-navigation/native";
 import { NavigationType } from "../../../../../App";
 import { SCREENS } from "@common/constant";
 import { GlobalContext } from "../../../../store";
+import { subscribeSessionUser } from "../../../../backend/session";
+import { loadSavedPatterns, SavedPattern } from "../../../../backend/store";
 
 const renderUntitle: React.FC = () => {
   return (
@@ -35,9 +37,20 @@ const renderUntitle: React.FC = () => {
 export const usePattern = () => {
   const navigation = useNavigation<NavigationType>();
   const { globalState } = useContext(GlobalContext);
+  const [saved, setSaved] = useState<SavedPattern[]>([]);
   const [favorites, setFavorites] = useState<Record<string, boolean>>({
     Untitled: true,
   });
+
+  useEffect(() => {
+    return subscribeSessionUser((user) => {
+      if (!user?.id) {
+        setSaved([]);
+        return;
+      }
+      loadSavedPatterns(user.id).then(setSaved).catch(() => setSaved([]));
+    });
+  }, []);
 
   const toggleFavorite = (id: string) => {
     setFavorites((current) => ({
@@ -146,9 +159,21 @@ export const usePattern = () => {
           ],
         }),
     }),
-    ...globalState.tmp_pattern.map((card, index) =>
-      withFavorite(card.title ?? `tmp-${index}`, card)
+    ...saved.map((item) =>
+      withFavorite(item.id, {
+        Icon: Pattern1,
+        title: item.title,
+        onPress: () =>
+          handlePatternPress({ title: item.title, pattern: item.pattern }),
+      })
     ),
+    ...globalState.tmp_pattern
+      .filter(
+        (card) => !saved.some((item) => item.title === card.title)
+      )
+      .map((card, index) =>
+        withFavorite(card.title ?? `tmp-${index}`, card)
+      ),
   ];
 
   return {

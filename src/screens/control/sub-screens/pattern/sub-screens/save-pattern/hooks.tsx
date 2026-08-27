@@ -3,6 +3,8 @@ import { CommonActions, useNavigation } from "@react-navigation/native";
 import { SCREENS } from "@common/constant";
 import { GlobalContext } from "../../../../../../store";
 import { useContext } from "react";
+import { getCurrentUserId } from "../../../../../../backend/session";
+import { upsertSavedPattern } from "../../../../../../backend/store";
 
 export const usePattern = () => {
   const { setGlobalState } = useContext(GlobalContext);
@@ -20,6 +22,15 @@ export const usePattern = () => {
           title: name,
         };
 
+        const last = updatedTmpPattern[updatedTmpPattern.length - 1] as any;
+        const userId = getCurrentUserId();
+        if (userId && last) {
+          upsertSavedPattern(userId, {
+            id: last.id || `pattern-${Date.now()}`,
+            title: name,
+            pattern: last.pattern || [],
+          }).catch(() => undefined);
+        }
         return {
           ...prevState,
           tmp_pattern: updatedTmpPattern,

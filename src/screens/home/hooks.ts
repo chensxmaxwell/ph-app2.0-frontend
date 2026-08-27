@@ -32,11 +32,7 @@ export const useHome = () => {
       title: "Alarm",
       icon: Alarm,
       detail: "7:00 am \n Monday",
-      forward: [
-        SCREENS.PLAYGROUND_STACK,
-        SCREENS.ALARM_STACK,
-        SCREENS.SETALARM_INTRO,
-      ],
+      forward: [SCREENS.PLAYGROUND_STACK, SCREENS.ALARM_STACK],
     },
     {
       type: "Vibration",

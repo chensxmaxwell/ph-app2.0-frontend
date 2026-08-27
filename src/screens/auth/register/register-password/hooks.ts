@@ -13,16 +13,13 @@ export const useRegisterPassword = () => {
   const navigation = useNavigation<NavigationType>();
   const { showAlert } = useCustomAlert();
 
-  // global states
   const { globalState } = useContext(GlobalContext);
   const { email, password } = globalState.register;
 
-  // global state setters
   const { updateRegisterState } = useStore();
   const setPassword = (currPassword: RegisterState["password"]) =>
     updateRegisterState({ password: currPassword });
 
-  // local state
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const REGISTER_USER = gql`
@@ -31,6 +28,7 @@ export const useRegisterPassword = () => {
         id
         email
         token
+        nickName
       }
     }
   `;

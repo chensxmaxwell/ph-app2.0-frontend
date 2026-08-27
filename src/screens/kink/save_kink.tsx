@@ -18,6 +18,8 @@ import icons from "./icon-array";
 import { SCREENS } from "@common/constant";
 import { useCustomAlert } from "@common/util";
 import { useAppContext } from "./kink-context";
+import { getCurrentUserId } from "../../backend/session";
+import { upsertSavedKink } from "../../backend/store";
 
 const IconArray: Array<React.ElementType> = icons;
 
@@ -65,6 +67,15 @@ const SaveKinkScreen = () => {
 
   const handleSavePress = () => {
     setIsSaved(true);
+    const userId = getCurrentUserId();
+    if (userId) {
+      const iconIndex = selectedIcon ? IconArray.indexOf(selectedIcon) : -1;
+      upsertSavedKink(userId, {
+        id: `kink-${Date.now()}`,
+        name: kinkName || "Untitled",
+        iconIndex,
+      }).catch(() => undefined);
+    }
     navigation.navigate(SCREENS.KINK_CONFIRMATION);
   };
 

@@ -86,6 +86,7 @@ export type CardType = {
     favorite?: boolean,
     hideFavorite?: boolean,
     onFavoritePress?: () => void,
+    pattern?: number[],
 }
 
 const styles = StyleSheet.create({

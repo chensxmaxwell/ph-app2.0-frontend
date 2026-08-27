@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import NewKink from '@images/icons/new-kink.svg';
 import Hardcore from '@images/icons/hardcore.svg';
 import Gentle from '@images/icons/gentle.svg';
@@ -14,6 +14,8 @@ import { useNavigation } from '@react-navigation/native';
 import { NavigationType } from '../../../../../App';
 import { SCREENS } from '@common/constant';
 import { BUILTIN_PATTERNS, wavePattern } from '../../../../store/patterns';
+import { subscribeSessionUser } from '../../../../backend/session';
+import { loadSavedKinks, SavedKink } from '../../../../backend/store';
 
 const renderNewKink: React.FC = () => {
   return (
@@ -32,9 +34,20 @@ const renderNewKink: React.FC = () => {
 
 export const useKink = () => {
   const navigation = useNavigation<NavigationType>();
+  const [saved, setSaved] = useState<SavedKink[]>([]);
   const [favorites, setFavorites] = useState<Record<string, boolean>>({
     Hardcore: true,
   });
+
+  useEffect(() => {
+    return subscribeSessionUser((user) => {
+      if (!user?.id) {
+        setSaved([]);
+        return;
+      }
+      loadSavedKinks(user.id).then(setSaved).catch(() => setSaved([]));
+    });
+  }, []);
 
   const toggleFavorite = (id: string) => {
     setFavorites((current) => ({
@@ -109,6 +122,13 @@ export const useKink = () => {
       title: 'Untitled',
       onPress: () => play('Untitled'),
     }),
+    ...saved.map((item) =>
+      withFavorite(item.id, {
+        Icon: renderNewKink,
+        title: item.name || 'Untitled',
+        onPress: () => play(item.name || 'Untitled', 80),
+      })
+    ),
   ];
 
   return {
