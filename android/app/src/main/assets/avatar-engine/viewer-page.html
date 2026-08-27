@@ -111,7 +111,7 @@
     setMorph(mesh, "Shape_Squareness", mild(next.faceWidth, 0.22));
     setMorph(mesh, "Shape_Stern", mild(next.jaw, 0.22));
     setMorph(mesh, "Shape_Sharpness", mild(next.chin, 0.18));
-    setMorph(mesh, "Shape_IrisSize", 0.72);
+    setMorph(mesh, "Shape_IrisSize", 0);
     setMorph(mesh, "Shape_EyeLidHeight", 0);
     setMorph(mesh, "Shape_EyesSquare", mild(next.faceWidth, 0.1));
     setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16));
@@ -236,7 +236,7 @@
         return;
       }
       if (name.indexOf("Eyes_") === 0) {
-        obj.visible = true;
+        obj.visible = false;
         return;
       }
       if (name.indexOf("Body_") === 0) {
@@ -349,7 +349,28 @@
 
   function injectSkinWrap(mat, amount) {
     var wrap = amount == null ? 0.22 : amount;
+    mat.customProgramCacheKey = function () { return "skinwrap-" + String(wrap); };
     mat.onBeforeCompile = function (shader) {
+      var extra = "";
+      if (wrap < 0.1) {
+        extra = [
+          "vec2 fu = vUv;",
+          "float lip = 1.0 - smoothstep(0.12, 1.0, length((fu - vec2(0.126, 0.162)) / vec2(0.028, 0.0085)));",
+          "float lipLine = 1.0 - smoothstep(0.18, 1.0, length((fu - vec2(0.126, 0.160)) / vec2(0.022, 0.0028)));",
+          "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.70, 0.26, 0.30), lip * 0.62);",
+          "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.38, 0.12, 0.14), lipLine * 0.48);",
+          "float bL = 1.0 - smoothstep(0.36, 1.0, length((fu - vec2(0.095, 0.090)) / vec2(0.024, 0.0065)));",
+          "float bR = 1.0 - smoothstep(0.36, 1.0, length((fu - vec2(0.157, 0.090)) / vec2(0.024, 0.0065)));",
+          "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.09, 0.05, 0.04), max(bL, bR) * 0.92);",
+          "float cL = 1.0 - smoothstep(0.35, 1.0, length((fu - vec2(0.080, 0.155)) / vec2(0.018, 0.014)));",
+          "float cR = 1.0 - smoothstep(0.35, 1.0, length((fu - vec2(0.172, 0.155)) / vec2(0.018, 0.014)));",
+          "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.50, 0.48), max(cL, cR) * 0.12);"
+        ].join("\n") + "\n";
+      }
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <map_fragment>",
+        "#include <map_fragment>\n" + extra
+      );
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <output_fragment>",
         [
@@ -387,8 +408,8 @@
     mat.color.setRGB(1, 1, 1);
     mat.roughness = 0.28;
     mat.metalness = 0;
-    mat.clearcoat = 0.22;
-    mat.clearcoatRoughness = 0.4;
+    mat.clearcoat = 0.55;
+    mat.clearcoatRoughness = 0.18;
     mat.envMapIntensity = 0.12;
     mat.morphTargets = true;
     mat.skinning = false;
@@ -407,16 +428,23 @@
         [
           "#include <map_fragment>",
           "vec2 c = vec2(0.5623, 0.4378);",
-          "float d = length((vUv - c) / vec2(0.061, 0.061));",
-          "float irisR = 0.52 * irisSize;",
-          "float pupilR = 0.20 * irisSize;",
-          "float irisM = 1.0 - smoothstep(irisR, irisR + 0.08, d);",
-          "float pupilM = 1.0 - smoothstep(pupilR, pupilR + 0.04, d);",
-          "vec3 scleraCol = vec3(0.94, 0.95, 0.97);",
-          "vec3 irisCol = mix(irisColor * 0.55, irisColor + vec3(0.18, 0.18, 0.22), 0.35);",
-          "vec3 pupilCol = vec3(0.05, 0.04, 0.04);",
+          "vec2 p = (vUv - c) / vec2(0.061, 0.061);",
+          "float d = length(p);",
+          "float irisR = 0.58 * irisSize;",
+          "float pupilR = 0.30 * irisSize;",
+          "float irisM = 1.0 - smoothstep(irisR, irisR + 0.06, d);",
+          "float pupilM = 1.0 - smoothstep(pupilR, pupilR + 0.035, d);",
+          "vec3 scleraCol = vec3(0.98, 0.99, 1.0);",
+          "vec3 irisCol = mix(irisColor * 0.42, irisColor + vec3(0.22, 0.22, 0.28), clamp(1.0 - d, 0.0, 1.0));",
+          "vec3 pupilCol = vec3(0.03, 0.02, 0.02);",
           "vec3 col = mix(scleraCol, irisCol, irisM);",
           "col = mix(col, pupilCol, pupilM);",
+          "float spec = 1.0 - smoothstep(0.05, 0.14, length(p - vec2(-0.20, 0.28)));",
+          "float spec2 = 1.0 - smoothstep(0.03, 0.08, length(p - vec2(0.18, -0.12)));",
+          "col = mix(col, vec3(1.0), spec * 0.95);",
+          "col = mix(col, vec3(1.0), spec2 * 0.35);",
+          "float rim = smoothstep(irisR - 0.08, irisR, d) * irisM;",
+          "col = mix(col, irisColor * 0.22, rim * 0.55);",
           "diffuseColor.rgb = col;"
         ].join("\n")
       );
@@ -550,7 +578,7 @@
     window.addEventListener("resize", resize);
 
     new THREE.GLTFLoader().load(
-      "bozo-male.glb?v=reexport4",
+      "bozo-male.glb?v=face2",
       function (gltf) {
         try {
           modelRoot = gltf.scene;
