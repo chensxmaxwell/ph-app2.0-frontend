@@ -14,7 +14,6 @@ import { lookFromCompanion, useCompanions } from "../../store/companions";
 import { LookFace } from "../avatar/look-face";
 import { ROW_AVATAR_SIZE, circleAvatarStyle } from "../avatar/circle-avatar";
 import { faceSourceForId } from "../chat/faces";
-import { useOpenLove } from "../love/pill";
 import type { AvatarLook } from "../avatar/engine/viewer-html";
 
 const HomeFace = ({
@@ -40,8 +39,6 @@ export const Home = () => {
   const parentNavigation = navigation.getParent() as
     | NavigationProp<ParamListBase>
     | undefined;
-  const openLove = useOpenLove();
-
   const openAvatarCreation = () => {
     parentNavigation?.navigate(
       SCREENS.AVATAR_STACK as never,
@@ -49,8 +46,11 @@ export const Home = () => {
     );
   };
 
-  const openCompanion = (companionId: string, name: string) => {
-    openLove({ companionId, name });
+  const openCompanion = (companionId: string) => {
+    parentNavigation?.navigate(
+      SCREENS.CHAT_THREAD as never,
+      { threadId: companionId } as never
+    );
   };
 
   const renderCreatedCompanions = () =>
@@ -58,7 +58,7 @@ export const Home = () => {
       <TouchableOpacity
         key={companion.id}
         style={[styles.companionPicture, circleAvatarStyle(ROW_AVATAR_SIZE)]}
-        onPress={() => openCompanion(companion.id, companion.name)}
+        onPress={() => openCompanion(companion.id)}
       >
         <HomeFace
           companionId={companion.id}
@@ -78,7 +78,7 @@ export const Home = () => {
         <TouchableOpacity
           key={companion.id}
           style={[styles.companionPicture, circleAvatarStyle(ROW_AVATAR_SIZE)]}
-          onPress={() => openCompanion(companion.id, companion.name)}
+          onPress={() => openCompanion(companion.id)}
         >
           <HomeFace companionId={companion.id} look={null} size={ROW_AVATAR_SIZE} />
         </TouchableOpacity>
