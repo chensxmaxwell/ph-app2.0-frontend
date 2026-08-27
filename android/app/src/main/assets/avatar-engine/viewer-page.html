@@ -40,6 +40,7 @@
   var modelRoot, morphMeshes = [];
   var modelRestY = 0;
   var skinMats = [];
+  var headMats = [];
   var hairMats = [];
   var eyeMats = [];
   var headBones = [];
@@ -99,21 +100,28 @@
     mesh.morphTargetInfluences = keepIdx.map(function () { return 0; });
   }
 
+  function mild(v, amount) {
+    return clamp01(v) * (amount == null ? 0.28 : amount);
+  }
+
   function applyMeshLook(mesh, next) {
     var arms = (clamp01(next.upperArms) + clamp01(next.forearms)) * 0.5;
     var hips = clamp01(next.backAndHips);
-    setMorph(mesh, "Shape_Squareness", clamp01(next.faceWidth));
-    setMorph(mesh, "Shape_Stern", clamp01(next.jaw));
-    setMorph(mesh, "Shape_Sharpness", clamp01(next.chin));
-    setMorph(mesh, "Shape_IrisSize", clamp01(next.eyeSize));
-    setMorph(mesh, "Shape_EyeLidHeight", clamp01(next.eyeSize) * 0.75);
-    setMorph(mesh, "Shape_EyesSquare", clamp01(next.faceWidth) * 0.35);
-    setMorph(mesh, "Shape_NoseWidth", clamp01(next.faceWidth) * 0.45);
-    setMorph(mesh, "Shape_MouthWide", clamp01(next.faceWidth) * 0.38);
-    setMorph(mesh, "Shape_MouthThin", (1 - clamp01(next.chin)) * 0.32);
-    setMorph(mesh, "Shape_RaiseBrows", clamp01(next.eyeSize) * 0.28);
-    setMorph(mesh, "Shape_LowerBrows", clamp01(next.jaw) * 0.28);
-    setMorph(mesh, "Shape_NoseTiltDown", clamp01(next.chin) * 0.22);
+    var eye = clamp01(next.eyeSize);
+    setMorph(mesh, "Shape_Squareness", mild(next.faceWidth, 0.22));
+    setMorph(mesh, "Shape_Stern", mild(next.jaw, 0.22));
+    setMorph(mesh, "Shape_Sharpness", mild(next.chin, 0.18));
+    setMorph(mesh, "Shape_IrisSize", 0.16 + eye * 0.18);
+    setMorph(mesh, "Shape_EyeLidHeight", 0.52 + eye * 0.16);
+    setMorph(mesh, "Shape_EyesSquare", mild(next.faceWidth, 0.1));
+    setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16));
+    setMorph(mesh, "Shape_MouthWide", mild(next.faceWidth, 0.14));
+    setMorph(mesh, "Shape_MouthThin", (1 - clamp01(next.chin)) * 0.1);
+    setMorph(mesh, "Shape_RaiseBrows", 0.06 + eye * 0.08);
+    setMorph(mesh, "Shape_LowerBrows", mild(next.jaw, 0.08));
+    setMorph(mesh, "Shape_NoseTiltDown", mild(next.chin, 0.08));
+    setMorph(mesh, "Shape_LashLength", 0.42);
+    setMorph(mesh, "Shape_BrowsThickness", 0.32);
     setMorph(mesh, "Shape_Chest", clamp01(next.chest));
     setMorph(mesh, "Shape_Muscle", arms);
     setMorph(mesh, "Shape_ButtSize", hips);
@@ -121,7 +129,7 @@
     setMorph(mesh, "Shape_Curvy", hips * 0.4);
     setMorph(mesh, "Shape_Belly", Math.max(0, hips - 0.55) * 0.7);
     setMorph(mesh, "Shape_Weight", clamp01(next.age) * 0.28 + Math.max(0, hips - 0.65) * 0.35);
-    setMorph(mesh, "Shape_NeckThickness", clamp01(next.jaw) * 0.4);
+    setMorph(mesh, "Shape_NeckThickness", mild(next.jaw, 0.22));
     setMorph(mesh, "Shape_BodyType", arms * 0.35);
   }
 
@@ -270,6 +278,12 @@
       mat.roughness = 0.46 + age * 0.08;
       mat.needsUpdate = true;
     });
+    var head = skin.clone().lerp(white, 0.78);
+    headMats.forEach(function (mat) {
+      mat.color.copy(head);
+      mat.roughness = 0.42 + age * 0.06;
+      mat.needsUpdate = true;
+    });
     var hair = hexColor(HAIR_COLORS[next.hairColor] || HAIR_COLORS[0]);
     hairMats.forEach(function (mat) {
       mat.color.copy(hair);
@@ -277,11 +291,16 @@
       mat.needsUpdate = true;
     });
     var iris = hexColor(EYE_COLORS[next.eyeColor] || EYE_COLORS[0]);
-    iris.lerp(new THREE.Color(0xffffff), 0.08);
     eyeMats.forEach(function (mat) {
-      mat.color.copy(iris);
-      mat.roughness = 0.14;
-      mat.metalness = 0.08;
+      mat.color.setRGB(1, 1, 1);
+      if (mat.userData && mat.userData.irisColor) {
+        mat.userData.irisColor.copy(iris);
+      }
+      if (mat.userData && mat.userData.shader && mat.userData.shader.uniforms.irisColor) {
+        mat.userData.shader.uniforms.irisColor.value.copy(iris);
+      }
+      mat.roughness = 0.12;
+      mat.metalness = 0;
       mat.needsUpdate = true;
     });
   }
@@ -323,19 +342,20 @@
     return rt.texture;
   }
 
-  function injectSkinWrap(mat) {
+  function injectSkinWrap(mat, amount) {
+    var wrap = amount == null ? 0.22 : amount;
     mat.onBeforeCompile = function (shader) {
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <output_fragment>",
         [
-          "outgoingLight += vec3(0.26, 0.08, 0.05) * (1.0 - pow(max(dot(normal, vec3(0.15, 0.35, 0.92)), 0.0), 1.35)) * 0.22;",
+          "outgoingLight += vec3(0.26, 0.08, 0.05) * (1.0 - pow(max(dot(normal, vec3(0.15, 0.35, 0.92)), 0.0), 1.35)) * " + wrap.toFixed(3) + ";",
           "#include <output_fragment>"
         ].join("\n")
       );
     };
   }
 
-  function upgradeSkinMat(oldMat, envMap) {
+  function upgradeSkinMat(oldMat, envMap, wrapAmount) {
     var mat = new THREE.MeshPhysicalMaterial();
     if (oldMat && oldMat.map) mat.map = oldMat.map;
     if (oldMat && oldMat.normalMap) {
@@ -352,7 +372,47 @@
     mat.skinning = false;
     if (envMap) mat.envMap = envMap;
     if (mat.sheen && mat.sheen.isColor) mat.sheen.setRGB(0.32, 0.12, 0.08);
-    injectSkinWrap(mat);
+    injectSkinWrap(mat, wrapAmount);
+    return mat;
+  }
+
+  function upgradeIrisMat(oldMat, envMap) {
+    var mat = new THREE.MeshPhysicalMaterial();
+    if (oldMat && oldMat.map) mat.map = oldMat.map;
+    mat.color.setRGB(1, 1, 1);
+    mat.roughness = 0.12;
+    mat.metalness = 0;
+    mat.clearcoat = 0.62;
+    mat.clearcoatRoughness = 0.16;
+    mat.envMapIntensity = 0.4;
+    mat.morphTargets = true;
+    mat.skinning = false;
+    if (envMap) mat.envMap = envMap;
+    mat.userData.irisColor = new THREE.Color(EYE_COLORS[0]);
+    mat.onBeforeCompile = function (shader) {
+      shader.uniforms.irisColor = { value: mat.userData.irisColor };
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <common>",
+        "#include <common>\nuniform vec3 irisColor;"
+      );
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <map_fragment>",
+        [
+          "#include <map_fragment>",
+          "vec3 eyeTex = diffuseColor.rgb;",
+          "float greenKey = eyeTex.g - max(eyeTex.r, eyeTex.b);",
+          "float sclera = smoothstep(0.04, 0.22, greenKey);",
+          "float luma = dot(eyeTex, vec3(0.299, 0.587, 0.114));",
+          "float pupil = 1.0 - smoothstep(0.10, 0.38, luma);",
+          "vec3 scleraCol = vec3(0.97, 0.975, 0.985);",
+          "vec3 irisCol = mix(irisColor * 0.55, irisColor, clamp(luma * 1.4, 0.0, 1.0));",
+          "vec3 pupilCol = irisColor * 0.08;",
+          "vec3 colored = mix(irisCol, pupilCol, pupil * (1.0 - sclera));",
+          "diffuseColor.rgb = mix(colored, scleraCol, sclera);"
+        ].join("\n")
+      );
+      mat.userData.shader = shader;
+    };
     return mat;
   }
 
@@ -481,7 +541,7 @@
     window.addEventListener("resize", resize);
 
     new THREE.GLTFLoader().load(
-      "bozo-male.glb?v=9",
+      "bozo-male.glb?v=11",
       function (gltf) {
         try {
           modelRoot = gltf.scene;
@@ -504,11 +564,14 @@
             materialsOf(obj).forEach(function (mat, matIdx) {
               if (!mat || typeof mat !== "object") return;
               var matLabel = mat.name || "";
-              if (matLabel.indexOf("MAT_Skin") === 0) {
-                var skin = upgradeSkinMat(mat, envMap);
-                if (Array.isArray(obj.material)) obj.material[matIdx] = skin;
-                else obj.material = skin;
-                skinMats.push(skin);
+              var swapped = null;
+              if (matLabel.indexOf("MAT_SkinHead") === 0) {
+                swapped = upgradeSkinMat(mat, envMap, 0.07);
+                swapped.color.setRGB(1, 1, 1);
+                headMats.push(swapped);
+              } else if (matLabel.indexOf("MAT_Skin") === 0) {
+                swapped = upgradeSkinMat(mat, envMap, 0.18);
+                skinMats.push(swapped);
               } else if (matLabel.indexOf("MAT_Hair") === 0) {
                 mat.skinning = false;
                 mat.morphTargets = !!obj.morphTargetInfluences;
@@ -521,11 +584,8 @@
                 mat.envMapIntensity = 0.08;
                 hairMats.push(mat);
               } else if (matLabel.indexOf("MAT_Iris") === 0) {
-                mat.roughness = 0.18;
-                mat.metalness = 0.04;
-                mat.envMapIntensity = 0.25;
-                if (envMap) mat.envMap = envMap;
-                eyeMats.push(mat);
+                swapped = upgradeIrisMat(mat, envMap);
+                eyeMats.push(swapped);
               } else {
                 mat.skinning = false;
                 mat.morphTargets = !!obj.morphTargetInfluences;
@@ -534,7 +594,15 @@
                   mat.envMapIntensity = 0.12;
                 }
               }
+              if (swapped) {
+                if (Array.isArray(obj.material)) obj.material[matIdx] = swapped;
+                else obj.material = swapped;
+              }
             });
+            if (name.indexOf("Eyes_") === 0) {
+              obj.renderOrder = 2;
+              obj.scale.setScalar(1.045);
+            }
             if (obj.morphTargetInfluences && obj.morphTargetDictionary) {
               pruneToShapes(obj);
               if (obj.morphTargetInfluences.length) morphMeshes.push(obj);

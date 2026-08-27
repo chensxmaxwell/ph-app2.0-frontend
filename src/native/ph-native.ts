@@ -8,6 +8,9 @@ type PHNativeModule = {
 const Native = NativeModules.PHNative as PHNativeModule | undefined;
 
 export const bundledAvatarViewerUrl = (): string | null => {
+  if (typeof __DEV__ !== "undefined" && __DEV__) {
+    return null;
+  }
   if (Platform.OS === "android") {
     return "file:///android_asset/avatar-engine/viewer-page.html";
   }
