@@ -111,7 +111,7 @@
     setMorph(mesh, "Shape_Squareness", mild(next.faceWidth, 0.22));
     setMorph(mesh, "Shape_Stern", mild(next.jaw, 0.22));
     setMorph(mesh, "Shape_Sharpness", mild(next.chin, 0.18));
-    setMorph(mesh, "Shape_IrisSize", 0);
+    setMorph(mesh, "Shape_IrisSize", 0.72);
     setMorph(mesh, "Shape_EyeLidHeight", 0);
     setMorph(mesh, "Shape_EyesSquare", mild(next.faceWidth, 0.1));
     setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16));
@@ -406,16 +406,17 @@
         "#include <map_fragment>",
         [
           "#include <map_fragment>",
-          "vec3 tex = diffuseColor.rgb;",
-          "float luma = dot(tex, vec3(0.299, 0.587, 0.114));",
-          "float greenKey = tex.g - max(tex.r, tex.b);",
+          "vec2 c = vec2(0.5623, 0.4378);",
+          "float d = length((vUv - c) / vec2(0.061, 0.061));",
+          "float irisR = 0.52 * irisSize;",
+          "float pupilR = 0.20 * irisSize;",
+          "float irisM = 1.0 - smoothstep(irisR, irisR + 0.08, d);",
+          "float pupilM = 1.0 - smoothstep(pupilR, pupilR + 0.04, d);",
           "vec3 scleraCol = vec3(0.94, 0.95, 0.97);",
-          "vec3 irisCol = mix(irisColor, tex, 0.35);",
-          "vec3 col = scleraCol;",
-          "if (greenKey < 0.18 && luma > 0.08) {",
-          "  float pupilM = 1.0 - smoothstep(0.12, 0.22, luma);",
-          "  col = mix(irisCol, irisColor * 0.18, pupilM);",
-          "}",
+          "vec3 irisCol = mix(irisColor * 0.55, irisColor + vec3(0.18, 0.18, 0.22), 0.35);",
+          "vec3 pupilCol = vec3(0.05, 0.04, 0.04);",
+          "vec3 col = mix(scleraCol, irisCol, irisM);",
+          "col = mix(col, pupilCol, pupilM);",
           "diffuseColor.rgb = col;"
         ].join("\n")
       );
@@ -549,7 +550,7 @@
     window.addEventListener("resize", resize);
 
     new THREE.GLTFLoader().load(
-      "bozo-male.glb?v=reexport2",
+      "bozo-male.glb?v=reexport4",
       function (gltf) {
         try {
           modelRoot = gltf.scene;
