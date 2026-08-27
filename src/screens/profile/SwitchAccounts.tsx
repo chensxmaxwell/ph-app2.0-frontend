@@ -1,6 +1,6 @@
 import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { writeSessionUser } from "../../backend/session";
 import { useNavigation } from "@react-navigation/native";
 import { SCREENS } from "@common/constant";
 import { colors } from "@common/styles/colors";
@@ -21,7 +21,7 @@ export const SwitchAccountsScreen = () => {
   const navigation = useNavigation<NavigationType>();
 
   const addAccount = async () => {
-    await AsyncStorage.removeItem("user");
+    await writeSessionUser(null);
     rootOf(navigation).reset({
       index: 0,
       routes: [{ name: SCREENS.AUTH }],

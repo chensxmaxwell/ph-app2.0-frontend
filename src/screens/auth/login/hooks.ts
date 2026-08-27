@@ -1,11 +1,11 @@
 import { gql, useMutation } from "@apollo/client";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import { useNavigation } from "@react-navigation/native";
 import { useEffect, useState } from "react";
 import { Platform } from "react-native";
 
 import { googleSigninInit } from "@common/utils/GoogleSignInConfig";
+import { writeSessionUser } from "../../../backend/session";
 
 import { NavigationType } from "../../../../App";
 import { SCREENS } from "../../../common/constant";
@@ -69,8 +69,7 @@ export const useLogin = () => {
   const [loginUser] = useMutation(LOGIN_USER, {
     onCompleted: async (data) => {
       try {
-        const jsonString = JSON.stringify(data.loginUser);
-        await AsyncStorage.setItem("user", jsonString);
+        await writeSessionUser(data.loginUser);
         // setUserId(data.loginUser.id);
         // Use navigation 'reset' rather than 'navigate' prevent user returning back to login page after logged in
         navigation.reset({
@@ -120,8 +119,7 @@ export const useLogin = () => {
   const [loginGoogleUser] = useMutation(LOGIN_USER_WITH_GOOGLE, {
     onCompleted: async (data) => {
       try {
-        const jsonString = JSON.stringify(data.loginGoogleUser);
-        await AsyncStorage.setItem("user", jsonString);
+        await writeSessionUser(data.loginGoogleUser);
         // setUserId(data.loginGoogleUser.id);
         // Use navigation 'reset' rather than 'navigate' prevent user returning back to login page after logged in
         navigation.reset({
@@ -178,14 +176,11 @@ export const useLogin = () => {
     navigation.navigate(SCREENS.FORGOT_PASSWORD);
 
   const handleBypassLogin = async () => {
-    await AsyncStorage.setItem(
-      "user",
-      JSON.stringify({
-        id: "bypass",
-        email: "bypass@local",
-        token: "bypass",
-      })
-    );
+    await writeSessionUser({
+      id: "bypass",
+      email: "bypass@local",
+      token: "bypass",
+    });
     const rootNavigation = navigation.getParent() ?? navigation;
     rootNavigation.reset({
       index: 0,

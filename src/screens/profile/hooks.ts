@@ -4,7 +4,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   ANONYMOUS_USER_NAME,
   SessionUser,
-  isBypassUser,
   resolveProfileDisplayName,
 } from "./display-name";
 
@@ -92,8 +91,8 @@ export const useProfile = () => {
       .finally(() => setSessionReady(true));
   }, []);
 
-  const bypass = isBypassUser(sessionUser);
-  const skipRemote = !sessionReady || bypass || !sessionUser;
+  // Always query the on-device schema once a session exists (including bypass).
+  const skipRemote = !sessionReady || !sessionUser;
 
   const {
     loading: userLoading,
@@ -103,7 +102,7 @@ export const useProfile = () => {
 
   useEffect(() => {
     if (userError) return;
-    if (!userLoading && userData) {
+    if (!userLoading && userData?.currentUser) {
       setUser({
         id: userData.currentUser.id,
         email: userData.currentUser.email,

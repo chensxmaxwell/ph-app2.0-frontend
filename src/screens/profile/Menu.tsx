@@ -15,7 +15,7 @@ import LinearGradient from "react-native-linear-gradient";
 import { SCREENS } from "@common/constant";
 import { NavigationType } from "../../../App";
 import { useProfile } from "./hooks";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { writeSessionUser } from "../../backend/session";
 
 const MenuScreen = () => {
   const navigation = useNavigation<NavigationType>();
@@ -32,7 +32,7 @@ const MenuScreen = () => {
   };
 
   const handleLogout = async () => {
-    await AsyncStorage.removeItem("user");
+    await writeSessionUser(null);
     rootNavigation().reset({
       index: 0,
       routes: [{ name: SCREENS.AUTH }],

@@ -5,12 +5,22 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ttsSpeak, ttsStop } from "../../services/tts";
 import { companionChatOrFallback } from "../../services/llm";
 import { nextRegeneratedReply } from "../love/replies";
+import client from "../../apolloClient";
+import {
+  CHAT_THREADS,
+  DELETE_CHAT_THREAD,
+  PUT_RECORD,
+  SETTINGS_RECORDS,
+  UPSERT_CHAT_THREAD,
+} from "../../backend/operations";
+import { seedDirectory, seedThreads } from "../../backend/chat-seed";
+import { subscribeSessionUser } from "../../backend/session";
 import {
   ChatBubble,
   ChatThread,
@@ -18,99 +28,7 @@ import {
   FriendRequest,
 } from "./types";
 
-const STORAGE_KEY = "ph.chat.v2";
-
 export const FREE_HUMAN_MESSAGE_LIMIT = 1;
-
-const seedThreads = (): ChatThread[] => [
-  {
-    id: "kevin",
-    name: "Kevin",
-    kind: "bot",
-    preview: "Then stay. I've got you.",
-    time: "Yesterday",
-    pinned: true,
-    listen: false,
-    synced: false,
-    request: "none",
-    gender: "Male",
-    birthday: "05/25/1976",
-    description:
-      "Kevin is playful, attentive, and a little mischievous. He notices the small things and keeps the conversation close.",
-    personality: "Playful, attentive, a little mischievous.",
-    messages: [
-      { id: "k1", from: "them", text: "How's it going gorgeous?" },
-      { id: "k2", from: "me", text: "Just got home. You still up?" },
-      { id: "k3", from: "them", text: "Always am when you show up. Tell me about your day." },
-      { id: "k4", from: "me", text: "Long one. Glad you're here." },
-      { id: "k5", from: "them", text: "Then stay. I've got you." },
-    ],
-  },
-  {
-    id: "chad",
-    name: "Chad",
-    kind: "bot",
-    preview: "You. Same as last time.",
-    time: "2:14 PM",
-    pinned: false,
-    listen: false,
-    synced: false,
-    request: "none",
-    gender: "Male",
-    birthday: "13th April 2001",
-    description: "Chad is direct, confident, and a little competitive.",
-    personality: "Direct, confident, a little competitive.",
-    messages: [
-      { id: "c1", from: "them", text: "You finally opened this." },
-      { id: "c2", from: "me", text: "Didn't want to keep you waiting." },
-      { id: "c3", from: "them", text: "Good. I don't do small talk for long." },
-      { id: "c4", from: "me", text: "Then skip it. What's on your mind?" },
-      { id: "c5", from: "them", text: "You. Same as last time." },
-    ],
-  },
-  {
-    id: "amanda",
-    name: "Amanda",
-    kind: "bot",
-    preview: "Keep it. I like this one.",
-    time: "Now",
-    pinned: false,
-    listen: false,
-    synced: false,
-    request: "none",
-    gender: "Female",
-    birthday: "13th April 2001",
-    description:
-      "Amanda likes late-night talks and getting straight to what you want.",
-    personality: "Warm, witty, and a little teasing.",
-    messages: [
-      { id: "a1", from: "them", text: "Hey, it's Amanda. I saved you a seat." },
-      { id: "a2", from: "me", text: "Of course you did." },
-      { id: "a3", from: "them", text: "Don't act surprised. You always come back." },
-      { id: "a4", from: "me", text: "Bad habit." },
-      { id: "a5", from: "them", text: "Keep it. I like this one." },
-    ],
-  },
-];
-
-const seedDirectory = (): DirectoryPerson[] => [
-  {
-    id: "chad",
-    name: "Chad",
-    email: "123456@gmail.com",
-    gender: "Male",
-    birthday: "13th April 2001",
-    plan: "Free user",
-  },
-  {
-    id: "amanda",
-    name: "Amanda Guo",
-    email: "123456@gmail.com",
-    gender: "Female",
-    birthday: "13th April 2001",
-    plan: "Free user",
-  },
-];
 
 type ChatContextValue = {
   threads: ChatThread[];
@@ -158,6 +76,125 @@ type ChatContextValue = {
     story: string;
   }) => void;
   humanLimitReached: (thread: ChatThread) => boolean;
+};
+
+
+const threadToInput = (thread: ChatThread) => ({
+  id: thread.id,
+  name: thread.name,
+  kind: thread.kind,
+  email: thread.email,
+  preview: thread.preview,
+  time: thread.time,
+  pinned: thread.pinned,
+  listen: thread.listen,
+  synced: thread.synced,
+  request: thread.request,
+  gender: thread.gender,
+  birthday: thread.birthday,
+  description: thread.description,
+  personality: thread.personality,
+  messages: thread.messages.map((item) => ({
+    id: item.id,
+    from: item.from,
+    text: item.text,
+    voice: item.voice === true,
+    edited: item.edited === true,
+    synced: item.synced === true,
+  })),
+});
+
+const threadFromGql = (thread: any): ChatThread => ({
+  id: thread.id,
+  name: thread.name || "",
+  kind: thread.kind === "human" ? "human" : "bot",
+  email: thread.email || undefined,
+  preview: thread.preview || "",
+  time: thread.time || "",
+  pinned: !!thread.pinned,
+  listen: !!thread.listen,
+  synced: !!thread.synced,
+  request: (thread.request || "none") as FriendRequest,
+  gender: thread.gender || undefined,
+  birthday: thread.birthday || undefined,
+  description: thread.description || undefined,
+  personality: thread.personality || undefined,
+  messages: Array.isArray(thread.messages)
+    ? thread.messages.map((item: any) => ({
+        id: item.id,
+        from: item.from === "me" ? "me" : "them",
+        text: item.text || "",
+        voice: item.voice === true ? true : undefined,
+        edited: item.edited === true ? true : undefined,
+        synced: item.synced === true ? true : undefined,
+      }))
+    : [],
+});
+
+const loadThreadsFromBackend = async (): Promise<{
+  threads: ChatThread[];
+  isPremium: boolean;
+}> => {
+  const [threadResult, settingsResult] = await Promise.all([
+    client.query({ query: CHAT_THREADS, fetchPolicy: "no-cache" }),
+    client.query({
+      query: SETTINGS_RECORDS,
+      variables: { kind: "settings" },
+      fetchPolicy: "no-cache",
+    }),
+  ]);
+  const threads = Array.isArray(threadResult.data?.chatThreads)
+    ? threadResult.data.chatThreads.map(threadFromGql)
+    : [];
+  const premium = (settingsResult.data?.records || []).find(
+    (item: { id?: string }) => item.id === "premium"
+  );
+  let isPremium = false;
+  if (premium?.payload) {
+    try {
+      isPremium = !!JSON.parse(premium.payload).isPremium;
+    } catch {
+      isPremium = false;
+    }
+  }
+  return { threads: mergeSeedThreads(dedupeThreads(threads)), isPremium };
+};
+
+const persistThreadsToBackend = async (
+  threads: ChatThread[],
+  isPremium: boolean
+) => {
+  const remote = await client.query({
+    query: CHAT_THREADS,
+    fetchPolicy: "no-cache",
+  });
+  const remoteIds = new Set(
+    (remote.data?.chatThreads || []).map((item: { id: string }) => item.id)
+  );
+  const nextIds = new Set(threads.map((item) => item.id));
+  await Promise.all(
+    Array.from(remoteIds)
+      .filter((id) => !nextIds.has(id))
+      .map((id) =>
+        client.mutate({ mutation: DELETE_CHAT_THREAD, variables: { id } })
+      )
+  );
+  await Promise.all(
+    threads.map((thread) =>
+      client.mutate({
+        mutation: UPSERT_CHAT_THREAD,
+        variables: { input: threadToInput(thread) },
+      })
+    )
+  );
+  await client.mutate({
+    mutation: PUT_RECORD,
+    variables: {
+      kind: "settings",
+      id: "premium",
+      payload: JSON.stringify({ isPremium }),
+    },
+  });
 };
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -255,35 +292,70 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const [inCallThreadId, setInCallThreadId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
 
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const userIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY)
-      .then((raw) => {
-        if (!raw) {
-          return;
-        }
-        const parsed = JSON.parse(raw) as {
-          threads?: ChatThread[];
-          isPremium?: boolean;
-        };
-        if (Array.isArray(parsed.threads) && parsed.threads.length > 0) {
-          setThreads(dedupeThreads(mergeSeedThreads(parsed.threads)));
-        }
-        if (typeof parsed.isPremium === "boolean") {
-          setIsPremium(parsed.isPremium);
-        }
-      })
-      .catch(() => undefined)
-      .finally(() => setHydrated(true));
+    const unsubscribe = subscribeSessionUser((user) => {
+      const nextId = user?.id ?? null;
+      if (persistTimer.current) {
+        clearTimeout(persistTimer.current);
+        persistTimer.current = null;
+      }
+      userIdRef.current = nextId;
+      setHydrated(false);
+      if (!nextId) {
+        setThreads(seedThreads());
+        setIsPremium(false);
+        setHydrated(true);
+        return;
+      }
+      loadThreadsFromBackend()
+        .then((loaded) => {
+          if (userIdRef.current !== nextId) {
+            return;
+          }
+          if (loaded.threads.length > 0) {
+            setThreads(loaded.threads);
+          } else {
+            setThreads(seedThreads());
+          }
+          setIsPremium(loaded.isPremium);
+        })
+        .catch(() => {
+          if (userIdRef.current === nextId) {
+            setThreads(seedThreads());
+          }
+        })
+        .finally(() => {
+          if (userIdRef.current === nextId) {
+            setHydrated(true);
+          }
+        });
+    });
+    return () => {
+      unsubscribe();
+      if (persistTimer.current) {
+        clearTimeout(persistTimer.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
-    if (!hydrated) {
+    if (!hydrated || !userIdRef.current) {
       return;
     }
-    AsyncStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ threads, isPremium })
-    ).catch(() => undefined);
+    if (persistTimer.current) {
+      clearTimeout(persistTimer.current);
+    }
+    persistTimer.current = setTimeout(() => {
+      persistThreadsToBackend(threads, isPremium).catch(() => undefined);
+    }, 250);
+    return () => {
+      if (persistTimer.current) {
+        clearTimeout(persistTimer.current);
+      }
+    };
   }, [hydrated, isPremium, threads]);
 
   useEffect(() => {
@@ -584,6 +656,9 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     setThreads((current) =>
       current.filter((thread) => thread.id !== threadId)
     );
+    client
+      .mutate({ mutation: DELETE_CHAT_THREAD, variables: { id: threadId } })
+      .catch(() => undefined);
   }, []);
 
   const createBot = useCallback(
