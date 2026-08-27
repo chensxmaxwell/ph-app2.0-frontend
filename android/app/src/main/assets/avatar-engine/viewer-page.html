@@ -111,8 +111,8 @@
     setMorph(mesh, "Shape_Squareness", mild(next.faceWidth, 0.22));
     setMorph(mesh, "Shape_Stern", mild(next.jaw, 0.22));
     setMorph(mesh, "Shape_Sharpness", mild(next.chin, 0.18));
-    setMorph(mesh, "Shape_IrisSize", 0.16 + eye * 0.18);
-    setMorph(mesh, "Shape_EyeLidHeight", 0.52 + eye * 0.16);
+    setMorph(mesh, "Shape_IrisSize", 0.08 + eye * 0.12);
+    setMorph(mesh, "Shape_EyeLidHeight", 0.58 + eye * 0.14);
     setMorph(mesh, "Shape_EyesSquare", mild(next.faceWidth, 0.1));
     setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16));
     setMorph(mesh, "Shape_MouthWide", mild(next.faceWidth, 0.14));
@@ -140,10 +140,10 @@
   }
 
   var SKIN_BY_OUTFIT = {
-    0: { Hand: 1, Wrist: 1, LowerArm: 1, Neck: 1 },
+    0: { Hand: 1, Wrist: 1, Neck: 1 },
     1: { Hand: 1, Wrist: 1, Neck: 1 },
     2: { Hand: 1, Wrist: 1, Neck: 1 },
-    3: { Hand: 1, Wrist: 1, LowerArm: 1, UpperArm: 1, Shoulder: 1, Neck: 1 }
+    3: { Hand: 1, Wrist: 1, Neck: 1 }
   };
   var _bodyBox = new THREE.Box3();
   var _bodySize = new THREE.Vector3();
@@ -541,7 +541,7 @@
     window.addEventListener("resize", resize);
 
     new THREE.GLTFLoader().load(
-      "bozo-male.glb?v=11",
+      "bozo-male.glb?v=12",
       function (gltf) {
         try {
           modelRoot = gltf.scene;
@@ -601,7 +601,8 @@
             });
             if (name.indexOf("Eyes_") === 0) {
               obj.renderOrder = 2;
-              obj.scale.setScalar(1.045);
+              obj.scale.set(1, 1, 1);
+              obj.position.z = 0.012;
             }
             if (obj.morphTargetInfluences && obj.morphTargetDictionary) {
               pruneToShapes(obj);
