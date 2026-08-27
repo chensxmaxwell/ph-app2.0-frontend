@@ -9,11 +9,14 @@ from __future__ import annotations
 
 from math import radians
 from pathlib import Path
+import zlib
+import struct
 import random
 import re
 import sys
 
 import bpy
+from PIL import Image
 from mathutils import Matrix, Vector
 
 try:
@@ -159,12 +162,12 @@ def find_albedo(fbx_path: Path) -> Path | None:
     return pngs[0] if pngs else None
 
 
+
 def make_skin_image(name: str, size: int = 512) -> bpy.types.Image:
     """Light peach albedo with slight noise/AO so viewer skin tints still work."""
-    image = bpy.data.images.new(name, width=size, height=size, alpha=False)
-    pixels = [0.0] * (size * size * 4)
     rng = random.Random(7)
     base = (0.96, 0.88, 0.80)
+    px = []
     for y in range(size):
         for x in range(size):
             nx = x / size - 0.5
@@ -172,61 +175,95 @@ def make_skin_image(name: str, size: int = 512) -> bpy.types.Image:
             ao = 1.0 - 0.07 * min(1.0, (nx * nx + ny * ny) * 3.2)
             grain = 1.0 + (rng.random() - 0.5) * 0.035
             shade = ao * grain
-            index = (y * size + x) * 4
-            pixels[index] = min(1.0, base[0] * shade)
-            pixels[index + 1] = min(1.0, base[1] * shade)
-            pixels[index + 2] = min(1.0, base[2] * shade)
-            pixels[index + 3] = 1.0
-    image.pixels.foreach_set(pixels)
-    image.colorspace_settings.name = "sRGB"
-    image.update()
-    # Pack pixels as PNG. Default pack() keeps an empty/original file and
-    # glTF export then writes a black JPEG or the Unity ID map.
-    image.pack(as_png=True)
-    return image
+            px.append((
+                int(min(1.0, base[0] * shade) * 255 + 0.5),
+                int(min(1.0, base[1] * shade) * 255 + 0.5),
+                int(min(1.0, base[2] * shade) * 255 + 0.5),
+                255,
+            ))
+    im = Image.new("RGBA", (size, size))
+    im.putdata(px)
+    path = Path(f"/tmp/ph_tex_{name}.png")
+    im.save(path)
+    print("PIL skin", path, path.stat().st_size)
+    return load_image(path)
+
+
+def write_png_rgba(path: str, width: int, height: int, pixels: list[float]) -> None:
+    """PNG from Blender float RGBA (bottom-up). Avoid image.save() which writes black in 4.5."""
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    raw = bytearray()
+    row = width * 4
+    for y in range(height - 1, -1, -1):
+        raw.append(0)
+        start = y * row
+        for i in range(row):
+            raw.append(max(0, min(255, int(pixels[start + i] * 255.0 + 0.5))))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    Path(path).write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(bytes(raw), 6))
+        + chunk(b"IEND", b"")
+    )
+
+
+def persist_image(image: bpy.types.Image, name: str) -> bpy.types.Image:
+    """Write pixels to a PNG on disk and reload. Blender 4.5 glTF export
+    embeds black JPEGs if we only pack generated pixels."""
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in (name or "tex"))
+    path = f"/tmp/ph_tex_{safe}.png"
+    width, height = image.size
+    pixels = [0.0] * (width * height * 4)
+    image.pixels.foreach_get(pixels)
+    write_png_rgba(path, width, height, pixels)
+    size = Path(path).stat().st_size if Path(path).exists() else 0
+    print("PERSIST", name, path, size, "wh", width, height, "mean", sum(pixels[:4000]) / 4000)
+    loaded = bpy.data.images.load(path, check_existing=False)
+    loaded.colorspace_settings.name = "sRGB"
+    loaded.name = name
+    return loaded
+
 
 
 def recolor_id_image(
-    src: bpy.types.Image,
+    src_path: Path,
     palette: tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]],
     dest_name: str,
     size: int = 512,
     keep_white: bool = True,
 ) -> bpy.types.Image:
     """Replace Unity RGB ID regions with garment colors. Near-black stays black."""
-    width, height = src.size
-    count = width * height * 4
-    pixels = [0.0] * count
-    src.pixels.foreach_get(pixels)
+    src = Image.open(src_path).convert("RGBA")
+    if size and src.size != (size, size):
+        src = src.resize((size, size), Image.NEAREST)
+    pixels = list(src.getdata())
     color_r, color_g, color_b = palette
-    for index in range(0, count, 4):
-        red = pixels[index]
-        green = pixels[index + 1]
-        blue = pixels[index + 2]
-        maximum = red if red > green else green
-        if blue > maximum:
-            maximum = blue
-        minimum = red if red < green else green
-        if blue < minimum:
-            minimum = blue
+    out = []
+    for red_i, green_i, blue_i, alpha in pixels:
+        red, green, blue = red_i / 255.0, green_i / 255.0, blue_i / 255.0
+        maximum = max(red, green, blue)
+        minimum = min(red, green, blue)
         if maximum < 0.08:
-            pixels[index] = 0.0
-            pixels[index + 1] = 0.0
-            pixels[index + 2] = 0.0
+            out.append((0, 0, 0, alpha))
             continue
         if keep_white and minimum > 0.88 and (maximum - minimum) < 0.10:
+            out.append((red_i, green_i, blue_i, alpha))
             continue
-        pixels[index] = min(1.0, red * color_r[0] + green * color_g[0] + blue * color_b[0])
-        pixels[index + 1] = min(1.0, red * color_r[1] + green * color_g[1] + blue * color_b[1])
-        pixels[index + 2] = min(1.0, red * color_r[2] + green * color_g[2] + blue * color_b[2])
-    image = bpy.data.images.new(dest_name, width=width, height=height, alpha=True)
-    image.pixels.foreach_set(pixels)
-    if size and (width != size or height != size):
-        image.scale(size, size)
-    image.colorspace_settings.name = "sRGB"
-    image.update()
-    image.pack(as_png=True)
-    return image
+        out.append((
+            int(min(1.0, red * color_r[0] + green * color_g[0] + blue * color_b[0]) * 255 + 0.5),
+            int(min(1.0, red * color_r[1] + green * color_g[1] + blue * color_b[1]) * 255 + 0.5),
+            int(min(1.0, red * color_r[2] + green * color_g[2] + blue * color_b[2]) * 255 + 0.5),
+            alpha,
+        ))
+    im = Image.new("RGBA", src.size)
+    im.putdata(out)
+    path = Path(f"/tmp/ph_tex_{dest_name}.png")
+    im.save(path)
+    print("PIL recolor", dest_name, path, path.stat().st_size, "from", src_path.name)
+    return load_image(path)
 
 
 def make_material(
@@ -351,10 +388,14 @@ def rotate_pose_bone_world(arm_obj: bpy.types.Object, bone_name: str, axis: str,
 
 
 def pose_a_pose(arm_obj: bpy.types.Object) -> None:
-    """Drop T-pose arms into a relaxed A-pose on Epic-style upperarm/lowerarm bones."""
+    """Skip extra arm rotations. The BoZo FBX rest pose already has arms out;
+    folding them another 42deg glued sleeves to the torso."""
     global A_POSE_APPLIED, A_POSE_BONES
     if arm_obj.type != "ARMATURE":
         return
+    print("A-POSE skipped (source rest pose already has arms out)", arm_obj.name)
+    A_POSE_APPLIED = True
+    return
     arm_obj.data.pose_position = "POSE"
     activate(arm_obj)
     bpy.ops.object.mode_set(mode="POSE")
@@ -790,10 +831,9 @@ rename_meshes(eye_objs, "Eyes")
 
 for hair_i, pair in enumerate(HAIRS):
     albedo_path = find_albedo(pair[0]) or find_albedo(pair[1])
-    src = load_image(albedo_path) if albedo_path else None
-    if src is not None:
+    if albedo_path is not None:
         hair_img = recolor_id_image(
-            src,
+            albedo_path,
             ((0.92, 0.88, 0.82), (0.55, 0.42, 0.32), (0.25, 0.18, 0.12)),
             f"HairAlbedo_{hair_i}",
             size=512,
@@ -812,11 +852,10 @@ for outfit_i, parts in enumerate(OUTFITS):
     for label, path in zip(labels, parts):
         objs = process_import(path, avatar)
         albedo_path = find_albedo(path)
-        src = load_image(albedo_path) if albedo_path else None
         palette = OUTFIT_PALETTES[outfit_i][label]
-        if src is not None:
+        if albedo_path is not None:
             cloth_img = recolor_id_image(
-                src,
+                albedo_path,
                 palette,
                 f"Cloth_{outfit_i}_{label}",
                 size=512,

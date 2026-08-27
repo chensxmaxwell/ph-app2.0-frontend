@@ -111,8 +111,8 @@
     setMorph(mesh, "Shape_Squareness", mild(next.faceWidth, 0.22));
     setMorph(mesh, "Shape_Stern", mild(next.jaw, 0.22));
     setMorph(mesh, "Shape_Sharpness", mild(next.chin, 0.18));
-    setMorph(mesh, "Shape_IrisSize", 0.02);
-    setMorph(mesh, "Shape_EyeLidHeight", 0.3 + eye * 0.08);
+    setMorph(mesh, "Shape_IrisSize", 0);
+    setMorph(mesh, "Shape_EyeLidHeight", 0);
     setMorph(mesh, "Shape_EyesSquare", mild(next.faceWidth, 0.1));
     setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16));
     setMorph(mesh, "Shape_MouthWide", mild(next.faceWidth, 0.14));
@@ -231,7 +231,11 @@
         });
         return;
       }
-      if (name.indexOf("Head_") === 0 || name.indexOf("Eyes_") === 0) {
+      if (name.indexOf("Head_") === 0) {
+        obj.visible = true;
+        return;
+      }
+      if (name.indexOf("Eyes_") === 0) {
         obj.visible = true;
         return;
       }
@@ -402,17 +406,16 @@
         "#include <map_fragment>",
         [
           "#include <map_fragment>",
-          "vec2 c = vec2(0.5623, 0.4378);",
-          "float d = length((vUv - c) * 16.5);",
-          "float irisR = 0.48 * irisSize;",
-          "float pupilR = 0.20 * irisSize;",
-          "float irisM = 1.0 - smoothstep(irisR, irisR + 0.09, d);",
-          "float pupilM = 1.0 - smoothstep(pupilR, pupilR + 0.05, d);",
-          "vec3 scleraCol = vec3(0.93, 0.94, 0.96);",
-          "vec3 irisCol = mix(irisColor, irisColor + vec3(0.12, 0.12, 0.14), 0.28);",
-          "vec3 pupilCol = irisColor * 0.16;",
-          "vec3 col = mix(scleraCol, irisCol, irisM);",
-          "col = mix(col, pupilCol, pupilM);",
+          "vec3 tex = diffuseColor.rgb;",
+          "float luma = dot(tex, vec3(0.299, 0.587, 0.114));",
+          "float greenKey = tex.g - max(tex.r, tex.b);",
+          "vec3 scleraCol = vec3(0.94, 0.95, 0.97);",
+          "vec3 irisCol = mix(irisColor, tex, 0.35);",
+          "vec3 col = scleraCol;",
+          "if (greenKey < 0.18 && luma > 0.08) {",
+          "  float pupilM = 1.0 - smoothstep(0.12, 0.22, luma);",
+          "  col = mix(irisCol, irisColor * 0.18, pupilM);",
+          "}",
           "diffuseColor.rgb = col;"
         ].join("\n")
       );
@@ -546,7 +549,7 @@
     window.addEventListener("resize", resize);
 
     new THREE.GLTFLoader().load(
-      "bozo-male.glb?v=13",
+      "bozo-male.glb?v=reexport2",
       function (gltf) {
         try {
           modelRoot = gltf.scene;
