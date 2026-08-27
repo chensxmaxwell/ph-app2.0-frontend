@@ -1,4 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  LLM_API_KEY,
+  LLM_BASE_URL,
+  LLM_MODEL,
+} from "./llm-env.generated";
 
 const STORAGE_KEY = "ph.llm.v1";
 
@@ -8,26 +13,11 @@ export type LlmConfig = {
   model: string;
 };
 
-const envDefaults = (): LlmConfig => {
-  try {
-    const env = require("@env") as {
-      LLM_API_KEY?: string;
-      LLM_BASE_URL?: string;
-      LLM_MODEL?: string;
-    };
-    return {
-      apiKey: env.LLM_API_KEY ?? "",
-      baseUrl: env.LLM_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3",
-      model: env.LLM_MODEL || "deepseek-v4-flash-ga-260731",
-    };
-  } catch {
-    return {
-      apiKey: "",
-      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
-      model: "deepseek-v4-flash-ga-260731",
-    };
-  }
-};
+const envDefaults = (): LlmConfig => ({
+  apiKey: LLM_API_KEY || "",
+  baseUrl: LLM_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3",
+  model: LLM_MODEL || "deepseek-v4-flash-ga-260731",
+});
 
 export const defaultLlmConfig = envDefaults;
 
@@ -40,7 +30,7 @@ export const loadLlmConfig = async (): Promise<LlmConfig> => {
     }
     const parsed = JSON.parse(raw) as Partial<LlmConfig>;
     return {
-      apiKey: parsed.apiKey ?? defaults.apiKey,
+      apiKey: parsed.apiKey || defaults.apiKey,
       baseUrl: parsed.baseUrl || defaults.baseUrl,
       model: parsed.model || defaults.model,
     };
