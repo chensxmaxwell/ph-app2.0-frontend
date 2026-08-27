@@ -17,14 +17,14 @@ const envDefaults = (): LlmConfig => {
     };
     return {
       apiKey: env.LLM_API_KEY ?? "",
-      baseUrl: env.LLM_BASE_URL || "https://api.openai.com/v1",
-      model: env.LLM_MODEL || "gpt-4o-mini",
+      baseUrl: env.LLM_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3",
+      model: env.LLM_MODEL || "deepseek-v4-flash-ga-260731",
     };
   } catch {
     return {
       apiKey: "",
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-4o-mini",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      model: "deepseek-v4-flash-ga-260731",
     };
   }
 };
