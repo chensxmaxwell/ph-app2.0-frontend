@@ -28,47 +28,44 @@ const MotionSensorScreen = () => {
   const [amplitude, setAmplitude] = useState(0);
   const waveRef = useRef(null);
 
-  // Set the update interval for the accelerometer
-  setUpdateIntervalForType(SensorTypes.accelerometer, 2000);
-
   const { setCurrentMode, motor_selection_table, setMotorInput } =
     useHomeScreen();
 
-  let calculatedAmplitude: number = 0;
-
   useEffect(() => {
-    // Subscribe to the accelerometer sensor
+    setUpdateIntervalForType(SensorTypes.accelerometer, 50);
+    let gx = 0;
+    let gy = 0;
+    let gz = 0;
+    let primed = false;
     const subscription = accelerometer.subscribe(
       ({ x, y, z }) => {
-        // Calculate the amplitude using the magnitude of the acceleration vector
-        calculatedAmplitude = Math.floor(Math.sqrt(x * x + y * y + z * z) * 10);
-        // console.log(calculatedAmplitude);
-        setAmplitude(calculatedAmplitude); // Update state with the amplitude
-
-        // 根据 amplitude 动态更新波浪效果
+        if (!primed) {
+          gx = x;
+          gy = y;
+          gz = z;
+          primed = true;
+        } else {
+          const alpha = 0.85;
+          gx = alpha * gx + (1 - alpha) * x;
+          gy = alpha * gy + (1 - alpha) * y;
+          gz = alpha * gz + (1 - alpha) * z;
+        }
+        const linear = Math.sqrt(
+          (x - gx) * (x - gx) + (y - gy) * (y - gy) + (z - gz) * (z - gz)
+        );
+        const next = Math.max(0, Math.min(100, Math.round(linear * 55)));
+        setAmplitude(next);
         if (waveRef.current) {
-          let newWaveParams;
-          if (calculatedAmplitude < 12) {
-            newWaveParams = [{ A: 20, T: 500, fill: "#CCA0DD" }];
-          } else if (calculatedAmplitude < 22) {
-            newWaveParams = [{ A: 65, T: 500, fill: "#CCA0DD" }];
-          } else if (calculatedAmplitude < 32) {
-            newWaveParams = [{ A: 110, T: 500, fill: "#CCA0DD" }];
-          } else if (calculatedAmplitude < 42) {
-            newWaveParams = [{ A: 155, T: 500, fill: "#CCA0DD" }];
-          } else {
-            newWaveParams = [{ A: 200, T: 500, fill: "#CCA0DD" }];
-          }
+          const waveH =
+            next < 12 ? 20 : next < 28 ? 65 : next < 48 ? 110 : next < 72 ? 155 : 200;
           // @ts-ignore
-          waveRef.current.setWaveParams(newWaveParams); // 调用 setWaveParams 动态更新波浪效果
+          waveRef.current.setWaveParams([{ A: waveH, T: 360, fill: "#CCA0DD" }]);
         }
       },
-      (error) => {
-        console.log("The sensor is not available:", error);
+      () => {
+        setAmplitude(0);
       }
     );
-
-    // Clean up the subscription when the component unmounts
     return () => {
       subscription.unsubscribe();
     };

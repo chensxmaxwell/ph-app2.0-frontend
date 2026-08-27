@@ -1,5 +1,12 @@
 import React, { useEffect, useState, useRef } from "react";
-import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  PermissionsAndroid,
+  Platform,
+} from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
@@ -17,28 +24,56 @@ const SoundMeter = () => {
   const navigation = useNavigation();
   const { setCurrentMode, setMotorInput } = useHomeScreen();
   const [stop, setStop] = useState(true);
-  const [dBLevel, setdBLevel] = useState(100);
+  const [dBLevel, setdBLevel] = useState(0);
+  const [intensity, setIntensity] = useState(0);
 
   const audioRecorderPlayer = useRef(new AudioRecorderPlayer()).current;
 
-  // Function to toggle between stopping and resuming
-  const toggleStop = async () => {
-    // setdBLevel(100);
-    if (stop) {
-      // Resume recording
-      await audioRecorderPlayer.startRecorder();
-    } else {
-      // Stop recording
-      await audioRecorderPlayer.stopRecorder();
+  const startMic = async () => {
+    if (Platform.OS === "android") {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        return false;
+      }
     }
-    setStop(!stop); // Toggle the stop state
+    audioRecorderPlayer.setSubscriptionDuration(0.08);
+    await audioRecorderPlayer.startRecorder(undefined, undefined, true);
+    return true;
+  };
+
+  const toggleStop = async () => {
+    if (stop) {
+      const ok = await startMic();
+      if (ok) {
+        setStop(false);
+      }
+      return;
+    }
+    await audioRecorderPlayer.stopRecorder();
+    setStop(true);
+    setIntensity(0);
   };
 
   useEffect(() => {
     audioRecorderPlayer.addRecordBackListener((e) => {
-      const meteringValue = e.currentMetering ?? 20;
-      setdBLevel(Math.round(meteringValue));
+      const raw = typeof e.currentMetering === "number" ? e.currentMetering : -60;
+      let db = raw;
+      if (raw > 0) {
+        db = 20 * Math.log10(Math.max(raw, 1) / 120);
+      }
+      const level = Math.max(0, Math.min(100, Math.round((db + 50) * 2)));
+      setdBLevel(Math.round(db));
+      setIntensity(level);
     });
+    startMic()
+      .then((ok) => {
+        if (ok) {
+          setStop(false);
+        }
+      })
+      .catch(() => {});
     return () => {
       audioRecorderPlayer.stopRecorder();
       audioRecorderPlayer.removeRecordBackListener();
@@ -53,10 +88,9 @@ const SoundMeter = () => {
       setMotorInput([]);
       return;
     }
-    const level = Math.max(8, Math.min(100, Math.abs(dBLevel) * 2));
     setCurrentMode("sound");
-    setMotorInput([1, level, level, level]);
-  }, [dBLevel, setCurrentMode, setMotorInput, stop]);
+    setMotorInput([1, intensity, intensity, intensity]);
+  }, [intensity, setCurrentMode, setMotorInput, stop]);
 
   return (
     <View style={styles.container}>

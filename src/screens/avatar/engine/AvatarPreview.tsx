@@ -12,8 +12,13 @@ import { WebView } from "react-native-webview";
 import { colors } from "@common/styles/colors";
 import { AvatarLook } from "./viewer-html";
 import { LookFace } from "../look-face";
+import { bundledAvatarViewerUrl } from "../../../native/ph-native";
 
 export const avatarViewerUri = (nonce = 0) => {
+  const bundled = bundledAvatarViewerUrl();
+  if (bundled) {
+    return bundled;
+  }
   const scriptURL = NativeModules.SourceCode?.scriptURL || "";
   const match = String(scriptURL).match(/^(https?):\/\/([^/:]+)(?::(\d+))?/);
   if (!match) {
@@ -88,8 +93,6 @@ export const AvatarPreview = ({
     setNonce((current) => current + 1);
   };
 
-  // Release IPA has no Metro :8081. Bundling viewer.html + 4MB GLB is left
-  // for a later pass; show a still portrait so Release does not white-screen.
   if (!viewerUri) {
     return (
       <View style={[styles.wrap, { width, height, alignItems: "center", justifyContent: "center" }]}>
@@ -105,6 +108,14 @@ export const AvatarPreview = ({
         ref={webRef}
         originWhitelist={["*"]}
         source={{ uri: viewerUri }}
+        allowingReadAccessToURL={
+          viewerUri.startsWith("file:")
+            ? viewerUri.replace(/\/[^/]*$/, "/")
+            : undefined
+        }
+        allowFileAccess
+        allowFileAccessFromFileURLs
+        allowUniversalAccessFromFileURLs
         style={[styles.web, { width, height }]}
         scrollEnabled={false}
         bounces={false}

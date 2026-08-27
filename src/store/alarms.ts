@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BUILTIN_PATTERNS } from "./patterns";
 import { STORE_KEYS, currentUserId, scopedKey } from "../backend/session";
 import { migrateLegacyStores } from "../backend/store";
+import { syncNativeAlarms } from "../native/ph-native";
 
 const alarmKey = async () => {
   const userId = (await currentUserId()) || "anon";
@@ -79,6 +80,7 @@ export const loadAlarms = async (): Promise<SavedAlarm[]> => {
 
 export const saveAlarms = async (alarms: SavedAlarm[]) => {
   await AsyncStorage.setItem(await alarmKey(), JSON.stringify(alarms));
+  await syncNativeAlarms(alarms);
 };
 
 export const addAlarm = async (alarm: Omit<SavedAlarm, "id" | "enabled">) => {
