@@ -1,49 +1,33 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
+  Dimensions,
   LayoutChangeEvent,
-  NativeModules,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
-import { WebView } from "react-native-webview";
 import { colors } from "@common/styles/colors";
 import { AvatarLook } from "./viewer-html";
 import { LookFace } from "../look-face";
-import { bundledAvatarViewerUrl } from "../../../native/ph-native";
+import {
+  allocAvatarSlotId,
+  attachAvatarSlot,
+  AvatarViewMode,
+  detachAvatarSlot,
+  updateAvatarSlotLook,
+  useAvatarEngine,
+} from "./AvatarEngineHost";
 
-export const avatarViewerUri = (nonce = 0) => {
-  const bundled = bundledAvatarViewerUrl();
-  if (bundled) {
-    return bundled;
-  }
-  const scriptURL = NativeModules.SourceCode?.scriptURL || "";
-  const match = String(scriptURL).match(/^(https?):\/\/([^/:]+)(?::(\d+))?/);
-  if (!match) {
-    return null;
-  }
-  const protocol = match[1];
-  const host = match[2];
-  const metroPort = match[3] || "8081";
-  return `${protocol}://${host}:${metroPort}/ph-avatar/viewer.html?v=bozo23&r=${nonce}`;
-};
-
-const LOAD_TIMEOUT_MS = 15000;
-
-type LoadStatus = "loading" | "ready" | "error";
+export { avatarViewerUri } from "./AvatarEngineHost";
 
 type AvatarPreviewProps = {
   look: AvatarLook;
   width: number;
   height: number;
-  viewMode?: "full" | "bust";
+  viewMode?: AvatarViewMode;
   revealBody?: boolean;
 };
-
-const metroHint = (uri: string) =>
-  `Phone must reach Metro at ${uri.replace(/\/ph-avatar\/.*$/, "")}. Same Wi‑Fi as the Mac running npm start.`;
 
 export const AvatarPreview = ({
   look,
@@ -52,107 +36,75 @@ export const AvatarPreview = ({
   viewMode = "full",
   revealBody = false,
 }: AvatarPreviewProps) => {
-  const webRef = useRef<WebView>(null);
-  const [nonce, setNonce] = useState(0);
-  const [status, setStatus] = useState<LoadStatus>("loading");
-  const [errorMessage, setErrorMessage] = useState("");
-  const viewerUri = useMemo(() => avatarViewerUri(nonce), [nonce]);
-  const payload = JSON.stringify({ ...look, viewMode, revealBody });
+  const viewRef = useRef<View>(null);
+  const slotIdRef = useRef<number | null>(null);
+  if (slotIdRef.current == null) {
+    slotIdRef.current = allocAvatarSlotId();
+  }
+  const slotId = slotIdRef.current;
+  const propsRef = useRef({ look, viewMode, revealBody });
+  propsRef.current = { look, viewMode, revealBody };
+  const { status, errorMessage, retry, viewerUri } = useAvatarEngine();
 
-  const fail = (raw: string) => {
-    const detail = raw.trim() || "Unknown preview error";
-    setStatus("error");
-    setErrorMessage(`${detail}\n${viewerUri ? metroHint(viewerUri) : "3D preview is unavailable in this Release build."}`);
-  };
-
-  const pushLook = () => {
-    webRef.current?.injectJavaScript(
-      `window.applyLook && window.applyLook(${payload}); true;`
-    );
+  const publish = () => {
+    const current = propsRef.current;
+    viewRef.current?.measureInWindow((x, y, measuredWidth, measuredHeight) => {
+      if (measuredWidth < 2 || measuredHeight < 2) {
+        return;
+      }
+      attachAvatarSlot(slotId, {
+        rect: {
+          x: Math.round(x),
+          y: Math.round(y),
+          width: Math.round(measuredWidth),
+          height: Math.round(measuredHeight),
+        },
+        look: current.look,
+        viewMode: current.viewMode,
+        revealBody: current.revealBody,
+      });
+    });
   };
 
   useEffect(() => {
-    if (status === "ready") {
-      pushLook();
-    }
-  }, [payload, status]);
+    updateAvatarSlotLook(slotId, look, viewMode, revealBody);
+    publish();
+  }, [look, viewMode, revealBody, width, height, slotId]);
 
   useEffect(() => {
-    if (!viewerUri || status !== "loading") {
-      return;
-    }
-    const timer = setTimeout(() => {
-      fail("Timed out while loading the 3D model.");
-    }, LOAD_TIMEOUT_MS);
-    return () => clearTimeout(timer);
-  }, [nonce, status, viewerUri]);
+    const handle = Dimensions.addEventListener("change", publish);
+    return () => handle.remove();
+  }, [slotId]);
 
-  const retry = () => {
-    setErrorMessage("");
-    setStatus("loading");
-    setNonce((current) => current + 1);
-  };
+  useEffect(() => {
+    return () => detachAvatarSlot(slotId);
+  }, [slotId]);
 
   if (!viewerUri) {
     return (
-      <View style={[styles.wrap, { width, height, alignItems: "center", justifyContent: "center" }]}>
+      <View
+        style={[
+          styles.wrap,
+          { width, height, alignItems: "center", justifyContent: "center" },
+        ]}
+      >
         <LookFace look={look} size={Math.min(width, height)} />
       </View>
     );
   }
 
   return (
-    <View style={[styles.wrap, { width, height }]}>
-      <WebView
-        key={nonce}
-        ref={webRef}
-        originWhitelist={["*"]}
-        source={{ uri: viewerUri }}
-        allowingReadAccessToURL={
-          viewerUri.startsWith("file:")
-            ? viewerUri.replace(/\/[^/]*$/, "/")
-            : undefined
-        }
-        allowFileAccess
-        allowFileAccessFromFileURLs
-        allowUniversalAccessFromFileURLs
-        style={[styles.web, { width, height }]}
-        scrollEnabled={false}
-        bounces={false}
-        showsVerticalScrollIndicator={false}
-        showsHorizontalScrollIndicator={false}
-        androidLayerType="hardware"
-        mixedContentMode="always"
-        javaScriptEnabled
-        onLoadEnd={() => {
-          if (status === "ready") {
-            pushLook();
-          }
-        }}
-        onHttpError={(event) => {
-          const { statusCode, description } = event.nativeEvent;
-          fail(`HTTP ${statusCode}${description ? ` ${description}` : ""}`);
-        }}
-        onError={(event) => {
-          fail(event.nativeEvent.description || "WebView failed to load");
-        }}
-        onMessage={(event) => {
-          const data = event.nativeEvent.data || "";
-          if (data === "ready") {
-            setStatus("ready");
-            pushLook();
-            return;
-          }
-          if (data.startsWith("error:")) {
-            fail(data.slice("error:".length));
-          }
-        }}
-      />
-      {status === "loading" ? (
-        <View style={styles.overlay} pointerEvents="none">
-          <ActivityIndicator color={colors.white} />
-          <Text style={styles.overlayTitle}>Loading 3D model…</Text>
-        </View>
+    <View
+      ref={viewRef}
+      collapsable={false}
+      style={[
+        styles.wrap,
+        { width, height, alignItems: "center", justifyContent: "center" },
+      ]}
+      onLayout={publish}
+    >
+      {status !== "ready" && status !== "error" ? (
+        <LookFace look={look} size={Math.min(width, height)} />
       ) : null}
       {status === "error" ? (
         <View style={styles.overlay}>
@@ -179,7 +131,7 @@ export const FittedAvatarPreview = ({
 }: {
   look: AvatarLook;
   aspect?: number;
-  viewMode?: "full" | "bust";
+  viewMode?: AvatarViewMode;
   revealBody?: boolean;
 }) => {
   const [size, setSize] = useState({ width: 1, height: 1 });
@@ -221,10 +173,6 @@ export const FittedAvatarPreview = ({
 const styles = StyleSheet.create({
   wrap: {
     overflow: "hidden",
-    backgroundColor: "transparent",
-  },
-  web: {
-    flex: 1,
     backgroundColor: "transparent",
   },
   fit: {

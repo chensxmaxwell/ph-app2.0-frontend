@@ -30,6 +30,7 @@ import { CompanionsProvider } from "./src/store/companions";
 import { LoveSessionProvider } from "./src/screens/love/session";
 import { ChatProvider } from "./src/screens/chat/store";
 import { TtsHost } from "./src/services/TtsHost";
+import { AvatarEngineHost } from "./src/screens/avatar/engine/AvatarEngineHost";
 import { OpenAnimationScreen } from "./src/screens/auth/open-animation";
 
 const Stack = createNativeStackNavigator();
@@ -77,6 +78,7 @@ function App(): React.JSX.Element {
                   />
                 </Stack.Navigator>
               </NavigationContainer>
+              <AvatarEngineHost />
               <CustomAlert />
               </ChatProvider>
               </LoveSessionProvider>
