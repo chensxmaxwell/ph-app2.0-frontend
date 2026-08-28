@@ -27,7 +27,7 @@ export const avatarViewerUri = (nonce = 0) => {
   const protocol = match[1];
   const host = match[2];
   const metroPort = match[3] || "8081";
-  return `${protocol}://${host}:${metroPort}/ph-avatar/viewer.html?v=bozo22&r=${nonce}`;
+  return `${protocol}://${host}:${metroPort}/ph-avatar/viewer.html?v=bozo23&r=${nonce}`;
 };
 
 const LOAD_TIMEOUT_MS = 15000;

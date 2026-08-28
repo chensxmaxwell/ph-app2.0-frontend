@@ -45,6 +45,8 @@
   var eyeMats = [];
   var headBones = [];
   var headRests = [];
+  var armBones = [];
+  var armRests = [];
   var modelHeight = 1.75;
   var pendingLook = null;
   var ready = false;
@@ -111,8 +113,6 @@
     setMorph(mesh, "Shape_Squareness", mild(next.faceWidth, 0.22));
     setMorph(mesh, "Shape_Stern", mild(next.jaw, 0.22));
     setMorph(mesh, "Shape_Sharpness", mild(next.chin, 0.18));
-    setMorph(mesh, "Shape_IrisSize", 0);
-    setMorph(mesh, "Shape_EyeLidHeight", 0);
     setMorph(mesh, "Shape_EyesSquare", mild(next.faceWidth, 0.1));
     setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16));
     setMorph(mesh, "Shape_MouthWide", mild(next.faceWidth, 0.14));
@@ -270,6 +270,7 @@
       }
       obj.visible = false;
     });
+    applyOutfitPose(outfit);
   }
 
   function tintLook(next) {
@@ -282,7 +283,7 @@
       mat.roughness = 0.46 + age * 0.08;
       mat.needsUpdate = true;
     });
-    var head = skin.clone().lerp(white, 0.78);
+    var head = skin.clone();
     headMats.forEach(function (mat) {
       mat.color.copy(head);
       mat.roughness = 0.42 + age * 0.06;
@@ -395,7 +396,7 @@
     mat.clearcoatRoughness = 0.62;
     mat.envMapIntensity = 0.2;
     mat.morphTargets = true;
-    mat.skinning = false;
+    mat.skinning = true;
     if (envMap) mat.envMap = envMap;
     if (mat.sheen && mat.sheen.isColor) mat.sheen.setRGB(0.32, 0.12, 0.08);
     injectSkinWrap(mat, wrapAmount);
@@ -412,7 +413,7 @@
     mat.clearcoatRoughness = 0.18;
     mat.envMapIntensity = 0.12;
     mat.morphTargets = true;
-    mat.skinning = false;
+    mat.skinning = true;
     if (envMap) mat.envMap = envMap;
     mat.userData.irisColor = new THREE.Color(0x2e4d7a);
     mat.userData.irisSize = 1.0;
@@ -471,10 +472,97 @@
     scene.add(mesh);
   }
 
+  var _poseParentQ = new THREE.Quaternion();
+  var _poseLocal = new THREE.Quaternion();
+  var _poseWorld = new THREE.Quaternion();
+  var _poseDelta = new THREE.Quaternion();
+  var _axisX = new THREE.Vector3(1, 0, 0);
+  var _axisY = new THREE.Vector3(0, 1, 0);
+  var _axisZ = new THREE.Vector3(0, 0, 1);
+
+  function isRightBone(name) {
+    var n = (name || "").toLowerCase();
+    if (n.indexOf("_r") >= 0) return true;
+    if (n.indexOf("right") >= 0) return true;
+    return false;
+  }
+
+  function resetArmBones() {
+    var i;
+    for (i = 0; i < armBones.length; i++) {
+      var rest = armRests[i];
+      armBones[i].quaternion.set(rest.qx, rest.qy, rest.qz, rest.qw);
+    }
+  }
+
+  function rotateBoneWorld(bone, axis, angle) {
+    if (!bone || !angle) return;
+    bone.updateMatrixWorld(true);
+    if (bone.parent) {
+      bone.parent.updateMatrixWorld(true);
+      bone.parent.getWorldQuaternion(_poseParentQ);
+    } else {
+      _poseParentQ.identity();
+    }
+    _poseLocal.copy(bone.quaternion);
+    _poseWorld.copy(_poseParentQ).multiply(_poseLocal);
+    _poseDelta.setFromAxisAngle(axis, angle);
+    _poseDelta.multiply(_poseWorld);
+    _poseParentQ.invert();
+    bone.quaternion.copy(_poseParentQ).multiply(_poseDelta);
+  }
+
+  function poseBonesNamed(token, ops) {
+    var i, k;
+    for (i = 0; i < armBones.length; i++) {
+      var bone = armBones[i];
+      var n = (bone.name || "").toLowerCase();
+      if (n.indexOf(token) < 0) continue;
+      var right = isRightBone(bone.name);
+      for (k = 0; k < ops.length; k++) {
+        var ang = ops[k][1];
+        if (right && ops[k][2]) ang = -ang;
+        rotateBoneWorld(bone, ops[k][0], ang);
+      }
+    }
+  }
+
+  function applyOutfitPose(outfitIndex) {
+    if (!armBones.length) return;
+    resetArmBones();
+    if (modelRoot) modelRoot.updateMatrixWorld(true);
+    var idx = outfitIndex | 0;
+    if (idx === 0) {
+      poseBonesNamed("upperarm", [[_axisZ, -0.78, true], [_axisX, 0.08, false]]);
+      poseBonesNamed("lowerarm", [[_axisX, 0.22, false], [_axisZ, -0.08, true]]);
+      poseBonesNamed("hand", [[_axisX, 0.12, false]]);
+    } else if (idx === 1) {
+      poseBonesNamed("clavicle", [[_axisY, 0.18, true], [_axisX, 0.12, false]]);
+      poseBonesNamed("shoulder", [[_axisY, 0.18, true], [_axisX, 0.12, false]]);
+      poseBonesNamed("upperarm", [[_axisY, 0.62, true], [_axisX, 0.72, false], [_axisZ, -0.18, true]]);
+      poseBonesNamed("lowerarm", [[_axisX, 1.15, false], [_axisY, 0.28, true]]);
+      poseBonesNamed("hand", [[_axisY, 0.35, true], [_axisX, 0.25, false]]);
+    } else if (idx === 2) {
+      poseBonesNamed("clavicle", [[_axisY, -0.08, true], [_axisZ, 0.12, true]]);
+      poseBonesNamed("shoulder", [[_axisY, -0.08, true], [_axisZ, 0.12, true]]);
+      poseBonesNamed("upperarm", [[_axisZ, -0.55, true], [_axisX, -0.35, false], [_axisY, -0.22, true]]);
+      poseBonesNamed("lowerarm", [[_axisX, 1.15, false], [_axisY, -0.12, true]]);
+      poseBonesNamed("hand", [[_axisX, 0.45, false], [_axisZ, 0.35, true]]);
+    } else if (idx === 3) {
+      poseBonesNamed("clavicle", [[_axisY, 0.22, true], [_axisX, 0.1, false]]);
+      poseBonesNamed("shoulder", [[_axisY, 0.22, true], [_axisX, 0.1, false]]);
+      poseBonesNamed("upperarm", [[_axisY, 0.72, true], [_axisX, 0.55, false], [_axisZ, 0.12, true]]);
+      poseBonesNamed("lowerarm", [[_axisX, 1.28, false], [_axisY, 0.42, true], [_axisZ, 0.18, true]]);
+      poseBonesNamed("hand", [[_axisY, 0.45, true], [_axisX, 0.2, false]]);
+    }
+    if (modelRoot) modelRoot.updateMatrixWorld(true);
+  }
+
   function applyLook(next) {
     look = Object.assign(look, next || {});
     if (!ready) { pendingLook = look; return; }
     applyVisibility(look);
+    applyOutfitPose(look.appearanceIndex | 0);
     morphMeshes.forEach(function (mesh) { applyMeshLook(mesh, look); });
     tintLook(look);
     frameCamera(look.viewMode === "bust" ? "bust" : "full");
@@ -578,39 +666,60 @@
     window.addEventListener("resize", resize);
 
     new THREE.GLTFLoader().load(
-      "bozo-male.glb?v=face2",
+      "bozo-male.glb?v=bozo23",
       function (gltf) {
         try {
           modelRoot = gltf.scene;
           modelRoot.traverse(function (obj) {
-            if (obj.isBone && obj.name === "head") {
-              headBones.push(obj);
-              headRests.push({
-                x: obj.rotation.x,
-                y: obj.rotation.y,
-                z: obj.rotation.z
-              });
+            if (obj.isBone) {
+              var bn = (obj.name || "").toLowerCase();
+              if (obj.name === "head") {
+                headBones.push(obj);
+                headRests.push({
+                  x: obj.rotation.x,
+                  y: obj.rotation.y,
+                  z: obj.rotation.z
+                });
+              }
+              if (bn.indexOf("twist") < 0) {
+                var isArm =
+                  bn.indexOf("upperarm") >= 0 ||
+                  bn.indexOf("lowerarm") >= 0 ||
+                  bn.indexOf("clavicle") >= 0 ||
+                  bn.indexOf("shoulder") >= 0 ||
+                  (bn.indexOf("hand") >= 0 &&
+                    bn.indexOf("thumb") < 0 &&
+                    bn.indexOf("index") < 0 &&
+                    bn.indexOf("middle") < 0 &&
+                    bn.indexOf("ring") < 0 &&
+                    bn.indexOf("pinky") < 0 &&
+                    bn.indexOf("metacarpal") < 0);
+                if (isArm) armBones.push(obj);
+              }
             }
             if (!obj.isMesh) return;
-            obj.frustumCulled = true;
+            obj.frustumCulled = !obj.isSkinnedMesh;
             var name = obj.name || "";
             if (name.indexOf("Icosphere") === 0) {
               obj.visible = false;
               return;
             }
+            var skinned = !!obj.isSkinnedMesh;
             materialsOf(obj).forEach(function (mat, matIdx) {
               if (!mat || typeof mat !== "object") return;
               var matLabel = mat.name || "";
               var swapped = null;
               if (matLabel.indexOf("MAT_SkinHead") === 0) {
                 swapped = upgradeSkinMat(mat, envMap, 0.07);
-                swapped.color.setRGB(1, 1, 1);
+                swapped.color.copy(hexColor(SKIN_COLORS[1]));
+                swapped.skinning = skinned;
                 headMats.push(swapped);
               } else if (matLabel.indexOf("MAT_Skin") === 0) {
                 swapped = upgradeSkinMat(mat, envMap, 0.18);
+                swapped.skinning = skinned;
                 skinMats.push(swapped);
               } else if (matLabel.indexOf("MAT_Hair") === 0) {
-                mat.skinning = false;
+                mat.skinning = skinned;
                 mat.morphTargets = !!obj.morphTargetInfluences;
                 mat.roughness = 0.42;
                 mat.metalness = 0.04;
@@ -622,9 +731,10 @@
                 hairMats.push(mat);
               } else if (matLabel.indexOf("MAT_Iris") === 0) {
                 swapped = upgradeIrisMat(mat, envMap);
+                swapped.skinning = skinned;
                 eyeMats.push(swapped);
               } else {
-                mat.skinning = false;
+                mat.skinning = skinned;
                 mat.morphTargets = !!obj.morphTargetInfluences;
                 if (envMap) {
                   mat.envMap = envMap;
@@ -636,15 +746,37 @@
                 else obj.material = swapped;
               }
             });
+            if (skinned) {
+              materialsOf(obj).forEach(function (mat) {
+                if (mat && typeof mat === "object") mat.skinning = true;
+              });
+            }
             if (name.indexOf("Eyes_") === 0) {
               obj.renderOrder = 2;
-              obj.scale.set(1, 1, 1);
-              obj.position.set(0, 0, 0);
             }
             if (obj.morphTargetInfluences && obj.morphTargetDictionary) {
               pruneToShapes(obj);
               if (obj.morphTargetInfluences.length) morphMeshes.push(obj);
             }
+          });
+          armBones.sort(function (a, b) {
+            function depth(node) {
+              var d = 0;
+              while (node && node.parent) { d += 1; node = node.parent; }
+              return d;
+            }
+            return depth(a) - depth(b);
+          });
+          armRests = armBones.map(function (bone) {
+            return {
+              x: bone.rotation.x,
+              y: bone.rotation.y,
+              z: bone.rotation.z,
+              qx: bone.quaternion.x,
+              qy: bone.quaternion.y,
+              qz: bone.quaternion.z,
+              qw: bone.quaternion.w
+            };
           });
           applyVisibility(look);
           var box = new THREE.Box3();
