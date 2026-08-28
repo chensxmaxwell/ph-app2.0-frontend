@@ -7,6 +7,7 @@ import { fontSizes, fontWeights } from "@common/styles/fonts";
 import Untitled from "@images/Kink/untitled.svg";
 import { SCREENS } from "../../common/constant/index";
 import { useAppContext } from "./kink-context";
+import { closeGenerate } from "./close-generate";
 import { NavigationProp, ParamListBase } from "@react-navigation/native";
 
 const KinkConfirmationScreen = () => {
@@ -64,7 +65,7 @@ const KinkConfirmationScreen = () => {
         {/* Return Button */}
         <TouchableOpacity
           style={styles.returnButton}
-          onPress={() => navigation.goBack()}
+          onPress={() => closeGenerate(navigation)}
         >
           <Text style={styles.returnText}>Return</Text>
         </TouchableOpacity>

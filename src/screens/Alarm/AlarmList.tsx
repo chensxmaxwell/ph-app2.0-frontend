@@ -79,7 +79,7 @@ const AlarmList = () => {
           <Text style={styles.headerTitle}>Set Alarm</Text>
           <TouchableOpacity
             style={styles.backIcon}
-            onPress={() => navigation.goBack()}
+            onPress={() => navigation.getParent()?.goBack() ?? navigation.goBack()}
           >
             <Xmark width={35} height={35} />
           </TouchableOpacity>

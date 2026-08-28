@@ -1,20 +1,33 @@
 """Assemble a BoZo male GLB for the PH avatar viewer.
 
-Pose each imported armature into a relaxed A-pose, then apply the Armature
-modifier into vertex positions while preserving Shape_* keys. Unity ID maps
-are recolored into garment palettes; body/head use a generated skin albedo.
-Skins and animations are not exported.
+Keep the shared BoZo armature and vertex weights so the app can pose arms.
+Do not apply Armature modifiers and do not apply the extra A-pose (rest
+already has arms out). Unity ID maps are recolored into garment palettes;
+body/head use a generated skin albedo written with Pillow then load_image().
 """
 from __future__ import annotations
 
 from math import radians
 from pathlib import Path
+import json
+import os
+import zlib
+import struct
 import random
 import re
 import sys
 
+sys.path.append(
+    os.path.expanduser(
+        "~/Library/Application Support/Blender/4.5/scripts/addons/modules"
+    )
+)
+
 import bpy
+from PIL import Image
 from mathutils import Matrix, Vector
+
+MASTER_ARM: bpy.types.Object | None = None
 
 try:
     sys.stdout.reconfigure(line_buffering=True)
@@ -159,12 +172,12 @@ def find_albedo(fbx_path: Path) -> Path | None:
     return pngs[0] if pngs else None
 
 
+
 def make_skin_image(name: str, size: int = 512) -> bpy.types.Image:
     """Light peach albedo with slight noise/AO so viewer skin tints still work."""
-    image = bpy.data.images.new(name, width=size, height=size, alpha=False)
-    pixels = [0.0] * (size * size * 4)
     rng = random.Random(7)
     base = (0.96, 0.88, 0.80)
+    px = []
     for y in range(size):
         for x in range(size):
             nx = x / size - 0.5
@@ -172,61 +185,95 @@ def make_skin_image(name: str, size: int = 512) -> bpy.types.Image:
             ao = 1.0 - 0.07 * min(1.0, (nx * nx + ny * ny) * 3.2)
             grain = 1.0 + (rng.random() - 0.5) * 0.035
             shade = ao * grain
-            index = (y * size + x) * 4
-            pixels[index] = min(1.0, base[0] * shade)
-            pixels[index + 1] = min(1.0, base[1] * shade)
-            pixels[index + 2] = min(1.0, base[2] * shade)
-            pixels[index + 3] = 1.0
-    image.pixels.foreach_set(pixels)
-    image.colorspace_settings.name = "sRGB"
-    image.update()
-    # Pack pixels as PNG. Default pack() keeps an empty/original file and
-    # glTF export then writes a black JPEG or the Unity ID map.
-    image.pack(as_png=True)
-    return image
+            px.append((
+                int(min(1.0, base[0] * shade) * 255 + 0.5),
+                int(min(1.0, base[1] * shade) * 255 + 0.5),
+                int(min(1.0, base[2] * shade) * 255 + 0.5),
+                255,
+            ))
+    im = Image.new("RGBA", (size, size))
+    im.putdata(px)
+    path = Path(f"/tmp/ph_tex_{name}.png")
+    im.save(path)
+    print("PIL skin", path, path.stat().st_size)
+    return load_image(path)
+
+
+def write_png_rgba(path: str, width: int, height: int, pixels: list[float]) -> None:
+    """PNG from Blender float RGBA (bottom-up). Avoid image.save() which writes black in 4.5."""
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    raw = bytearray()
+    row = width * 4
+    for y in range(height - 1, -1, -1):
+        raw.append(0)
+        start = y * row
+        for i in range(row):
+            raw.append(max(0, min(255, int(pixels[start + i] * 255.0 + 0.5))))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    Path(path).write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(bytes(raw), 6))
+        + chunk(b"IEND", b"")
+    )
+
+
+def persist_image(image: bpy.types.Image, name: str) -> bpy.types.Image:
+    """Write pixels to a PNG on disk and reload. Blender 4.5 glTF export
+    embeds black JPEGs if we only pack generated pixels."""
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in (name or "tex"))
+    path = f"/tmp/ph_tex_{safe}.png"
+    width, height = image.size
+    pixels = [0.0] * (width * height * 4)
+    image.pixels.foreach_get(pixels)
+    write_png_rgba(path, width, height, pixels)
+    size = Path(path).stat().st_size if Path(path).exists() else 0
+    print("PERSIST", name, path, size, "wh", width, height, "mean", sum(pixels[:4000]) / 4000)
+    loaded = bpy.data.images.load(path, check_existing=False)
+    loaded.colorspace_settings.name = "sRGB"
+    loaded.name = name
+    return loaded
+
 
 
 def recolor_id_image(
-    src: bpy.types.Image,
+    src_path: Path,
     palette: tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]],
     dest_name: str,
     size: int = 512,
     keep_white: bool = True,
 ) -> bpy.types.Image:
     """Replace Unity RGB ID regions with garment colors. Near-black stays black."""
-    width, height = src.size
-    count = width * height * 4
-    pixels = [0.0] * count
-    src.pixels.foreach_get(pixels)
+    src = Image.open(src_path).convert("RGBA")
+    if size and src.size != (size, size):
+        src = src.resize((size, size), Image.NEAREST)
+    pixels = list(src.getdata())
     color_r, color_g, color_b = palette
-    for index in range(0, count, 4):
-        red = pixels[index]
-        green = pixels[index + 1]
-        blue = pixels[index + 2]
-        maximum = red if red > green else green
-        if blue > maximum:
-            maximum = blue
-        minimum = red if red < green else green
-        if blue < minimum:
-            minimum = blue
+    out = []
+    for red_i, green_i, blue_i, alpha in pixels:
+        red, green, blue = red_i / 255.0, green_i / 255.0, blue_i / 255.0
+        maximum = max(red, green, blue)
+        minimum = min(red, green, blue)
         if maximum < 0.08:
-            pixels[index] = 0.0
-            pixels[index + 1] = 0.0
-            pixels[index + 2] = 0.0
+            out.append((0, 0, 0, alpha))
             continue
         if keep_white and minimum > 0.88 and (maximum - minimum) < 0.10:
+            out.append((red_i, green_i, blue_i, alpha))
             continue
-        pixels[index] = min(1.0, red * color_r[0] + green * color_g[0] + blue * color_b[0])
-        pixels[index + 1] = min(1.0, red * color_r[1] + green * color_g[1] + blue * color_b[1])
-        pixels[index + 2] = min(1.0, red * color_r[2] + green * color_g[2] + blue * color_b[2])
-    image = bpy.data.images.new(dest_name, width=width, height=height, alpha=True)
-    image.pixels.foreach_set(pixels)
-    if size and (width != size or height != size):
-        image.scale(size, size)
-    image.colorspace_settings.name = "sRGB"
-    image.update()
-    image.pack(as_png=True)
-    return image
+        out.append((
+            int(min(1.0, red * color_r[0] + green * color_g[0] + blue * color_b[0]) * 255 + 0.5),
+            int(min(1.0, red * color_r[1] + green * color_g[1] + blue * color_b[1]) * 255 + 0.5),
+            int(min(1.0, red * color_r[2] + green * color_g[2] + blue * color_b[2]) * 255 + 0.5),
+            alpha,
+        ))
+    im = Image.new("RGBA", src.size)
+    im.putdata(out)
+    path = Path(f"/tmp/ph_tex_{dest_name}.png")
+    im.save(path)
+    print("PIL recolor", dest_name, path, path.stat().st_size, "from", src_path.name)
+    return load_image(path)
 
 
 def make_material(
@@ -351,10 +398,14 @@ def rotate_pose_bone_world(arm_obj: bpy.types.Object, bone_name: str, axis: str,
 
 
 def pose_a_pose(arm_obj: bpy.types.Object) -> None:
-    """Drop T-pose arms into a relaxed A-pose on Epic-style upperarm/lowerarm bones."""
+    """Skip extra arm rotations. The BoZo FBX rest pose already has arms out;
+    folding them another 42deg glued sleeves to the torso."""
     global A_POSE_APPLIED, A_POSE_BONES
     if arm_obj.type != "ARMATURE":
         return
+    print("A-POSE skipped (source rest pose already has arms out)", arm_obj.name)
+    A_POSE_APPLIED = True
+    return
     arm_obj.data.pose_position = "POSE"
     activate(arm_obj)
     bpy.ops.object.mode_set(mode="POSE")
@@ -512,6 +563,12 @@ def delete_non_meshes(objs: list[bpy.types.Object]) -> None:
 
 
 def process_import(path: Path, avatar: bpy.types.Object) -> list[bpy.types.Object]:
+    """Import an FBX and keep its armature plus vertex weights.
+
+    Each kit piece keeps its own skeleton (same bone names) so head/eye/hair
+    extra bones are not dropped. Do not apply Armature modifiers.
+    """
+    global MASTER_ARM
     objs = import_fbx(path)
     print(
         "PRE names",
@@ -526,17 +583,47 @@ def process_import(path: Path, avatar: bpy.types.Object) -> list[bpy.types.Objec
             for obj in objs
         ],
     )
-    for arm in [obj for obj in objs if obj.type == "ARMATURE"]:
+    arms = [obj for obj in objs if obj.type == "ARMATURE"]
+    for arm in arms:
         pose_a_pose(arm)
+        keep_world(arm, avatar)
+        if MASTER_ARM is None:
+            MASTER_ARM = arm
+            bone_names = [bone.name for bone in arm.data.bones]
+            print("MASTER ARM", arm.name, "bones", len(bone_names), bone_names)
     meshes = mesh_objects(objs)
     processed: list[bpy.types.Object] = []
     for mesh in meshes:
-        processed.append(apply_armature_preserve_shapekeys(mesh))
-    for mesh in processed:
-        cleanup_mesh(mesh, avatar)
-    delete_non_meshes(objs)
+        if mesh.animation_data:
+            mesh.animation_data_clear()
+        prune_shape_keys(mesh)
+        processed.append(mesh)
+        groups = [group.name for group in mesh.vertex_groups[:12]]
+        parent = mesh.parent.name if mesh.parent else None
+        print(
+            "SKIN",
+            mesh.name,
+            "parent",
+            parent,
+            "groups",
+            len(mesh.vertex_groups),
+            groups,
+            "mods",
+            [modifier.type for modifier in mesh.modifiers],
+        )
+    for obj in list(objs):
+        try:
+            if obj.type == "ARMATURE" or obj.name == "Avatar":
+                continue
+        except ReferenceError:
+            continue
+        if obj in processed:
+            continue
+        try:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        except ReferenceError:
+            pass
     return processed
-
 
 def assign_mat(objs: list[bpy.types.Object], mat: bpy.types.Material) -> None:
     for obj in objs:
@@ -687,8 +774,17 @@ def purge_unused() -> None:
     for image in list(bpy.data.images):
         if image not in used_images:
             bpy.data.images.remove(image)
+    used_armatures: set[bpy.types.Armature] = set()
+    for obj in bpy.data.objects:
+        if obj.type == "ARMATURE" and obj.data:
+            used_armatures.add(obj.data)
+        if obj.type == "MESH":
+            for modifier in obj.modifiers:
+                if modifier.type == "ARMATURE" and modifier.object and modifier.object.data:
+                    used_armatures.add(modifier.object.data)
     for armature in list(bpy.data.armatures):
-        bpy.data.armatures.remove(armature)
+        if armature not in used_armatures:
+            bpy.data.armatures.remove(armature)
     for action in list(bpy.data.actions):
         bpy.data.actions.remove(action)
 
@@ -726,7 +822,7 @@ def export_glb(path: Path, objects: list[bpy.types.Object]) -> None:
         "export_morph_normal": False,
         "export_morph_tangent": False,
         "export_morph_animation": False,
-        "export_skins": False,
+        "export_skins": True,
         "export_animations": False,
         "export_image_format": "JPEG",
         "export_jpeg_quality": 80,
@@ -734,30 +830,83 @@ def export_glb(path: Path, objects: list[bpy.types.Object]) -> None:
         "export_unused_images": False,
         "export_unused_textures": False,
         "export_try_sparse_sk": True,
+        "export_all_influences": True,
+        "export_def_bones": False,
+        "export_rest_position_armature": True,
     }
     bpy.ops.export_scene.gltf(**filtered_gltf_kwargs(kwargs))
 
 
+def inspect_glb_chunk(path: Path) -> None:
+    data = path.read_bytes()
+    if data[:4] != b"glTF":
+        print("GLB MAGIC missing")
+        return
+    chunk_len, _chunk_type = struct.unpack_from("<II", data, 12)
+    payload = data[20:20 + chunk_len].rstrip(b"\x00")
+    gltf = json.loads(payload)
+    nodes = gltf.get("nodes", [])
+    skins = gltf.get("skins", [])
+    meshes = gltf.get("meshes", [])
+    skinned = 0
+    for mesh in meshes:
+        for prim in mesh.get("primitives", []):
+            if "JOINTS_0" in prim.get("attributes", {}):
+                skinned += 1
+                break
+    print("GLB nodes", len(nodes), "skins", len(skins), "meshes", len(meshes), "skinned_meshes", skinned)
+    tokens = ("upperarm", "lowerarm", "hand", "clavicle", "shoulder", "spine", "pelvis", "head", "neck")
+    for index, skin in enumerate(skins):
+        joints = [nodes[j].get("name", "?") for j in skin.get("joints", [])]
+        print("GLB skin", index, "joint_count", len(joints))
+        interesting = [name for name in joints if name and any(token in name.lower() for token in tokens)]
+        print("GLB interesting bones", interesting)
+
+
 def inspect_glb(path: Path) -> None:
+    inspect_glb_chunk(path)
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.gltf(filepath=str(path))
     meshes = [obj for obj in bpy.data.objects if obj.type == "MESH"]
     icospheres = [obj.name for obj in bpy.data.objects if "Icosphere" in obj.name]
-    armatures = [obj.name for obj in bpy.data.objects if obj.type == "ARMATURE"]
+    armatures = [obj for obj in bpy.data.objects if obj.type == "ARMATURE"]
     min_corner, max_corner = world_bbox(meshes)
     height = max(max_corner.z - min_corner.z, max_corner.y - min_corner.y)
     print("INSPECT meshes", len(meshes))
     print("INSPECT objects", len(bpy.data.objects))
     print("INSPECT bbox", min_corner, max_corner, "H", height)
     print("INSPECT icospheres", icospheres)
-    print("INSPECT armatures", armatures)
+    print("INSPECT armatures", [obj.name for obj in armatures])
     print("INSPECT mesh names", sorted(obj.name for obj in meshes))
+    skinned = 0
     for obj in meshes:
+        groups = len(obj.vertex_groups)
+        mods = [modifier.type for modifier in obj.modifiers]
+        if groups or "ARMATURE" in mods:
+            skinned += 1
         if obj.name.startswith("Head"):
             keys = []
             if obj.data.shape_keys:
                 keys = [block.name for block in obj.data.shape_keys.key_blocks]
-            print("INSPECT", obj.name, "shapekeys", keys)
+            print("INSPECT", obj.name, "shapekeys", keys, "groups", groups)
+    print("INSPECT skinned_meshes", skinned)
+    tokens = ("upperarm", "lowerarm", "hand", "clavicle", "shoulder")
+    for arm in armatures:
+        names = [bone.name for bone in arm.data.bones]
+        print("INSPECT bones", names)
+        for bone in arm.pose.bones:
+            if not any(token in bone.name.lower() for token in tokens):
+                continue
+            head = arm.matrix_world @ bone.head
+            tail = arm.matrix_world @ bone.tail
+            print(
+                "INSPECT bone",
+                bone.name,
+                "head",
+                [round(v, 4) for v in head],
+                "tail",
+                [round(v, 4) for v in tail],
+            )
 
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -790,10 +939,9 @@ rename_meshes(eye_objs, "Eyes")
 
 for hair_i, pair in enumerate(HAIRS):
     albedo_path = find_albedo(pair[0]) or find_albedo(pair[1])
-    src = load_image(albedo_path) if albedo_path else None
-    if src is not None:
+    if albedo_path is not None:
         hair_img = recolor_id_image(
-            src,
+            albedo_path,
             ((0.92, 0.88, 0.82), (0.55, 0.42, 0.32), (0.25, 0.18, 0.12)),
             f"HairAlbedo_{hair_i}",
             size=512,
@@ -812,11 +960,10 @@ for outfit_i, parts in enumerate(OUTFITS):
     for label, path in zip(labels, parts):
         objs = process_import(path, avatar)
         albedo_path = find_albedo(path)
-        src = load_image(albedo_path) if albedo_path else None
         palette = OUTFIT_PALETTES[outfit_i][label]
-        if src is not None:
+        if albedo_path is not None:
             cloth_img = recolor_id_image(
-                src,
+                albedo_path,
                 palette,
                 f"Cloth_{outfit_i}_{label}",
                 size=512,
@@ -835,8 +982,6 @@ for outfit_i, parts in enumerate(OUTFITS):
 for obj in list(bpy.data.objects):
     if obj.type == "MESH" and "Icosphere" in obj.name:
         bpy.data.objects.remove(obj, do_unlink=True)
-    elif obj.type == "ARMATURE":
-        bpy.data.objects.remove(obj, do_unlink=True)
 
 purge_unused()
 bpy.context.view_layer.update()
@@ -846,6 +991,7 @@ min_corner, max_corner = world_bbox(meshes)
 height = max(0.01, max_corner.z - min_corner.z)
 print("PRE-NORMALIZE BBOX", min_corner, max_corner, "H", height)
 print("A-POSE applied", A_POSE_APPLIED)
+# Armatures are already parented to Avatar; moving Avatar recenters the kit.
 avatar.location.x -= (min_corner.x + max_corner.x) / 2
 avatar.location.y -= (min_corner.y + max_corner.y) / 2
 avatar.location.z -= min_corner.z
@@ -855,33 +1001,19 @@ if height > 3.5:
 
 bpy.context.view_layer.update()
 
-if bpy.ops.object.mode_set.poll():
-    bpy.ops.object.mode_set(mode="OBJECT")
-for obj in meshes:
-    keep_world(obj, None)
-if meshes:
-    bpy.ops.object.select_all(action="DESELECT")
-    for obj in meshes:
-        obj.select_set(True)
-    bpy.context.view_layer.objects.active = meshes[0]
-    with bpy.context.temp_override(
-        selected_objects=meshes,
-        object=meshes[0],
-        active_object=meshes[0],
-    ):
-        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-
-if avatar.name in bpy.data.objects:
-    bpy.data.objects.remove(avatar, do_unlink=True)
-
-bpy.context.view_layer.update()
 meshes = [obj for obj in bpy.data.objects if obj.type == "MESH"]
 min_corner, max_corner = world_bbox(meshes)
-post_height = max_corner.z - min_corner.z
-print("POST-APPLY BBOX", min_corner, max_corner, "H", post_height)
-print("POST bbox height", post_height)
+post_height = max(max_corner.z - min_corner.z, max_corner.y - min_corner.y)
+print("POST-SCALE BBOX", min_corner, max_corner, "H", post_height)
 print("MESH COUNT", len(meshes), "OBJECT COUNT", len(bpy.data.objects))
 print("MESH names", sorted(obj.name for obj in meshes))
+print("ARMATURE COUNT", len([obj for obj in bpy.data.objects if obj.type == "ARMATURE"]))
+for obj in meshes:
+    if "Hand" in obj.name or "UpperArm" in obj.name or obj.name.startswith("Outfit_0_top"):
+        mn, mx = world_bbox([obj])
+        print("PART BBOX", obj.name, mn, mx)
+if MASTER_ARM is not None:
+    print("EXPORT ARM", MASTER_ARM.name, "bones", [bone.name for bone in MASTER_ARM.data.bones])
 for obj in meshes:
     if obj.name.startswith("Head"):
         keys = []
@@ -889,8 +1021,13 @@ for obj in meshes:
             keys = [block.name for block in obj.data.shape_keys.key_blocks]
         print("Head shapekeys", obj.name, keys)
 
+export_objs = [
+    obj
+    for obj in bpy.data.objects
+    if obj.type in {"MESH", "ARMATURE", "EMPTY"}
+]
 OUT.parent.mkdir(parents=True, exist_ok=True)
-export_glb(OUT, meshes)
+export_glb(OUT, export_objs)
 print("WROTE", OUT, "size", OUT.stat().st_size if OUT.exists() else 0)
 print("A-POSE applied", A_POSE_APPLIED)
 inspect_glb(OUT)

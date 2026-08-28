@@ -9,8 +9,13 @@ import React, {
 } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { stopToy } from "./toy";
+import {
+  STORE_KEYS,
+  scopedKey,
+  subscribeSessionUser,
+} from "../backend/session";
+import { migrateLegacyStores } from "../backend/store";
 
-const STORAGE_KEY = "ph.device.v1";
 export const DEMO_DEVICE_ID = "ph-demo";
 export const DEMO_DEVICE_NAME = "Pleasure House";
 
@@ -29,31 +34,41 @@ export const DeviceProvider = ({ children }: { children: ReactNode }) => {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY)
-      .then((raw) => {
-        if (!raw) {
-          return;
-        }
-        const parsed = JSON.parse(raw) as { connected?: boolean };
-        if (parsed.connected) {
-          setConnected(true);
-        }
-      })
-      .catch(() => undefined)
-      .finally(() => setHydrated(true));
+    return subscribeSessionUser((user) => {
+      const nextId = user?.id ?? null;
+      setUserId(nextId);
+      setHydrated(false);
+      if (!nextId) {
+        setConnected(false);
+        return;
+      }
+      migrateLegacyStores(nextId)
+        .then(() => AsyncStorage.getItem(scopedKey(STORE_KEYS.device, nextId)))
+        .then((raw) => {
+          if (!raw) {
+            setConnected(false);
+            return;
+          }
+          const parsed = JSON.parse(raw) as { connected?: boolean };
+          setConnected(!!parsed.connected);
+        })
+        .catch(() => setConnected(false))
+        .finally(() => setHydrated(true));
+    });
   }, []);
 
   useEffect(() => {
-    if (!hydrated) {
+    if (!hydrated || !userId) {
       return;
     }
     AsyncStorage.setItem(
-      STORAGE_KEY,
+      scopedKey(STORE_KEYS.device, userId),
       JSON.stringify({ connected })
     ).catch(() => undefined);
-  }, [connected, hydrated]);
+  }, [connected, hydrated, userId]);
 
   const connectDemo = useCallback(async () => {
     if (connected) {

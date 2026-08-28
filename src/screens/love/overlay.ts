@@ -12,6 +12,16 @@ const LOVE_SCREENS = new Set([
   String(SCREENS.LOVE_SYNC),
 ]);
 
+let homeStackNavigation: NavigationProp<ParamListBase> | null = null;
+
+export const bindHomeStackNavigation = (
+  navigation: NavigationProp<ParamListBase>
+) => {
+  homeStackNavigation = navigation;
+};
+
+export const getHomeStackNavigation = () => homeStackNavigation;
+
 export const dismissLoveOverlays = (
   navigation: NavigationProp<ParamListBase>,
   then?: { name: string; params?: object }
@@ -37,9 +47,10 @@ export const dismissLoveOverlays = (
 export const restoreLoveOverlays = (
   navigation: NavigationProp<ParamListBase>,
   layer: LoveLayer | null,
-  companionId?: string
+  companionId?: string,
+  name?: string
 ) => {
-  const params = { companionId };
+  const params = { companionId, name };
   navigation.navigate(SCREENS.LOVE_CHAT as never, params as never);
   if (layer === "call") {
     navigation.navigate(SCREENS.LOVE_CALL as never, params as never);

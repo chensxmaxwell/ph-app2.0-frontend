@@ -7,7 +7,6 @@ import PlayButton from "@images/arrowtriangle-right.svg";
 import PauseButton from "@images/pause.svg";
 import { s } from "../avatar/scale";
 import { SimplePage } from "../shared/simple-page";
-import { SessionLovePill } from "../love/pill";
 import { useHomeScreen } from "../../hooks/HomeScreenContext";
 import { wavePattern } from "../../store/patterns";
 
@@ -99,7 +98,6 @@ export const AutoScreen = () => {
           )}
         </TouchableOpacity>
       </View>
-      <SessionLovePill style={styles.pill} />
     </SimplePage>
   );
 };
@@ -149,10 +147,5 @@ const styles = StyleSheet.create({
   },
   play: {
     marginTop: s(36),
-  },
-  pill: {
-    position: "absolute",
-    top: s(8),
-    alignSelf: "center",
   },
 });

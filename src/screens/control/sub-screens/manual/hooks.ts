@@ -15,8 +15,6 @@ export const useManual = () => {
     setPlaying((current) => !current);
   };
 
-  const handleLightbulbPress = () => undefined;
-
   useEffect(() => {
     return () => {
       setCurrentMode('');
@@ -40,7 +38,6 @@ export const useManual = () => {
     playing,
     handleLevelChange,
     handlePlayButtonPress,
-    handleLightbulbPress
   };
 };
 

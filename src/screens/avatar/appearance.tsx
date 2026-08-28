@@ -1,42 +1,44 @@
 import React from "react";
-import { StyleSheet, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
-import {
-  APPEARANCE_COUNT,
-  applyCharacterPreset,
-  lookFromDraft,
-  useAvatarWizard,
-} from "./context";
+import { useWizardChrome } from "./chrome";
+import { APPEARANCE_COUNT, lookFromDraft, useAvatarWizard } from "./context";
 import { FittedAvatarPreview } from "./engine/AvatarPreview";
 import { OutfitCard, toOutfitIndex } from "./outfit-card";
 import { s } from "./scale";
-import { WizardShell, useLeaveGuard } from "./shared";
+import { StepNote, WizardShell, progressFor } from "./shared";
 
 export const AvatarAppearanceScreen = () => {
   const navigation = useNavigation();
-  const { draft, patchDraft, resetDraft, isDirty } = useAvatarWizard();
-  const { requestLeave, modal } = useLeaveGuard(isDirty, () => {
-    resetDraft();
-    navigation.getParent()?.goBack();
-  });
-  const title = draft.name.trim() || "[Name]";
+  const { draft, patchDraft } = useAvatarWizard();
+  const { mode, title, requestLeave, goBackStep, modal } = useWizardChrome();
 
   return (
     <WizardShell
       title={title}
       titleFont="opensans"
-      leftIcon="none"
+      progressFill={progressFor(mode, "appearance")}
+      leftIcon="back"
       rightIcon="close"
       closeCircle
+      onLeftPress={goBackStep}
       onRightPress={requestLeave}
       primaryLabel="Continue"
       onPrimary={() => navigation.navigate(SCREENS.AVATAR_CUSTOMIZE)}
     >
       {modal}
       <View style={styles.content}>
+        <StepNote>
+          This changes the 3D outfit only — not chat persona, hair, skin, or
+          body.
+        </StepNote>
         <FittedAvatarPreview look={lookFromDraft(draft)} aspect={226 / 489} />
+        <Text style={styles.outfitLabel}>Outfit</Text>
+        <Text style={styles.outfitHint}>
+          Changes clothes only. Hair, skin, and body stay as you set them.
+        </Text>
         <View style={styles.thumbs}>
           {Array.from({ length: APPEARANCE_COUNT }).map((_, index) => {
             const selected = draft.appearanceIndex === index;
@@ -47,7 +49,7 @@ export const AvatarAppearanceScreen = () => {
                 style={[styles.thumbWrap, selected && styles.thumbWrapSelected]}
               >
                 <TouchableOpacity
-                  onPress={() => patchDraft(applyCharacterPreset(index))}
+                  onPress={() => patchDraft({ appearanceIndex: index })}
                   style={[styles.thumb, selected && styles.thumbSelected]}
                   activeOpacity={0.85}
                 >
@@ -67,8 +69,24 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
   },
+  outfitLabel: {
+    marginTop: s(4),
+    color: colors.white,
+    fontFamily: "OpenSans-Bold",
+    fontSize: 13,
+  },
+  outfitHint: {
+    marginTop: s(2),
+    marginBottom: s(4),
+    width: s(345),
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 12,
+    lineHeight: 15,
+    textAlign: "center",
+  },
   thumbs: {
-    marginTop: s(8),
+    marginTop: s(4),
     marginBottom: s(8),
     width: s(345),
     flexDirection: "row",

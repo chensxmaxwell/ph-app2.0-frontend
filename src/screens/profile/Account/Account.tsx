@@ -50,7 +50,7 @@ const AccountScreen = () => {
           style={styles.optionRow}
           onPress={() =>
             navigation.navigate(
-              SCREENS.PROFILE_SETTING_ACCOUNT_RESET_PASSWORD_STACK
+              SCREENS.PROFILE_SETTING_ACCOUNT_RESET_EMAIL_STACK
             )
           }
         >
@@ -63,7 +63,7 @@ const AccountScreen = () => {
           style={styles.optionRow}
           onPress={() =>
             navigation.navigate(
-              SCREENS.PROFILE_SETTING_ACCOUNT_RESET_EMAIL_STACK
+              SCREENS.PROFILE_SETTING_ACCOUNT_RESET_PASSWORD_STACK
             )
           }
         >

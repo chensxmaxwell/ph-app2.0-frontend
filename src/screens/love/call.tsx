@@ -21,15 +21,17 @@ import { colors } from "@common/styles/colors";
 import Minimize from "@images/minimize.svg";
 import PhoneDown from "@images/love/phone-down.svg";
 import { useCompanions } from "../../store/companions";
+import { useChat } from "../chat/store";
 import { s } from "../avatar/scale";
 import { dismissLoveOverlays } from "./overlay";
+import { resolveLovePerson } from "./partner";
 import { useLoveSession } from "./session";
 
 const CALL_FACE = require("../../../assets/images/love/call-face.png");
 
 type CallRoute = RouteProp<
   {
-    LoveCall: { companionId?: string };
+    LoveCall: { companionId?: string; name?: string };
   },
   "LoveCall"
 >;
@@ -47,25 +49,43 @@ export const LoveCallScreen = () => {
   const insets = useSafeAreaInsets();
   const route = useRoute<CallRoute>();
   const { companions, activeCompanion } = useCompanions();
-  const { start, patchChat, minimize, companionId } = useLoveSession();
-  const companion =
-    companions.find((item) => item.id === route.params?.companionId) ??
-    activeCompanion;
-  const name = companion?.name ?? "Kevin";
-  const [elapsed, setElapsed] = useState(0);
+  const { threads } = useChat();
+  const {
+    start,
+    patchChat,
+    minimize,
+    companionId,
+    chat,
+    callStartedAt,
+    ensureLayerTimer,
+    clearLayerTimer,
+  } = useLoveSession();
+  const { companionId: partnerId, name } = resolveLovePerson({
+    companionId: companionId ?? route.params?.companionId ?? chat?.companionId,
+    name: route.params?.name,
+    companions,
+    threads,
+    activeCompanion,
+    chatName: chat?.name,
+  });
+  const [now, setNow] = useState(Date.now());
   const [pressing, setPressing] = useState(false);
+  const elapsed = callStartedAt
+    ? Math.max(0, Math.floor((now - callStartedAt) / 1000))
+    : 0;
 
   useEffect(() => {
     start({
       layer: "call",
-      companionId: companion?.id ?? companionId,
+      companionId: partnerId,
       name,
     });
-  }, [companion?.id, companionId, name, start]);
+    ensureLayerTimer("call");
+  }, [ensureLayerTimer, name, partnerId, start]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setElapsed((current) => current + 1);
+      setNow(Date.now());
     }, 1000);
     return () => clearInterval(timer);
   }, []);
@@ -118,14 +138,15 @@ export const LoveCallScreen = () => {
         >
           <Image source={CALL_FACE} style={styles.face} />
         </Pressable>
-        <Text style={styles.press}>Press</Text>
+        <Text style={styles.press}>Connected</Text>
       </View>
       <TouchableOpacity
         onPress={() => {
           patchChat({ inCall: false });
+          clearLayerTimer("call");
           start({
             layer: "chat",
-            companionId: companion?.id ?? companionId,
+            companionId: partnerId,
             name,
           });
           navigation.goBack();

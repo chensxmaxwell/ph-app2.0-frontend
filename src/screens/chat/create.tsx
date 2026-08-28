@@ -9,13 +9,21 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
+import {
+  NavigationProp,
+  ParamListBase,
+  RouteProp,
+  useNavigation,
+  useRoute,
+} from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import ChevronBack from "@images/avatar/chevron-back.svg";
 import { s } from "../avatar/scale";
 import { ChatGradient } from "./background";
+import { openAvatarWizard } from "../avatar/open";
+import { useCompanions } from "../../store/companions";
 import { useChat } from "./store";
 
 type CreateRoute = RouteProp<
@@ -24,9 +32,10 @@ type CreateRoute = RouteProp<
 >;
 
 export const ChatCreateScreen = () => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp<ParamListBase>>();
   const route = useRoute<CreateRoute>();
-  const { createBot, getThread } = useChat();
+  const { createBot, updateBot, getThread } = useChat();
+  const { companions, updateCompanion } = useCompanions();
   const existing = route.params?.threadId
     ? getThread(route.params.threadId)
     : undefined;
@@ -39,8 +48,19 @@ export const ChatCreateScreen = () => {
   );
   const [done, setDone] = useState(false);
 
+  const editing = Boolean(existing);
+
   const submit = () => {
     if (existing) {
+      updateBot(existing.id, { name, gender, birthday, description });
+      if (companions.some((item) => item.id === existing.id)) {
+        updateCompanion(existing.id, {
+          name: name.trim() || existing.name,
+          gender,
+          birthday,
+          story: description,
+        });
+      }
       setCreatedId(existing.id);
       setDone(true);
       return;
@@ -67,12 +87,14 @@ export const ChatCreateScreen = () => {
             </View>
             <Text style={styles.successTitle}>{name || "Kevin"}</Text>
             <Text style={styles.successBody}>
-              {`You have successfully created ${name || "Kevin"}. Start chatting with ${name || "Kevin"} or create an avatar.`}
+              {editing
+                ? `You have saved ${name || "Kevin"}.`
+                : `You have successfully created ${name || "Kevin"}. Start chatting with ${name || "Kevin"} or create an avatar.`}
             </Text>
             <TouchableOpacity
               style={styles.primary}
               onPress={() =>
-                navigation.navigate(
+                navigation.replace(
                   SCREENS.CHAT_THREAD as never,
                   { threadId: createdId } as never
                 )
@@ -80,12 +102,19 @@ export const ChatCreateScreen = () => {
             >
               <Text style={styles.primaryText}>Start chatting</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.primary}
-              onPress={() => navigation.navigate(SCREENS.AVATAR_STACK as never)}
-            >
-              <Text style={styles.primaryText}>Create avatar</Text>
-            </TouchableOpacity>
+            {editing ? null : (
+              <TouchableOpacity
+                style={styles.primary}
+                onPress={() =>
+                  openAvatarWizard(navigation, {
+                    mode: "create",
+                    companionId: createdId,
+                  })
+                }
+              >
+                <Text style={styles.primaryText}>Create avatar</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity onPress={() => navigation.goBack()}>
               <Text style={styles.link}>Return</Text>
             </TouchableOpacity>

@@ -8,14 +8,14 @@ export const HAIR_COLORS = [
 ] as const;
 
 export const SKIN_COLORS = [
-  "#f6d7c3",
-  "#e8b896",
-  "#c68642",
-  "#8d5524",
+  "#f3d0bc",
+  "#e2b089",
+  "#c17a45",
+  "#8a4f28",
 ] as const;
 
 export const EYE_COLORS = [
-  "#2c1a0e",
+  "#3a2418",
   "#3f6b3a",
   "#2e4d7a",
   "#5a3a1e",

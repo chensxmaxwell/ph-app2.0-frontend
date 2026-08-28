@@ -71,7 +71,7 @@ const SetAlarmScreen = () => {
           text: "Discard Setting",
           onPress: () => {
             hideAlert();
-            navigation.navigate(SCREENS.SETALARM_INTRO);
+            navigation.goBack();
           },
         },
       });
@@ -100,7 +100,13 @@ const SetAlarmScreen = () => {
         text: "OK",
         onPress: () => {
           hideAlert();
-          navigation.navigate(SCREENS.SETALARM_LIST);
+          navigation.reset({
+            index: 1,
+            routes: [
+              { name: SCREENS.SETALARM_INTRO },
+              { name: SCREENS.SETALARM_LIST },
+            ],
+          });
         },
       },
     });

@@ -27,17 +27,16 @@ import PinIcon from "@images/message/pin.svg";
 import LinkIcon from "@images/message/link.svg";
 import Heartbeat from "@images/message/heartbeat.svg";
 import { s } from "../avatar/scale";
+import { useOpenLove } from "../love/pill";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
 import { ChatBubble, ChatThread } from "./types";
-
-const FACE = require("../../../assets/images/message/kevin.png");
-const PHOTO = require("../../../assets/images/message/kevin-photo.png");
+import { faceSourceForId } from "./faces";
 
 type ThreadRoute = RouteProp<{ ChatThread: { threadId: string } }, "ChatThread">;
 
 const faceFor = (thread: ChatThread) =>
-  thread.kind === "human" ? PHOTO : FACE;
+  faceSourceForId(thread.id, thread.kind);
 
 const Dialog = ({
   title,
@@ -86,9 +85,11 @@ export const ChatThreadScreen = () => {
     inCallThreadId,
     setInCall,
     setRequest,
+    cancelFriendRequest,
     humanLimitReached,
   } = useChat();
   const thread = getThread(route.params.threadId);
+  const openLove = useOpenLove();
   const [draft, setDraft] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -97,6 +98,7 @@ export const ChatThreadScreen = () => {
   const [holding, setHolding] = useState(false);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [listenBlocked, setListenBlocked] = useState(false);
+  const [resentNote, setResentNote] = useState(false);
   const listRef = useRef<ScrollView>(null);
 
   if (!thread) {
@@ -113,11 +115,13 @@ export const ChatThreadScreen = () => {
 
   const typing = draft.trim().length > 0;
   const limited = humanLimitReached(thread);
+  const chatting =
+    (thread.request === "none" || thread.request === "accepted") && !limited;
   const showHero =
     thread.request === "incoming" ||
     thread.request === "sent" ||
     limited ||
-    thread.messages.length <= 1;
+    thread.messages.length === 0;
   const lastThem = [...thread.messages]
     .reverse()
     .find((item) => item.from === "them");
@@ -197,7 +201,10 @@ export const ChatThreadScreen = () => {
   return (
     <ChatGradient>
       <SafeAreaView style={styles.safe} edges={["top"]}>
-        <View style={styles.header}>
+        <Pressable
+          style={styles.header}
+          onPress={drawerOpen ? () => setDrawerOpen(false) : undefined}
+        >
           <TouchableOpacity onPress={goBack} hitSlop={8} style={styles.headerSide}>
             <ChevronBack width={s(35)} height={s(35)} />
           </TouchableOpacity>
@@ -216,11 +223,12 @@ export const ChatThreadScreen = () => {
           >
             <Lightbulb width={s(35)} height={s(35)} />
           </TouchableOpacity>
-        </View>
+        </Pressable>
         <KeyboardAvoidingView
           style={styles.flex}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
+          <View style={styles.flex}>
           <ScrollView
             ref={listRef}
             contentContainerStyle={styles.messages}
@@ -264,6 +272,13 @@ export const ChatThreadScreen = () => {
               </TouchableOpacity>
             ) : null}
           </ScrollView>
+          {drawerOpen ? (
+            <Pressable
+              style={styles.drawerScrim}
+              onPress={() => setDrawerOpen(false)}
+            />
+          ) : null}
+          </View>
 
           {thread.request === "incoming" ? (
             <View style={[styles.gate, { paddingBottom: insets.bottom + s(16) }]}>
@@ -273,19 +288,35 @@ export const ChatThreadScreen = () => {
               >
                 <Text style={styles.primaryText}>Accept</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => navigation.goBack()}>
+              <TouchableOpacity
+                onPress={() => {
+                  setRequest(thread.id, "refused");
+                  navigation.goBack();
+                }}
+              >
                 <Text style={styles.link}>Refuse</Text>
               </TouchableOpacity>
             </View>
           ) : thread.request === "sent" ? (
             <View style={[styles.gate, { paddingBottom: insets.bottom + s(16) }]}>
+              {resentNote ? (
+                <Text style={styles.limit}>Request resent</Text>
+              ) : null}
               <TouchableOpacity
                 style={styles.primary}
-                onPress={() => setRequest(thread.id, "sent")}
+                onPress={() => {
+                  setRequest(thread.id, "sent");
+                  setResentNote(true);
+                }}
               >
                 <Text style={styles.primaryText}>Resend request</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => navigation.goBack()}>
+              <TouchableOpacity
+                onPress={() => {
+                  cancelFriendRequest(thread.id);
+                  navigation.goBack();
+                }}
+              >
                 <Text style={styles.link}>Cancel request</Text>
               </TouchableOpacity>
             </View>
@@ -311,7 +342,11 @@ export const ChatThreadScreen = () => {
                 { paddingBottom: insets.bottom, height: s(80) + insets.bottom },
               ]}
             >
-              <TouchableOpacity onPress={() => setTalkMode(false)}>
+              <TouchableOpacity
+                onPress={() => setTalkMode(false)}
+                style={styles.iconHit}
+                hitSlop={8}
+              >
                 <KeyboardIcon width={s(35)} height={s(35)} />
               </TouchableOpacity>
               <Pressable
@@ -331,6 +366,8 @@ export const ChatThreadScreen = () => {
                   setTalkMode(false);
                   setDrawerOpen(true);
                 }}
+                style={styles.plus}
+                hitSlop={12}
               >
                 <PlusCircle width={s(35)} height={s(35)} />
               </TouchableOpacity>
@@ -341,7 +378,7 @@ export const ChatThreadScreen = () => {
                 styles.composer,
                 {
                   paddingBottom: insets.bottom,
-                  height: s(80) + insets.bottom,
+                  minHeight: s(80) + insets.bottom,
                 },
               ]}
             >
@@ -350,6 +387,8 @@ export const ChatThreadScreen = () => {
                   setDrawerOpen(false);
                   setTalkMode(true);
                 }}
+                style={styles.iconHit}
+                hitSlop={8}
               >
                 <Waveform width={s(35)} height={s(35)} />
               </TouchableOpacity>
@@ -372,16 +411,18 @@ export const ChatThreadScreen = () => {
                   setTalkMode(false);
                   setDrawerOpen((open) => !open);
                 }}
+                style={styles.plus}
+                hitSlop={12}
               >
                 <PlusCircle width={s(35)} height={s(35)} />
               </TouchableOpacity>
-              <TouchableOpacity onPress={submit} style={styles.send}>
+              <TouchableOpacity onPress={submit} style={styles.send} hitSlop={8}>
                 <Paperplane width={s(35)} height={s(35)} />
               </TouchableOpacity>
             </View>
           )}
 
-          {drawerOpen && !talkMode && thread.request === "none" && !limited ? (
+          {drawerOpen && !talkMode && chatting ? (
             <View style={[styles.drawer, { paddingBottom: insets.bottom }]}>
               <View style={styles.drawerRow}>
                 {(drawerPage === 0
@@ -391,19 +432,26 @@ export const ChatThreadScreen = () => {
                         label: "Sync",
                         Icon: LinkIcon,
                         onPress: () => {
+                          setDrawerOpen(false);
                           setSynced(thread.id, true);
-                          navigation.navigate(SCREENS.SYNC_STACK as never);
+                          openLove({
+                            companionId: thread.id,
+                            name: thread.name,
+                            syncing: true,
+                          });
                         },
                       },
                       {
                         key: "call",
                         label: "Call",
                         Icon: PhoneIcon,
-                        onPress: () =>
+                        onPress: () => {
+                          setDrawerOpen(false);
                           navigation.navigate(
                             SCREENS.CHAT_CALL as never,
                             { threadId: thread.id } as never
-                          ),
+                          );
+                        },
                       },
                       {
                         key: "pin",
@@ -425,8 +473,10 @@ export const ChatThreadScreen = () => {
                         key: "bliss",
                         label: "Bliss",
                         Icon: Heartbeat,
-                        onPress: () =>
-                          navigation.navigate(SCREENS.BLISS_STACK as never),
+                        onPress: () => {
+                          setDrawerOpen(false);
+                          navigation.navigate(SCREENS.BLISS_STACK as never);
+                        },
                       },
                     ]
                 ).map((item) => (
@@ -452,11 +502,16 @@ export const ChatThreadScreen = () => {
                   <Pressable
                     key={page}
                     onPress={() => setDrawerPage(page)}
-                    style={[
-                      styles.dot,
-                      drawerPage === page ? styles.dotOn : null,
-                    ]}
-                  />
+                    hitSlop={8}
+                    style={styles.dotHit}
+                  >
+                    <View
+                      style={[
+                        styles.dot,
+                        drawerPage === page ? styles.dotOn : null,
+                      ]}
+                    />
+                  </Pressable>
                 ))}
               </View>
             </View>
@@ -615,15 +670,15 @@ const styles = StyleSheet.create({
   composer: {
     backgroundColor: "#4c495f",
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     paddingTop: s(8),
-    paddingHorizontal: s(16),
+    paddingHorizontal: s(12),
+    gap: s(8),
+    zIndex: 5,
   },
   inputWrap: {
-    width: s(216),
+    flex: 1,
     minHeight: s(48),
-    marginLeft: s(16),
-    marginRight: s(8),
     borderRadius: s(12),
     backgroundColor: colors.grayLightest,
     justifyContent: "center",
@@ -636,16 +691,35 @@ const styles = StyleSheet.create({
     fontSize: 13,
     padding: 0,
   },
+  iconHit: {
+    width: s(44),
+    height: s(44),
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 6,
+  },
+  plus: {
+    width: s(44),
+    height: s(44),
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 6,
+  },
   send: {
-    marginLeft: s(8),
+    width: s(44),
+    height: s(44),
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 6,
   },
   talkBar: {
     backgroundColor: "#4c495f",
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     paddingTop: s(8),
-    paddingHorizontal: s(16),
+    paddingHorizontal: s(12),
     gap: s(12),
+    zIndex: 5,
   },
   talkButton: {
     flex: 1,
@@ -663,10 +737,16 @@ const styles = StyleSheet.create({
     fontFamily: "Quicksand-Bold",
     fontSize: 13,
   },
+  drawerScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    zIndex: 3,
+  },
   drawer: {
     backgroundColor: "#2f2d3c",
     paddingTop: s(24),
     paddingHorizontal: s(24),
+    zIndex: 5,
   },
   drawerRow: {
     flexDirection: "row",
@@ -700,6 +780,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "center",
     gap: s(8),
+  },
+  dotHit: {
+    width: s(44),
+    height: s(44),
+    alignItems: "center",
+    justifyContent: "center",
   },
   dot: {
     width: s(6),

@@ -8,9 +8,7 @@ import PhoneDown from "@images/love/phone-down.svg";
 import { s } from "../avatar/scale";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
-
-const PHOTO = require("../../../assets/images/message/kevin-photo.png");
-const FACE = require("../../../assets/images/message/kevin.png");
+import { faceSourceForId } from "./faces";
 
 type CallRoute = RouteProp<{ ChatCall: { threadId: string } }, "ChatCall">;
 
@@ -76,12 +74,12 @@ export const ChatCallScreen = () => {
       <View style={styles.stage}>
         <View style={styles.ring}>
           <Image
-            source={thread?.kind === "human" ? PHOTO : FACE}
+            source={faceSourceForId(thread?.id, thread?.kind)}
             style={styles.face}
           />
         </View>
         <Text style={styles.status}>
-          {connected ? "Press" : `Calling ${name}`}
+          {connected ? "Connected" : `Calling ${name}`}
         </Text>
       </View>
       <TouchableOpacity

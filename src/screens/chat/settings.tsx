@@ -7,18 +7,25 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
+import {
+  NavigationProp,
+  ParamListBase,
+  RouteProp,
+  useNavigation,
+  useRoute,
+} from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import ChevronBack from "@images/avatar/chevron-back.svg";
 import Pencil from "@images/message/pencil.svg";
+import { lookFromCompanion, useCompanions } from "../../store/companions";
+import { LookFace } from "../avatar/look-face";
+import { openAvatarWizard } from "../avatar/open";
 import { s } from "../avatar/scale";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
-
-const FACE = require("../../../assets/images/message/kevin.png");
-const PHOTO = require("../../../assets/images/message/kevin-photo.png");
+import { faceSourceForId } from "./faces";
 
 type SettingsRoute = RouteProp<
   { ChatSettings: { threadId: string } },
@@ -37,14 +44,30 @@ const Field = ({ label, value }: { label: string; value?: string }) => (
 );
 
 export const ChatSettingsScreen = () => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp<ParamListBase>>();
   const route = useRoute<SettingsRoute>();
   const { getThread } = useChat();
+  const { companions } = useCompanions();
   const thread = getThread(route.params.threadId);
+  const companion = companions.find((item) => item.id === thread?.id);
 
   if (!thread) {
     return null;
   }
+
+  const openTraits = () => {
+    if (companion) {
+      openAvatarWizard(navigation, {
+        mode: "editPersona",
+        companionId: companion.id,
+      });
+      return;
+    }
+    navigation.navigate(
+      SCREENS.CHAT_CREATE as never,
+      { threadId: thread.id } as never
+    );
+  };
 
   return (
     <ChatGradient>
@@ -53,36 +76,75 @@ export const ChatSettingsScreen = () => {
           <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={8}>
             <ChevronBack width={s(35)} height={s(35)} />
           </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() =>
-              navigation.navigate(
-                SCREENS.CHAT_CREATE as never,
-                { threadId: thread.id } as never
-              )
-            }
-          >
+          <TouchableOpacity onPress={openTraits}>
             <Pencil width={s(35)} height={s(35)} />
           </TouchableOpacity>
         </View>
         <ScrollView contentContainerStyle={styles.body}>
-          <Image
-            source={thread.kind === "human" ? PHOTO : FACE}
-            style={styles.portrait}
+          {companion ? (
+            <View style={styles.portraitWrap}>
+              <LookFace look={lookFromCompanion(companion)} size={s(160)} />
+            </View>
+          ) : (
+            <Image
+              source={faceSourceForId(thread.id, thread.kind)}
+              style={styles.portrait}
+            />
+          )}
+          {companion ? (
+            <>
+              <TouchableOpacity
+                style={styles.traits}
+                onPress={() =>
+                  openAvatarWizard(navigation, {
+                    mode: "editLook",
+                    companionId: companion.id,
+                  })
+                }
+              >
+                <Text style={styles.traitsText}>Edit avatar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.traits} onPress={openTraits}>
+                <Text style={styles.traitsText}>Edit persona</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <TouchableOpacity style={styles.traits} onPress={openTraits}>
+                <Text style={styles.traitsText}>Edit traits</Text>
+              </TouchableOpacity>
+              {thread.kind === "bot" ? (
+                <TouchableOpacity
+                  style={styles.traits}
+                  onPress={() =>
+                    openAvatarWizard(navigation, {
+                      mode: "create",
+                      companionId: thread.id,
+                    })
+                  }
+                >
+                  <Text style={styles.traitsText}>Create avatar</Text>
+                </TouchableOpacity>
+              ) : null}
+            </>
+          )}
+          <Field label="Name" value={companion?.name ?? thread.name} />
+          <Field label="Gender" value={companion?.gender ?? thread.gender} />
+          <Field
+            label="Birthday"
+            value={companion?.birthday ?? thread.birthday}
           />
-          <TouchableOpacity
-            style={styles.traits}
-            onPress={() =>
-              navigation.navigate(SCREENS.AVATAR_STACK as never)
-            }
-          >
-            <Text style={styles.traitsText}>Edit traits</Text>
-          </TouchableOpacity>
-          <Field label="Name" value={thread.name} />
-          <Field label="Gender" value={thread.gender} />
-          <Field label="Birthday" value={thread.birthday} />
-          <Field label="Description" value={thread.description} />
-          {thread.personality ? (
-            <Field label="Personality" value={thread.personality} />
+          <Field
+            label="Description"
+            value={companion?.story ?? thread.description}
+          />
+          {companion?.personalities?.length || thread.personality ? (
+            <Field
+              label="Personality"
+              value={
+                companion?.personalities?.join(", ") || thread.personality
+              }
+            />
           ) : null}
         </ScrollView>
       </SafeAreaView>
@@ -110,6 +172,12 @@ const styles = StyleSheet.create({
     width: s(345),
     height: s(280),
     borderRadius: s(24),
+  },
+  portraitWrap: {
+    width: s(160),
+    height: s(160),
+    alignItems: "center",
+    justifyContent: "center",
   },
   traits: {
     marginTop: s(16),

@@ -23,16 +23,20 @@ import Speaker from "@images/speaker.svg";
 import MicroPhoneUnmute from "@images/microphone-unmute.svg";
 import MicroPhoneMute from "@images/microphone-mute.svg";
 import { useCompanions } from "../../store/companions";
+import { useChat } from "../chat/store";
 import { s } from "../avatar/scale";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
+import { resolveLovePerson } from "./partner";
 import { useLoveSession } from "./session";
+import { usePatternPlayer } from "../../hooks/usePatternPlayer";
+import { wavePattern } from "../../store/patterns";
 
 const FACE = require("../../../assets/images/love/call-face.png");
 
 type SyncRoute = RouteProp<
   {
-    LoveSync: { companionId?: string };
+    LoveSync: { companionId?: string; name?: string };
   },
   "LoveSync"
 >;
@@ -50,26 +54,49 @@ export const LoveSyncScreen = () => {
   const insets = useSafeAreaInsets();
   const route = useRoute<SyncRoute>();
   const { companions, activeCompanion } = useCompanions();
-  const { start, patchChat, minimize, companionId } = useLoveSession();
-  const companion =
-    companions.find((item) => item.id === route.params?.companionId) ??
-    activeCompanion;
-  const name = companion?.name ?? "Kevin";
-  const [elapsed, setElapsed] = useState(0);
+  const { threads } = useChat();
+  const {
+    start,
+    patchChat,
+    minimize,
+    companionId,
+    chat,
+    syncStartedAt,
+    ensureLayerTimer,
+    clearLayerTimer,
+  } = useLoveSession();
+  const { companionId: partnerId, name } = resolveLovePerson({
+    companionId: companionId ?? route.params?.companionId ?? chat?.companionId,
+    name: route.params?.name,
+    companions,
+    threads,
+    activeCompanion,
+    chatName: chat?.name,
+  });
+  const { stop: stopMotor } = usePatternPlayer(
+    wavePattern(72),
+    "sync",
+    true
+  );
+  const [now, setNow] = useState(Date.now());
   const [muted, setMuted] = useState(false);
+  const elapsed = syncStartedAt
+    ? Math.max(0, Math.floor((now - syncStartedAt) / 1000))
+    : 0;
   const [speakerOn, setSpeakerOn] = useState(true);
 
   useEffect(() => {
     start({
       layer: "sync",
-      companionId: companion?.id ?? companionId,
+      companionId: partnerId,
       name,
     });
-  }, [companion?.id, companionId, name, start]);
+    ensureLayerTimer("sync");
+  }, [ensureLayerTimer, name, partnerId, start]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setElapsed((current) => current + 1);
+      setNow(Date.now());
     }, 1000);
     return () => clearInterval(timer);
   }, []);
@@ -136,9 +163,11 @@ export const LoveSyncScreen = () => {
           style={styles.hangup}
           onPress={() => {
             patchChat({ synced: false });
+            clearLayerTimer("sync");
+            stopMotor();
             start({
               layer: "chat",
-              companionId: companion?.id ?? companionId,
+              companionId: partnerId,
               name,
             });
             navigation.goBack();

@@ -21,9 +21,7 @@ import Paperplane from "@images/love/paperplane.svg";
 import { s } from "../avatar/scale";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
-
-const FACE = require("../../../assets/images/message/kevin.png");
-const PHOTO = require("../../../assets/images/message/kevin-photo.png");
+import { faceSourceForId } from "./faces";
 
 type SearchRoute = RouteProp<
   { ChatSearch: { addFriends?: boolean } | undefined },
@@ -117,7 +115,9 @@ export const ChatSearchScreen = () => {
             {results.map((item) => (
               <View key={item.key} style={styles.card}>
                 <Image
-                  source={item.kind === "person" ? PHOTO : FACE}
+                  source={faceSourceForId(
+                    item.kind === "person" ? item.person.id : item.threadId
+                  )}
                   style={styles.face}
                 />
                 <View style={styles.copy}>
@@ -132,13 +132,13 @@ export const ChatSearchScreen = () => {
                   style={styles.action}
                   onPress={() => {
                     if (item.kind === "person") {
-                      navigation.navigate(
+                      navigation.replace(
                         SCREENS.CHAT_CONTACT as never,
                         { personId: item.person.id } as never
                       );
                       return;
                     }
-                    navigation.navigate(
+                    navigation.replace(
                       SCREENS.CHAT_THREAD as never,
                       { threadId: item.threadId } as never
                     );

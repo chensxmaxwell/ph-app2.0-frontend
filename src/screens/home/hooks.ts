@@ -1,18 +1,9 @@
 import Alarm from "@images/alarm.svg";
 import Heart from "@images/heart.svg";
-import MockProfile from "@images/mock_profile.svg";
-import MockProfile1 from "@images/mock_profile1.svg";
-import MockProfile2 from "@images/mock_profile2.svg";
-import MockProfile3 from "@images/mock_profile3.svg";
-import MockProfile4 from "@images/mock_profile4.svg";
-import MockProfile5 from "@images/mock_profile5.svg";
-import MockProfile6 from "@images/mock_profile6.svg";
-import MockProfile7 from "@images/mock_profile7.svg";
-import MockProfile8 from "@images/mock_profile8.svg";
-import MockProfile9 from "@images/mock_profile9.svg";
 import HeartFull from "@images/heartFull.svg";
 import { SCREENS } from "../../../src/common/constant";
 import { NavigationProp } from "@react-navigation/native";
+import { MOCK_HOME_COMPANIONS } from "./mock-companions";
 
 type HomeEvent = {
   type: string;
@@ -25,81 +16,15 @@ type HomeEvent = {
 };
 
 export const useHome = () => {
-  // TODO* replace this mock data with real data
-  const companions: chatBotType[] = [
-    {
-      name: "Samantha",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile,
-    },
-    {
-      name: "Samantha",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile4,
-    },
-    {
-      name: "Samantha",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile2,
-    },
-    {
-      name: "Samantha",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile5,
-    },
-    {
-      name: "Samantha",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile9,
-    },
-    {
-      name: "Samantha",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile6,
-    },
-    {
-      name: "Samantha",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile7,
-    },
-    {
-      name: "Samantha",
-      gender: "M",
-      birthdate: "1995-01-01",
-      photos: [],
-      tags: ["funny", "smart", "adventurous"],
-      language: "en",
-      profilePicture: MockProfile8,
-    },
-  ];
+  const companions: chatBotType[] = MOCK_HOME_COMPANIONS.map((person) => ({
+    id: person.id,
+    name: person.name,
+    gender: "M",
+    birthdate: "1995-01-01",
+    photos: [],
+    tags: ["funny", "smart", "adventurous"],
+    language: "en",
+  }));
   // TODO* replace this mock data with real data
   const events: HomeEvent[] = [
     {
@@ -107,11 +32,7 @@ export const useHome = () => {
       title: "Alarm",
       icon: Alarm,
       detail: "7:00 am \n Monday",
-      forward: [
-        SCREENS.PLAYGROUND_STACK,
-        SCREENS.ALARM_STACK,
-        SCREENS.SETALARM_INTRO,
-      ],
+      forward: [SCREENS.PLAYGROUND_STACK, SCREENS.ALARM_STACK],
     },
     {
       type: "Vibration",
@@ -172,6 +93,7 @@ export const useHome = () => {
 };
 
 type chatBotType = {
+  id: string;
   name: string;
   gender: string;
   birthdate: string;
@@ -184,7 +106,6 @@ type chatBotType = {
   profilePhoto?: string;
   examples?: exampleSchemaType[];
   language: string;
-  profilePicture?: any;
 };
 
 type exampleSchemaType = {

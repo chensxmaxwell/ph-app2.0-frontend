@@ -1,0 +1,91 @@
+import { ChatThread, DirectoryPerson } from "../screens/chat/types";
+
+export const seedThreads = (): ChatThread[] => [
+  {
+    id: "kevin",
+    name: "Kevin",
+    kind: "bot",
+    preview: "Then stay. I've got you.",
+    time: "Yesterday",
+    pinned: true,
+    listen: false,
+    synced: false,
+    request: "none",
+    gender: "Male",
+    birthday: "05/25/1976",
+    description:
+      "Kevin is playful, attentive, and a little mischievous. He notices the small things and keeps the conversation close.",
+    personality: "Playful, attentive, a little mischievous.",
+    messages: [
+      { id: "k1", from: "them", text: "How's it going gorgeous?" },
+      { id: "k2", from: "me", text: "Just got home. You still up?" },
+      { id: "k3", from: "them", text: "Always am when you show up. Tell me about your day." },
+      { id: "k4", from: "me", text: "Long one. Glad you're here." },
+      { id: "k5", from: "them", text: "Then stay. I've got you." },
+    ],
+  },
+  {
+    id: "chad",
+    name: "Chad",
+    kind: "bot",
+    preview: "You. Same as last time.",
+    time: "2:14 PM",
+    pinned: false,
+    listen: false,
+    synced: false,
+    request: "none",
+    gender: "Male",
+    birthday: "13th April 2001",
+    description: "Chad is direct, confident, and a little competitive.",
+    personality: "Direct, confident, a little competitive.",
+    messages: [
+      { id: "c1", from: "them", text: "You finally opened this." },
+      { id: "c2", from: "me", text: "Didn't want to keep you waiting." },
+      { id: "c3", from: "them", text: "Good. I don't do small talk for long." },
+      { id: "c4", from: "me", text: "Then skip it. What's on your mind?" },
+      { id: "c5", from: "them", text: "You. Same as last time." },
+    ],
+  },
+  {
+    id: "amanda",
+    name: "Amanda",
+    kind: "bot",
+    preview: "Keep it. I like this one.",
+    time: "Now",
+    pinned: false,
+    listen: false,
+    synced: false,
+    request: "none",
+    gender: "Female",
+    birthday: "13th April 2001",
+    description:
+      "Amanda likes late-night talks and getting straight to what you want.",
+    personality: "Warm, witty, and a little teasing.",
+    messages: [
+      { id: "a1", from: "them", text: "Hey, it's Amanda. I saved you a seat." },
+      { id: "a2", from: "me", text: "Of course you did." },
+      { id: "a3", from: "them", text: "Don't act surprised. You always come back." },
+      { id: "a4", from: "me", text: "Bad habit." },
+      { id: "a5", from: "them", text: "Keep it. I like this one." },
+    ],
+  },
+];
+
+export const seedDirectory = (): DirectoryPerson[] => [
+  {
+    id: "chad",
+    name: "Chad",
+    email: "123456@gmail.com",
+    gender: "Male",
+    birthday: "13th April 2001",
+    plan: "Free user",
+  },
+  {
+    id: "amanda",
+    name: "Amanda Guo",
+    email: "123456@gmail.com",
+    gender: "Female",
+    birthday: "13th April 2001",
+    plan: "Free user",
+  },
+];

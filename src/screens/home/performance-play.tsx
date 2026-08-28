@@ -9,7 +9,6 @@ import PrevPattern from "@images/icons/backward-frame.svg";
 import { ConnectionPill } from "@common/components/connection-pill";
 import { s } from "../avatar/scale";
 import { SimplePage } from "../shared/simple-page";
-import { SessionLovePill } from "../love/pill";
 import { usePatternPlayer } from "../../hooks/usePatternPlayer";
 import { BUILTIN_PATTERNS, nextNamedPattern } from "../../store/patterns";
 
@@ -66,7 +65,6 @@ export const PerformancePlayScreen = () => {
           {playing ? "Playing" : "Paused"} {pack.title}
         </Text>
       </View>
-      <SessionLovePill style={styles.pill} />
     </SimplePage>
   );
 };
@@ -100,10 +98,5 @@ const styles = StyleSheet.create({
     color: colors.grayLighter,
     fontFamily: "Quicksand-Bold",
     fontSize: 13,
-  },
-  pill: {
-    position: "absolute",
-    top: s(8),
-    alignSelf: "center",
   },
 });

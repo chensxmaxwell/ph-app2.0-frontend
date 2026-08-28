@@ -13,7 +13,7 @@ import { useNavigation } from "@react-navigation/native";
 import ChevronLeft from "@images/chevron-left-white.svg";
 import { NavigationType } from "../../../App";
 
-const ProfileSettingAbout = () => {
+const ProfileSettingPrivacy = () => {
   const navigation = useNavigation<NavigationType>();
 
   return (
@@ -27,35 +27,34 @@ const ProfileSettingAbout = () => {
           <ChevronLeft width={35} height={35} />
         </TouchableOpacity>
       </View>
-      <View>
-        <ScrollView contentContainerStyle={styles.scrollContainer}>
-          <Text style={styles.title}>Title</Text>
-          <Text style={styles.content}>
-            Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do
-            eiusmod tempor incididunt ut labore et dolore magna aliqua. Fames ac
-            turpis egestas maecenas pharetra convallis posuere. Pellentesque sit
-            amet porttitor eget dolor morbi non. Tincidunt augue interdum velit
-            euismod. Lacus luctus accumsan tortor posuere. Est sit amet
-            facilisis magna etiam tempor. Nec ullamcorper sit amet risus nullam
-            eget felis eget. Cras sed felis eget velit aliquet. Nam aliquam sem
-            et tortor consequat id porta nibh. Consectetur libero id faucibus
-            nisl tincidunt eget nullam non. Volutpat commodo sed egestas egestas
-            fringilla. Habitant morbi tristique senectus et netus. Tellus at
-            urna condimentum mattis. Mi tempus imperdiet nulla malesuada. Eget
-            sit amet tellus cras. Eget est lorem ipsum dolor sit amet
-            consectetur adipiscing elit. In mollis nunc sed id semper risus.
-          </Text>
-          <Text style={styles.content}>
-            Dolor magna eget est lorem ipsum dolor sit amet. Velit ut tortor
-            pretium viverra suspendisse potenti nullam ac tortor. Imperdiet
-            proin fermentum leo vel. Leo urna molestie at elementum eu
-            facilisis. At elementum eu facilisis sed odio morbi. Et sollicitudin
-            ac orci phasellus. Odio euismod lacinia at quis. Suspendisse
-            interdum consectetur libero id faucibus nisl tincidunt eget. Tempus
-            iaculis urna id volutpat lacus laoreet non curabitur gravida.
-          </Text>
-        </ScrollView>
-      </View>
+      <ScrollView contentContainerStyle={styles.scrollContainer}>
+        <Text style={styles.title}>How we treat your data</Text>
+        <Text style={styles.content}>
+          Pleasure House is built for private play. Your profile, companions,
+          chats, and device settings stay on this phone unless you choose to
+          sign in and sync them.
+        </Text>
+        <Text style={styles.content}>
+          If you use Bypass or stay signed out, we do not create an account for
+          you. Conversations and companions on this device are local. Deleting
+          the app removes them from the phone.
+        </Text>
+        <Text style={styles.content}>
+          When you sign in, we store the minimum needed to keep your account
+          working: your display name, saved companions, and chat history you
+          want to keep. We do not sell this data, and we do not use it for ads.
+        </Text>
+        <Text style={styles.content}>
+          Device connection uses Bluetooth on your phone. We do not read
+          unrelated Bluetooth traffic. Microphone and photo access are only
+          used when you start a voice feature or pick an image yourself.
+        </Text>
+        <Text style={styles.content}>
+          You can sign out, delete a companion, or clear a chat at any time
+          from Profile. If you want an account removed, contact us from the
+          Contact page and we will delete the server copy.
+        </Text>
+      </ScrollView>
     </ScreenWrapper>
   );
 };
@@ -89,13 +88,12 @@ const styles = StyleSheet.create({
     marginTop: 30,
   },
   content: {
-    fontSize: fontSizes.small,
-    fontFamily: "OpenSans-Regular",
+    fontSize: 16,
+    fontFamily: "Quicksand-Regular",
     color: colors.white,
     lineHeight: 24,
     marginTop: 20,
-    textAlign: "justify",
   },
 });
 
-export default ProfileSettingAbout;
+export default ProfileSettingPrivacy;

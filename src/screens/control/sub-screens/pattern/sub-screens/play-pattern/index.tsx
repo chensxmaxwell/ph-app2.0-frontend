@@ -7,7 +7,6 @@ import { fontSizes, fontWeights } from "@common/styles/fonts";
 import { BaseText } from "@common/components/base-text";
 import { spacings } from "@common/styles/spacings";
 import { BackButton } from "@common/components/back-button";
-import Lightbulb from "@images/icons/lightbulb.svg";
 import { ConnectionPill } from "@common/components/connection-pill";
 import PlayButton from "@images/arrowtriangle-right.svg";
 import PauseButton from "@images/pause.svg";
@@ -43,9 +42,7 @@ export const PlayPattern: React.FC<PlayPatternScreenProps> = ({ route }) => {
         <View style={styles.titleContainer}>
           <BackButton />
           <BaseText style={styles.titleText}>{current.title}</BaseText>
-          <TouchableOpacity onPress={() => {}}>
-            <Lightbulb />
-          </TouchableOpacity>
+          <View style={styles.titleSpacer} />
         </View>
         <ConnectionPill />
         <View
@@ -110,6 +107,10 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: fontSizes.large,
     fontWeight: fontWeights.bold,
+  },
+  titleSpacer: {
+    width: 35,
+    height: 35,
   },
   buttomControl: {
     position: "absolute",

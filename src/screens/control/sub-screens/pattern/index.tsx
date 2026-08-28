@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { ScreenWrapper } from '@common/components/screen-wrapper';
 import { FULL_SIZE } from '@common/constant';
 import { colors } from '@common/styles/colors';
@@ -8,20 +8,11 @@ import { BaseText } from '@common/components/base-text';
 import { spacings } from '@common/styles/spacings';
 import { usePattern } from './hooks';
 import { BackButton } from '@common/components/back-button';
-import Lightbulb from '@images/icons/lightbulb.svg';
 import { ConnectionPill } from '@common/components/connection-pill';
-import { TabBar } from '../sub-components/tab-bar';
 import { CardsList } from '../sub-components/cards-list';
-import { SessionLovePill } from '../../../love/pill';
-import { s } from '../../../avatar/scale';
 
 export const Pattern = () => {
-  const {
-    tabs,
-    selectedTab,
-    handleLightbulbPress,
-    patterns,
-  } = usePattern();
+  const { patterns } = usePattern();
 
   return (
     <ScreenWrapper disableScrolling>
@@ -29,17 +20,10 @@ export const Pattern = () => {
         <View style={styles.titleContainer}>
           <BackButton />
           <BaseText style={styles.titleText}>Pattern</BaseText>
-          <TouchableOpacity onPress={() => handleLightbulbPress()}>
-            <Lightbulb />
-          </TouchableOpacity>
+          <View style={styles.titleSpacer} />
         </View>
         <ConnectionPill />
-        <TabBar
-          tabs={tabs}
-          selectedTab={selectedTab}
-        />
         <CardsList cards={patterns} />
-        <SessionLovePill style={{ top: s(80) }} />
       </View>
     </ScreenWrapper>
   );
@@ -67,5 +51,9 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: fontSizes.large,
     fontWeight: fontWeights.bold,
+  },
+  titleSpacer: {
+    width: 35,
+    height: 35,
   },
 });

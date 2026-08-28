@@ -50,7 +50,7 @@ export const ScreenWrapper: React.FC<ScreenWrapperProps> = ({
           </View>
         )}
         {disableScrolling ? (
-          <View>{children}</View>
+          <View style={styles.fill}>{children}</View>
         ) : (
           <ScrollView
             contentContainerStyle={[
@@ -76,6 +76,9 @@ export const ScreenWrapper: React.FC<ScreenWrapperProps> = ({
 const styles = StyleSheet.create({
   container: { ...globalStyles.container, flex: 1 },
   safeArea: {
+    flex: 1,
+  },
+  fill: {
     flex: 1,
   },
   backButton: {

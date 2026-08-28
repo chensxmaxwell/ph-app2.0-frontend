@@ -52,6 +52,8 @@ export const useCreatePattern = ({ pattern }: UsePlayPatternProps) => {
             ...prevState.tmp_pattern,
             {
               Icon: Pattern1,
+              title: "Custom Pattern",
+              pattern: recordPattern.current,
               onPress: () =>
                 handlePatternPress({
                   title: "Custom Pattern",

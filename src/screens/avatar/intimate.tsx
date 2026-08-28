@@ -4,9 +4,17 @@ import { useNavigation } from "@react-navigation/native";
 import { Slider } from "@miblanchard/react-native-slider";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
+import { useWizardChrome } from "./chrome";
 import { useAvatarWizard } from "./context";
 import { s } from "./scale";
-import { FieldHint, FieldLabel, WizardShell, useLeaveGuard } from "./shared";
+import {
+  FieldHint,
+  FieldLabel,
+  StepNote,
+  WizardShell,
+  progressFor,
+} from "./shared";
+import { useSaveAndExit } from "./use-save-companion";
 
 const SLIDERS = [
   {
@@ -28,25 +36,30 @@ const SLIDERS = [
 
 export const AvatarIntimateScreen = () => {
   const navigation = useNavigation();
-  const { draft, patchDraft, resetDraft, isDirty } = useAvatarWizard();
-  const { requestLeave, modal } = useLeaveGuard(isDirty, () => {
-    resetDraft();
-    navigation.getParent()?.goBack();
-  });
+  const { draft, patchDraft } = useAvatarWizard();
+  const { mode, title, requestLeave, goBackStep, modal } = useWizardChrome();
+  const saveAndExit = useSaveAndExit();
 
   return (
     <WizardShell
-      title="Craft your ideal lover"
-      progressFill={220}
-      leftIcon="close"
-      onLeftPress={requestLeave}
-      primaryLabel="Continue"
-      onPrimary={() => navigation.navigate(SCREENS.AVATAR_CANDLE)}
-      secondaryLabel="Return"
-      onSecondary={() => navigation.goBack()}
+      title={title}
+      progressFill={progressFor(mode, "intimate")}
+      leftIcon="back"
+      rightIcon="close"
+      onLeftPress={goBackStep}
+      onRightPress={requestLeave}
+      primaryLabel={mode === "editPersona" ? "Save persona" : "Continue"}
+      onPrimary={() => {
+        if (mode === "editPersona") {
+          saveAndExit();
+          return;
+        }
+        navigation.navigate(SCREENS.AVATAR_CANDLE);
+      }}
     >
       {modal}
       <View style={styles.content}>
+        <StepNote>Affects chat persona, not 3D.</StepNote>
         <FieldLabel>Intimate profile</FieldLabel>
         <FieldHint>
           What kind of connection do you yearn for? Shape the desires that will

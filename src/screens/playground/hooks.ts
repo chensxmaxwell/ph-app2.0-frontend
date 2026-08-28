@@ -52,7 +52,7 @@ export const usePlayground = () => {
     {
       id: 6,
       name: "Alarm",
-      detail: "Shake to vibe your way.",
+      detail: "Wake up to a scheduled vibe.",
       icon: Alarm,
       onPress: () => navigation.navigate(SCREENS.ALARM_STACK),
     },

@@ -1,10 +1,5 @@
 import React from "react";
-import {
-  Image,
-  StyleSheet,
-  TouchableOpacity,
-  ViewStyle,
-} from "react-native";
+import { StyleSheet, TouchableOpacity, View, ViewStyle } from "react-native";
 import {
   NavigationProp,
   ParamListBase,
@@ -12,53 +7,81 @@ import {
 } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
-import { useCompanions } from "../../store/companions";
+import { lookFromCompanion, useCompanions } from "../../store/companions";
+import { useChat } from "../chat/store";
+import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
-import { restoreLoveOverlays } from "./overlay";
+import { faceSourceForId } from "../chat/faces";
+import { dismissLoveOverlays, getHomeStackNavigation, restoreLoveOverlays } from "./overlay";
+import {
+  LovePersonParams,
+  loveMessagesFromThread,
+  resolveLovePerson,
+} from "./partner";
 import { useLoveSession } from "./session";
 
-const FACE = require("../../../assets/images/love/face.png");
-
-export type LoveChatParams = {
-  companionId?: string;
-  fromCreation?: boolean;
-  syncing?: boolean;
-};
+export type LoveChatParams = LovePersonParams;
 
 export const useOpenLove = () => {
   const navigation = useNavigation();
   const { activeCompanion, companions, setActiveCompanionId } = useCompanions();
-  const { start, restore, minimized, companionId, layer } = useLoveSession();
+  const { threads } = useChat();
+  const { start, restore, minimized, companionId, layer, chat } =
+    useLoveSession();
 
   return (params?: LoveChatParams) => {
-    const nextId = params?.companionId ?? activeCompanion?.id ?? companionId;
-    const companion = companions.find((item) => item.id === nextId);
-    if (nextId) {
-      setActiveCompanionId(nextId);
+    const requestedId = params?.companionId?.trim();
+    const person = resolveLovePerson({
+      companionId: requestedId || activeCompanion?.id || companionId,
+      name: params?.name,
+      companions,
+      threads,
+      activeCompanion,
+      chatName: chat?.name,
+    });
+    if (person.companionId) {
+      setActiveCompanionId(person.companionId);
     }
 
-    const nav = navigation as NavigationProp<ParamListBase>;
-    if (minimized && (!params?.companionId || params.companionId === companionId)) {
+    const switching = Boolean(
+      person.companionId && companionId && person.companionId !== companionId
+    );
+    const nav =
+      getHomeStackNavigation() ?? (navigation as NavigationProp<ParamListBase>);
+
+    if (minimized && !switching && (!requestedId || requestedId === companionId)) {
       restore();
-      restoreLoveOverlays(nav, layer, nextId);
+      restoreLoveOverlays(nav, layer, person.companionId, person.name);
       return;
     }
 
     start({
       layer: params?.syncing ? "sync" : "chat",
-      companionId: nextId,
-      name: companion?.name,
+      companionId: person.companionId,
+      name: person.name,
+      personality: person.personality,
+      story: person.story,
+      messages: loveMessagesFromThread(person.thread),
       fromCreation: params?.fromCreation,
       syncing: params?.syncing,
-      replace: Boolean(nextId && nextId !== companionId),
+      replace: switching,
     });
-    nav.navigate(SCREENS.LOVE_CHAT as never, {
-      companionId: nextId,
+    const overlayParams = {
+      companionId: person.companionId,
+      name: person.name,
       fromCreation: params?.fromCreation,
       syncing: params?.syncing,
-    } as never);
+    };
+    if (switching) {
+      dismissLoveOverlays(nav, {
+        name: SCREENS.LOVE_CHAT,
+        params: overlayParams,
+      });
+    } else {
+      nav.navigate(SCREENS.LOVE_CHAT as never, overlayParams as never);
+    }
     if (params?.syncing) {
-      nav.navigate(SCREENS.LOVE_SYNC as never, { companionId: nextId } as never);
+      nav.navigate(SCREENS.LOVE_SYNC as never, overlayParams as never);
     }
   };
 };
@@ -70,21 +93,32 @@ type LovePillProps = {
 
 export const LovePill = ({ onPress, style }: LovePillProps) => {
   const openLove = useOpenLove();
+  const { companions, activeCompanion } = useCompanions();
+  const { companionId } = useLoveSession();
+  const companion =
+    companions.find((item) => item.id === companionId) ??
+    companions.find((item) => item.id === activeCompanion?.id);
+  const look = companion ? lookFromCompanion(companion) : null;
+  const personId = companionId ?? activeCompanion?.id;
 
   return (
     <TouchableOpacity
       style={[styles.pill, style]}
-      onPress={onPress ?? (() => openLove())}
+      onPress={onPress ?? (() => openLove({ companionId: personId }))}
       activeOpacity={0.85}
     >
-      <Image source={FACE} style={styles.face} />
+      <LookFace
+        look={look}
+        size={s(37)}
+        fallbackSource={faceSourceForId(personId)}
+      />
     </TouchableOpacity>
   );
 };
 
 export const SessionLovePill = ({ style }: { style?: ViewStyle }) => {
   const navigation = useNavigation();
-  const { minimized, layer, companionId, restore } = useLoveSession();
+  const { minimized, layer, companionId, chat, restore } = useLoveSession();
 
   if (!minimized) {
     return null;
@@ -95,17 +129,30 @@ export const SessionLovePill = ({ style }: { style?: ViewStyle }) => {
       style={style}
       onPress={() => {
         restore();
+        const homeNav = getHomeStackNavigation();
         restoreLoveOverlays(
-          navigation as NavigationProp<ParamListBase>,
+          homeNav ?? (navigation as NavigationProp<ParamListBase>),
           layer,
-          companionId
+          companionId,
+          chat?.name
         );
       }}
     />
   );
 };
 
+export const GlobalSessionLovePill = () => (
+  <View pointerEvents="box-none" collapsable={false} style={styles.host}>
+    <SessionLovePill />
+  </View>
+);
+
 const styles = StyleSheet.create({
+  host: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 50,
+    elevation: 50,
+  },
   pill: {
     position: "absolute",
     right: s(-27),

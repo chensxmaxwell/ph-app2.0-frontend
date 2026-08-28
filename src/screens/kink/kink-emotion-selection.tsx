@@ -13,7 +13,7 @@ import { fontSizes, fontWeights } from "@common/styles/fonts";
 import LinearGradient from "react-native-linear-gradient";
 import { SCREENS } from "@common/constant";
 import { useNavigation } from "@react-navigation/native";
-import Xmark from "@images/xmark.svg";
+import ChevronLeft from "@images/chevron-left-white.svg";
 import RotateRingPicker from "@images/Kink/RotateRingPicker.svg";
 import Pointer from "@images/Kink/pointer.svg";
 import Naughty from "@images/Kink/naughty.svg";
@@ -22,6 +22,7 @@ import Sad from "@images/Kink/sad.svg";
 import Meh from "@images/Kink/meh.svg";
 import Happy from "@images/Kink/happy.svg";
 import { useAppContext } from "./kink-context";
+import { closeGenerate } from "./close-generate";
 
 const emotions = [
   { text: "Angry", icon: Angry },
@@ -116,9 +117,9 @@ const EmotionSelectionScreen = () => {
         <Text style={styles.headerTitle}>Generate your own kink</Text>
         <TouchableOpacity
           style={styles.backIcon}
-          onPress={() => navigation.goBack()}
+          onPress={() => closeGenerate(navigation)}
         >
-          <Xmark width={35} height={35} />
+          <ChevronLeft width={35} height={35} />
         </TouchableOpacity>
       </View>
 

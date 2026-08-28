@@ -3,8 +3,12 @@ import { View, Text, StyleSheet, Image, TouchableOpacity } from "react-native";
 import { ScreenWrapper } from "@common/components/screen-wrapper";
 import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
-import { useNavigation } from "@react-navigation/native";
-import { SCREENS } from "../../common/constant/index";
+import {
+  NavigationProp,
+  ParamListBase,
+  useNavigation,
+  useRoute,
+} from "@react-navigation/native";
 import MinimizeIcon from "@images/minimize.svg";
 import Xmark from "@images/icons/xmark.svg";
 import Speaker from "@images/speaker.svg";
@@ -12,9 +16,18 @@ import MicroPhone_unmute from "@images/microphone-unmute.svg";
 import MicroPhone_mute from "@images/microphone-mute.svg";
 import { usePatternPlayer } from "../../hooks/usePatternPlayer";
 import { wavePattern } from "../../store/patterns";
+import { useLoveSession } from "../love/session";
+import { faceSourceForId } from "../chat/faces";
 
 const SyncScreen = () => {
-  const navigation = useNavigation();
+  const navigation = useNavigation<NavigationProp<ParamListBase>>();
+  const route = useRoute();
+  const params = route.params as
+    | { name?: string; companionId?: string }
+    | undefined;
+  const partnerName = params?.name?.trim() || "Kevin";
+  const partnerId = params?.companionId?.trim() || `sync-${partnerName}`;
+  const { start: startSession, minimize, ensureLayerTimer } = useLoveSession();
   const [syncState, setSyncState] = useState("SYNC_ONGOING");
   const { start, stop } = usePatternPlayer(wavePattern(72), "sync");
   //   SYNC_INVITATION_SENT
@@ -25,7 +38,34 @@ const SyncScreen = () => {
   //   SYNC_ONGOING
 
   const [isMuted, setIsMuted] = useState(false);
+  const [speakerOn, setSpeakerOn] = useState(true);
   const [elapsedTime, setElapsedTime] = useState(0);
+
+  const leaveSyncStack = () => {
+    const parent = navigation.getParent();
+    if (parent) {
+      parent.goBack();
+      return;
+    }
+    navigation.goBack();
+  };
+
+  const hangupSync = () => {
+    stop();
+    leaveSyncStack();
+  };
+
+  const minimizeSync = () => {
+    startSession({
+      layer: "sync",
+      companionId: partnerId,
+      name: partnerName,
+      syncing: true,
+    });
+    ensureLayerTimer("sync", Date.now() - elapsedTime * 1000);
+    minimize();
+    leaveSyncStack();
+  };
 
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
@@ -61,10 +101,10 @@ const SyncScreen = () => {
       case "SYNC_ONGOING":
         return (
           <View style={styles.header}>
-            <Text style={styles.headerTitle}>Kevin</Text>
+            <Text style={styles.headerTitle}>{partnerName}</Text>
             <TouchableOpacity
               style={styles.minimizeIcon}
-              onPress={() => navigation.goBack()}
+              onPress={minimizeSync}
             >
               <MinimizeIcon width={35} height={35} />
             </TouchableOpacity>
@@ -82,18 +122,18 @@ const SyncScreen = () => {
     switch (syncState) {
       case "SYNC_INVITATION_SENT":
         backgroundSource = require("../../../assets/images/eclipse-white.png");
-        ringSource = require("../../../assets/images/avatar.png");
+        ringSource = faceSourceForId(params?.companionId);
         break;
       case "SYNC_ACCEPTED":
         backgroundSource = require("../../../assets/images/eclipse-pink.png");
-        ringSource = require("../../../assets/images/avatar.png");
+        ringSource = faceSourceForId(params?.companionId);
         break;
       case "SYNC_REQUEST_RECEIVED":
         backgroundSource = require("../../../assets/images/eclipse-white.png");
-        ringSource = require("../../../assets/images/avatar.png");
+        ringSource = faceSourceForId(params?.companionId);
         break;
       case "USER_BUSY":
-        ringSource = require("../../../assets/images/avatar.png");
+        ringSource = faceSourceForId(params?.companionId);
         break;
       case "SYNC_ACTIVE_CONFIRMATION":
         backgroundSource = require("../../../assets/images/eclipse-pink.png");
@@ -127,7 +167,7 @@ const SyncScreen = () => {
             <View>
               <Text style={styles.text}>Sync invitation sent</Text>
               <Text style={styles.subText}>
-                Waiting for Kevin to accept your invitation.
+                {`Waiting for ${partnerName} to accept your invitation.`}
               </Text>
             </View>
             <TouchableOpacity
@@ -143,7 +183,7 @@ const SyncScreen = () => {
           <View style={styles.footer}>
             <View>
               <Text style={styles.text}>
-                Kevin has accepted your sync invitation
+                {`${partnerName} has accepted your sync invitation`}
               </Text>
             </View>
             <View>
@@ -166,7 +206,7 @@ const SyncScreen = () => {
         return (
           <View style={styles.footer}>
             <View>
-              <Text style={styles.text}>Kevin wants to sync</Text>
+              <Text style={styles.text}>{`${partnerName} wants to sync`}</Text>
             </View>
             <View>
               <TouchableOpacity
@@ -189,7 +229,7 @@ const SyncScreen = () => {
           <View style={styles.footer}>
             <View>
               <Text style={styles.text}>
-                Looks like Kevin is busy right now
+                {`Looks like ${partnerName} is busy right now`}
               </Text>
             </View>
             <View>
@@ -213,7 +253,7 @@ const SyncScreen = () => {
           <View style={[styles.footer, { justifyContent: "flex-end" }]}>
             <View>
               <Text style={styles.text}>
-                Kevin has accepted your sync invitation
+                {`${partnerName} has accepted your sync invitation`}
               </Text>
             </View>
             <View
@@ -231,7 +271,7 @@ const SyncScreen = () => {
                   alignItems: "center",
                   justifyContent: "center",
                 }}
-                onPress={() => navigation.goBack()}
+                onPress={hangupSync}
               >
                 <Xmark width={20} height={20}></Xmark>
               </TouchableOpacity>
@@ -278,7 +318,7 @@ const SyncScreen = () => {
                   alignItems: "center",
                   justifyContent: "center",
                 }}
-                onPress={() => navigation.goBack()}
+                onPress={hangupSync}
               >
                 <Xmark width={20} height={20}></Xmark>
               </TouchableOpacity>
@@ -287,10 +327,13 @@ const SyncScreen = () => {
                   height: 73,
                   width: 73,
                   borderRadius: 100,
-                  backgroundColor: colors.grayLightest,
+                  backgroundColor: speakerOn
+                    ? colors.grayLightest
+                    : colors.grayLighter,
                   alignItems: "center",
                   justifyContent: "center",
                 }}
+                onPress={() => setSpeakerOn((current) => !current)}
               >
                 <Speaker width={35} height={35}></Speaker>
               </TouchableOpacity>

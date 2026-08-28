@@ -9,8 +9,7 @@ import PersonPlus from "@images/message/person-plus.svg";
 import { s } from "../avatar/scale";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
-
-const PHOTO = require("../../../assets/images/message/kevin-photo.png");
+import { faceSourceForId } from "./faces";
 
 type ContactRoute = RouteProp<
   { ChatContact: { personId: string } },
@@ -20,7 +19,8 @@ type ContactRoute = RouteProp<
 export const ChatContactScreen = () => {
   const navigation = useNavigation();
   const route = useRoute<ContactRoute>();
-  const { directory, sendFriendRequest, threads } = useChat();
+  const { directory, sendFriendRequest, cancelFriendRequest, threads } =
+    useChat();
   const person = directory.find((item) => item.id === route.params.personId);
   const existing = threads.find((thread) => thread.id === person?.id);
   const [sent, setSent] = useState(existing?.request === "sent");
@@ -47,8 +47,8 @@ export const ChatContactScreen = () => {
           </TouchableOpacity>
         </View>
         <View style={styles.body}>
-          <Image source={PHOTO} style={styles.hero} />
-          <Image source={PHOTO} style={styles.badge} />
+          <Image source={faceSourceForId(person.id, "human")} style={styles.hero} />
+          <Image source={faceSourceForId(person.id, "human")} style={styles.badge} />
           <Text style={styles.name}>{person.name}</Text>
           <Text style={styles.email}>{person.email}</Text>
           <View style={styles.chips}>
@@ -81,6 +81,7 @@ export const ChatContactScreen = () => {
                 return;
               }
               if (sent) {
+                cancelFriendRequest(person.id);
                 setCanceled(true);
                 setSent(false);
                 return;

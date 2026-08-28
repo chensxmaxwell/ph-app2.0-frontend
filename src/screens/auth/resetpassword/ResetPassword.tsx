@@ -12,20 +12,31 @@ import { colors } from "@common/styles/colors";
 
 import EyeOpenIcon from "@images/EyeOpenIcon.svg";
 import EyeClosedIcon from "@images/EyeClosedIcon.svg";
-import { useNavigation } from "@react-navigation/native";
+import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
+import { resetPasswordForEmail } from "../../../backend/store";
 import { SCREENS } from "@common/constant";
 import { NavigationType } from "../../../../App";
 
 const ResetPasswordScreen = () => {
   const navigation = useNavigation<NavigationType>();
+  const route =
+    useRoute<RouteProp<{ params: { email?: string } }, "params">>();
+  const email = route.params?.email || "";
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
 
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  const handleResetPassword = () =>
+  const handleResetPassword = async () => {
+    if (!newPassword || newPassword !== confirmNewPassword) {
+      return;
+    }
+    if (email) {
+      await resetPasswordForEmail(email, newPassword);
+    }
     navigation.navigate(SCREENS.PASSWORD_RESET_CONFIRM);
+  };
 
   const toggleShowNewPassword = () => {
     setShowNewPassword(!showNewPassword);

@@ -2,7 +2,6 @@ import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SCREENS } from "../../common/constant/index";
 
-import ChooseKinkScreen from "./kink-selection";
 import KinkIntroScreen from "./kink-inro";
 import EmotionSelectionScreen from "./kink-emotion-selection";
 import IntensitySelectionScreen from "./kink-intensity-selection";
@@ -17,12 +16,7 @@ const Stack = createNativeStackNavigator();
 
 const KinkStack = () => {
   return (
-    <Stack.Navigator initialRouteName={SCREENS.KINK_SELECTION}>
-      <Stack.Screen
-        name={SCREENS.KINK_SELECTION}
-        component={ChooseKinkScreen}
-        options={{ headerShown: false }}
-      />
+    <Stack.Navigator initialRouteName={SCREENS.KINK_EMOTIONSELECTION}>
       <Stack.Screen
         name={SCREENS.KINK_INTRO}
         component={KinkIntroScreen}

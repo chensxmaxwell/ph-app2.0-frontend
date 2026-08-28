@@ -2,6 +2,7 @@
 #import <React/RCTBundleURLProvider.h>
 #import <React/RCTRootView.h>
 #import "RNSplashScreen.h"
+#import <UserNotifications/UserNotifications.h>
 
 @implementation AppDelegate
 
@@ -12,9 +13,20 @@
   // They will be passed down to the ViewController used by React Native.
   self.initialProps = @{};
   // [RNSplashScreen show];
+  [UNUserNotificationCenter currentNotificationCenter].delegate = self;
 
   return [super application:application didFinishLaunchingWithOptions:launchOptions];
 }
+
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+       willPresentNotification:(UNNotification *)notification
+         withCompletionHandler:(void (^)(UNNotificationPresentationOptions options))completionHandler
+{
+  completionHandler(UNNotificationPresentationOptionSound |
+                    UNNotificationPresentationOptionBanner |
+                    UNNotificationPresentationOptionList);
+}
+
 
 - (NSURL *)sourceURLForBridge:(RCTBridge *)bridge
 {

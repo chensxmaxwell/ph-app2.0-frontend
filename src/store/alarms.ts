@@ -1,7 +1,14 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BUILTIN_PATTERNS } from "./patterns";
+import { STORE_KEYS, currentUserId, scopedKey } from "../backend/session";
+import { migrateLegacyStores } from "../backend/store";
+import { syncNativeAlarms } from "../native/ph-native";
 
-const STORAGE_KEY = "ph.alarms.v1";
+const alarmKey = async () => {
+  const userId = (await currentUserId()) || "anon";
+  await migrateLegacyStores(userId);
+  return scopedKey(STORE_KEYS.alarms, userId);
+};
 
 export type SavedAlarm = {
   id: string;
@@ -60,7 +67,7 @@ export const setAlarmDraft = (next: AlarmDraft) => {
 
 export const loadAlarms = async (): Promise<SavedAlarm[]> => {
   try {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    const raw = await AsyncStorage.getItem(await alarmKey());
     if (!raw) {
       return [];
     }
@@ -72,7 +79,8 @@ export const loadAlarms = async (): Promise<SavedAlarm[]> => {
 };
 
 export const saveAlarms = async (alarms: SavedAlarm[]) => {
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(alarms));
+  await AsyncStorage.setItem(await alarmKey(), JSON.stringify(alarms));
+  await syncNativeAlarms(alarms);
 };
 
 export const addAlarm = async (alarm: Omit<SavedAlarm, "id" | "enabled">) => {

@@ -12,14 +12,16 @@ import { useNavigation } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import ChevronDown from "@images/avatar/chevron-down.svg";
+import { useWizardChrome } from "./chrome";
 import { GENDER_OPTIONS, GenderOption, useAvatarWizard } from "./context";
 import { s } from "./scale";
 import {
   FieldHint,
   FieldLabel,
   PillField,
+  StepNote,
   WizardShell,
-  useLeaveGuard,
+  progressFor,
 } from "./shared";
 
 const isPlausibleBirthday = (value: string): boolean => {
@@ -47,26 +49,30 @@ const isPlausibleBirthday = (value: string): boolean => {
 
 export const AvatarIdentityScreen = () => {
   const navigation = useNavigation();
-  const { draft, patchDraft, resetDraft, isDirty } = useAvatarWizard();
+  const { draft, patchDraft } = useAvatarWizard();
+  const { mode, title, requestLeave, goBackStep, modal } = useWizardChrome();
   const [nameFocused, setNameFocused] = useState(true);
   const [genderOpen, setGenderOpen] = useState(false);
-  const { requestLeave, modal } = useLeaveGuard(isDirty, () => {
-    resetDraft();
-    navigation.goBack();
-  });
-  const canContinue = draft.name.trim().length > 0;
   const birthdayLooksInvalid = !isPlausibleBirthday(draft.birthday);
+  const canContinue =
+    draft.name.trim().length > 0 && !birthdayLooksInvalid;
 
   return (
     <WizardShell
-      title="Craft your ideal lover"
-      progressFill={33}
+      title={title}
+      progressFill={progressFor(mode, "identity")}
       leftIcon="back"
-      onLeftPress={requestLeave}
+      rightIcon="close"
+      onLeftPress={goBackStep}
+      onRightPress={requestLeave}
       primaryLabel="Continue"
       primaryDisabled={!canContinue}
       onPrimary={() => {
         if (!canContinue) {
+          return;
+        }
+        if (mode === "editPersona") {
+          navigation.navigate(SCREENS.AVATAR_PERSONALITY);
           return;
         }
         navigation.navigate(SCREENS.AVATAR_READY);
@@ -77,6 +83,10 @@ export const AvatarIdentityScreen = () => {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.content}
       >
+        <StepNote>
+          Name, birthday, and gender for this person. Gender does not change the
+          3D model — demo is male-only.
+        </StepNote>
         <FieldLabel>Name</FieldLabel>
         <FieldHint>
           Whisper their name into existence, a name that will echo through your
@@ -119,34 +129,56 @@ export const AvatarIdentityScreen = () => {
             activeOpacity={0.85}
             onPress={() => setGenderOpen((open) => !open)}
           >
-            <PillField>
+            <PillField focused={Boolean(draft.gender) || genderOpen}>
               <View style={styles.genderRow}>
                 <Text
                   style={[
                     styles.input,
-                    draft.gender ? styles.genderValue : null,
+                    draft.gender ? styles.genderValue : styles.genderPlaceholder,
                   ]}
                 >
-                  {draft.gender}
+                  {draft.gender || "Select"}
                 </Text>
                 <ChevronDown width={s(35)} height={s(35)} />
               </View>
             </PillField>
           </TouchableOpacity>
           {genderOpen
-            ? GENDER_OPTIONS.map((option) => (
-                <TouchableOpacity
-                  key={option}
-                  style={styles.genderOption}
-                  onPress={() => {
-                    patchDraft({ gender: option as GenderOption });
-                    setGenderOpen(false);
-                  }}
-                >
-                  <Text style={styles.genderOptionText}>{option}</Text>
-                </TouchableOpacity>
-              ))
+            ? GENDER_OPTIONS.map((option) => {
+                const available = option === "Male";
+                const selected = draft.gender === option;
+                return (
+                  <TouchableOpacity
+                    key={option}
+                    disabled={!available}
+                    style={[
+                      styles.genderOption,
+                      selected && styles.genderOptionSelected,
+                      !available && styles.genderOptionDisabled,
+                    ]}
+                    onPress={() => {
+                      if (!available) {
+                        return;
+                      }
+                      patchDraft({ gender: option as GenderOption });
+                      setGenderOpen(false);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.genderOptionText,
+                        !available && styles.genderOptionTextDisabled,
+                      ]}
+                    >
+                      {available ? option : `${option} · unavailable`}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })
             : null}
+          <Text style={styles.genderNote}>
+            Demo: male avatar only for now
+          </Text>
         </View>
       </KeyboardAvoidingView>
     </WizardShell>
@@ -155,7 +187,7 @@ export const AvatarIdentityScreen = () => {
 
 const styles = StyleSheet.create({
   content: {
-    paddingTop: s(45),
+    paddingTop: s(24),
     alignItems: "center",
     gap: s(12),
   },
@@ -186,6 +218,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   genderValue: {
+    color: colors.white,
+  },
+  genderPlaceholder: {
     color: colors.grayLighter,
   },
   genderOption: {
@@ -196,10 +231,30 @@ const styles = StyleSheet.create({
     marginTop: s(8),
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "transparent",
+  },
+  genderOptionSelected: {
+    backgroundColor: colors.grayLighter,
+    borderColor: colors.white,
+  },
+  genderOptionDisabled: {
+    opacity: 0.42,
   },
   genderOptionText: {
     color: colors.white,
     fontFamily: "Quicksand-Bold",
     fontSize: 13,
+  },
+  genderOptionTextDisabled: {
+    color: colors.grayLighter,
+  },
+  genderNote: {
+    marginTop: s(10),
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 13,
+    textAlign: "center",
+    width: s(329),
   },
 });

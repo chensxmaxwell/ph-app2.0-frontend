@@ -25,7 +25,6 @@ import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import ChevronBack from "@images/avatar/chevron-back.svg";
 import Dots from "@images/love/dots.svg";
-import Waveform from "@images/love/waveform.svg";
 import PlusCircle from "@images/love/plus-circle.svg";
 import Paperplane from "@images/love/paperplane.svg";
 import ListenIcon from "@images/message/listen.svg";
@@ -35,22 +34,27 @@ import LinkIcon from "@images/message/link.svg";
 import Heartbeat from "@images/message/heartbeat.svg";
 import PatternIcon from "@images/icons/pattern-icon.svg";
 import KinkIcon from "@images/icons/kink-icon.svg";
-import { useCompanions } from "../../store/companions";
+import { lookFromCompanion, useCompanions } from "../../store/companions";
+import { LookFace } from "../avatar/look-face";
+import { openAvatarWizard } from "../avatar/open";
 import { s } from "../avatar/scale";
+import { useChat } from "../chat/store";
+import { faceSourceForId } from "../chat/faces";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
+import { resolveLovePerson } from "./partner";
 import { companionChatOrFallback } from "../../services/llm";
 import { useLoveSession } from "./session";
 import { LoveChatItem, LoveMode } from "./types";
 import { ttsSpeak, ttsStop } from "../../services/tts";
 
-const CHAT_FACE = require("../../../assets/images/love/chat-face.png");
 const USER_FACE = require("../../../assets/images/love/face.png");
 
 type ChatRoute = RouteProp<
   {
     LoveChat: {
       companionId?: string;
+      name?: string;
       fromCreation?: boolean;
       syncing?: boolean;
     };
@@ -66,24 +70,36 @@ type DrawerItem = {
   active?: boolean;
 };
 
-const modeCopy = (mode: Exclude<LoveMode, "none">) => {
+const modeCopy = (
+  mode: Exclude<LoveMode, "none">,
+  intent: "stop" | "leave"
+) => {
   switch (mode) {
     case "pattern":
       return {
         title: "Pattern mode in Progress",
-        body: "Leaving this chat will end voice calling and syncing session.",
+        body:
+          intent === "leave"
+            ? "Leaving this chat will end the Pattern session."
+            : "You cannot start another action while Pattern is running.",
         primary: "Stop Pattern",
       };
     case "kink":
       return {
         title: "Kink mode in Progress",
-        body: "You cannot start another action when you are in kink mode.",
+        body:
+          intent === "leave"
+            ? "Leaving this chat will end the Kink session."
+            : "You cannot start another action while Kink is running.",
         primary: "Stop Kink",
       };
     case "bliss":
       return {
         title: "Quick bliss in Progress",
-        body: "Leaving this chat will end the Quick bliss session.",
+        body:
+          intent === "leave"
+            ? "Leaving this chat will end the Quick bliss session."
+            : "You cannot start another action while Quick bliss is running.",
         primary: "Stop Quick bliss",
       };
     default: {
@@ -98,26 +114,39 @@ const Dialog = ({
   body,
   primary,
   secondary,
+  extras,
   onPrimary,
   onSecondary,
 }: {
   title: string;
   body: string;
   primary: string;
-  secondary: string;
+  secondary?: string;
+  extras?: { label: string; onPress: () => void }[];
   onPrimary: () => void;
-  onSecondary: () => void;
+  onSecondary?: () => void;
 }) => (
   <View style={styles.dialogScrim}>
     <View style={styles.dialog}>
       <Text style={styles.dialogTitle}>{title}</Text>
       <Text style={styles.dialogBody}>{body}</Text>
+      {extras?.map((action) => (
+        <TouchableOpacity
+          key={action.label}
+          style={styles.dialogPrimary}
+          onPress={action.onPress}
+        >
+          <Text style={styles.dialogPrimaryText}>{action.label}</Text>
+        </TouchableOpacity>
+      ))}
       <TouchableOpacity style={styles.dialogPrimary} onPress={onPrimary}>
         <Text style={styles.dialogPrimaryText}>{primary}</Text>
       </TouchableOpacity>
-      <TouchableOpacity onPress={onSecondary}>
-        <Text style={styles.dialogSecondary}>{secondary}</Text>
-      </TouchableOpacity>
+      {secondary && onSecondary ? (
+        <TouchableOpacity onPress={onSecondary}>
+          <Text style={styles.dialogSecondary}>{secondary}</Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   </View>
 );
@@ -174,11 +203,23 @@ export const LoveChatScreen = () => {
   const insets = useSafeAreaInsets();
   const route = useRoute<ChatRoute>();
   const { companions, activeCompanion } = useCompanions();
-  const { chat, start, patchChat, minimize, end } = useLoveSession();
-  const companion =
-    companions.find((item) => item.id === route.params?.companionId) ??
-    activeCompanion;
-  const name = chat?.name ?? companion?.name ?? "Kevin";
+  const { threads } = useChat();
+  const { chat, start, patchChat, minimize, end, companionId: sessionCompanionId } =
+    useLoveSession();
+  const {
+    companion,
+    companionId: partnerId,
+    name,
+    personality,
+    story,
+  } = resolveLovePerson({
+    companionId: sessionCompanionId ?? route.params?.companionId ?? chat?.companionId,
+    name: route.params?.name ?? chat?.name,
+    companions,
+    threads,
+    activeCompanion,
+    chatName: chat?.name,
+  });
   const fromCreation = route.params?.fromCreation === true;
   const startedSyncing = route.params?.syncing === true;
 
@@ -203,12 +244,17 @@ export const LoveChatScreen = () => {
     start({
       layer: "chat",
       keepLayer: true,
-      companionId: companion?.id,
+      companionId: partnerId,
       name,
+      personality,
+      story,
       fromCreation,
       syncing: startedSyncing,
+      replace: Boolean(
+        partnerId && chat?.companionId && partnerId !== chat.companionId
+      ),
     });
-  }, [companion?.id, fromCreation, name, start, startedSyncing]);
+  }, [chat?.companionId, fromCreation, name, partnerId, personality, start, startedSyncing, story]);
 
   const busy = mode !== "none" || synced || inCall;
 
@@ -267,12 +313,12 @@ export const LoveChatScreen = () => {
     setDrawerOpen(false);
     start({
       layer: "call",
-      companionId: companion?.id,
+      companionId: partnerId,
       name,
     });
     navigation.navigate(
       SCREENS.LOVE_CALL as never,
-      { companionId: companion?.id } as never
+      { companionId: partnerId, name } as never
     );
   };
 
@@ -319,8 +365,8 @@ export const LoveChatScreen = () => {
       name,
       userText: text,
       history,
-      personality: companion?.personalities?.join(", "),
-      story: companion?.story,
+      personality: personality,
+      story: story,
     }).then((reply) => {
       patchChat((current) => ({
         ...current,
@@ -365,12 +411,12 @@ export const LoveChatScreen = () => {
         }));
         start({
           layer: "sync",
-          companionId: companion?.id,
+          companionId: partnerId,
           name,
         });
         navigation.navigate(
           SCREENS.LOVE_SYNC as never,
-          { companionId: companion?.id } as never
+          { companionId: partnerId, name } as never
         );
       },
     },
@@ -410,7 +456,7 @@ export const LoveChatScreen = () => {
       label: "Kink",
       Icon: KinkIcon,
       active: mode === "kink",
-      onPress: () => startMode("kink", SCREENS.KINK),
+      onPress: () => startMode("kink", SCREENS.KINK_HUB),
     },
     {
       key: "bliss",
@@ -422,7 +468,8 @@ export const LoveChatScreen = () => {
   ];
 
   const drawerItems = drawerPage === 0 ? pageZero : pageOne;
-  const stop = mode === "none" ? null : modeCopy(mode);
+  const stop = mode === "none" ? null : modeCopy(mode, "stop");
+  const leave = mode === "none" ? null : modeCopy(mode, "leave");
 
   return (
     <View style={styles.root}>
@@ -453,7 +500,10 @@ export const LoveChatScreen = () => {
         pointerEvents="none"
       />
       <SafeAreaView style={styles.safe} edges={["top"]}>
-        <View style={styles.header}>
+        <Pressable
+          style={styles.header}
+          onPress={drawerOpen ? () => setDrawerOpen(false) : undefined}
+        >
           <TouchableOpacity
             onPress={tryLeave}
             hitSlop={8}
@@ -462,7 +512,11 @@ export const LoveChatScreen = () => {
             <ChevronBack width={s(35)} height={s(35)} />
           </TouchableOpacity>
           <View style={styles.identity}>
-            <Image source={CHAT_FACE} style={styles.avatar} />
+            <LookFace
+              look={companion ? lookFromCompanion(companion) : null}
+              size={s(50)}
+              fallbackSource={faceSourceForId(partnerId)}
+            />
             <Text style={styles.name}>{name}</Text>
           </View>
           <TouchableOpacity
@@ -472,28 +526,36 @@ export const LoveChatScreen = () => {
           >
             <Dots width={s(35)} height={s(35)} />
           </TouchableOpacity>
-        </View>
+        </Pressable>
         <KeyboardAvoidingView
           style={styles.flex}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
-          <ScrollView
-            contentContainerStyle={styles.messages}
-            keyboardShouldPersistTaps="handled"
-          >
-            {messages.map((item) => renderChatItem(item, name, listen))}
-          </ScrollView>
+          <View style={styles.flex}>
+            <ScrollView
+              contentContainerStyle={styles.messages}
+              keyboardShouldPersistTaps="handled"
+            >
+              {messages.map((item) => renderChatItem(item, name, listen))}
+            </ScrollView>
+            {drawerOpen ? (
+              <Pressable
+                style={styles.drawerScrim}
+                onPress={() => setDrawerOpen(false)}
+              />
+            ) : null}
+          </View>
           <View
             style={[
               styles.composer,
               {
                 paddingBottom: drawerOpen ? s(8) : insets.bottom,
-                height: drawerOpen ? s(64) : s(80) + insets.bottom,
+                minHeight: drawerOpen ? s(64) : s(80) + insets.bottom,
               },
             ]}
           >
-            <TouchableOpacity onPress={openCall} hitSlop={8}>
-              <Waveform width={s(35)} height={s(35)} />
+            <TouchableOpacity onPress={openCall} hitSlop={8} style={styles.iconHit}>
+              <PhoneIcon width={s(35)} height={s(35)} />
             </TouchableOpacity>
             <View style={styles.inputWrap}>
               <TextInput
@@ -545,11 +607,16 @@ export const LoveChatScreen = () => {
                   <Pressable
                     key={page}
                     onPress={() => setDrawerPage(page)}
-                    style={[
-                      styles.dot,
-                      drawerPage === page ? styles.dotOn : null,
-                    ]}
-                  />
+                    hitSlop={8}
+                    style={styles.dotHit}
+                  >
+                    <View
+                      style={[
+                        styles.dot,
+                        drawerPage === page ? styles.dotOn : null,
+                      ]}
+                    />
+                  </Pressable>
                 ))}
               </View>
             </View>
@@ -569,12 +636,12 @@ export const LoveChatScreen = () => {
       ) : null}
       {leaveOpen ? (
         <Dialog
-          title={stop?.title ?? "Actions in progress"}
+          title={leave?.title ?? "Actions in progress"}
           body={
-            stop?.body ??
-            "Leaving this chat will end voice calling and syncing session."
+            leave?.body ??
+            "Leaving this chat will end the voice call or sync session."
           }
-          primary={stop?.primary ?? "Leave"}
+          primary={leave?.primary ?? "Leave"}
           secondary="Cancel"
           onPrimary={() => {
             stopEverything();
@@ -588,13 +655,43 @@ export const LoveChatScreen = () => {
           title={name}
           body={
             companion?.story?.trim() ||
+            story?.trim() ||
             companion?.personalities?.join(", ") ||
+            personality ||
             `${name} is your companion.`
           }
+          extras={
+            companion
+              ? [
+                  {
+                    label: "Edit avatar",
+                    onPress: () => {
+                      setInfoOpen(false);
+                      minimize();
+                      openAvatarWizard(
+                        navigation,
+                        { mode: "editLook", companionId: companion.id },
+                        true
+                      );
+                    },
+                  },
+                  {
+                    label: "Edit persona",
+                    onPress: () => {
+                      setInfoOpen(false);
+                      minimize();
+                      openAvatarWizard(
+                        navigation,
+                        { mode: "editPersona", companionId: companion.id },
+                        true
+                      );
+                    },
+                  },
+                ]
+              : undefined
+          }
           primary="Close"
-          secondary="Back"
           onPrimary={() => setInfoOpen(false)}
-          onSecondary={() => setInfoOpen(false)}
         />
       ) : null}
       {listenBlocked ? (
@@ -700,19 +797,17 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   composer: {
-    height: s(80),
     backgroundColor: "#4c495f",
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     paddingTop: s(8),
-    paddingLeft: s(16),
-    paddingRight: s(16),
-    zIndex: 2,
+    paddingHorizontal: s(12),
+    gap: s(8),
+    zIndex: 5,
   },
   inputWrap: {
-    width: s(216),
-    height: s(48),
-    marginLeft: s(16),
+    flex: 1,
+    minHeight: s(48),
     borderRadius: s(12),
     borderWidth: 1,
     borderColor: colors.white,
@@ -726,21 +821,37 @@ const styles = StyleSheet.create({
     fontSize: 13,
     padding: 0,
   },
-  plus: {
-    marginLeft: s(16),
-    width: s(35),
-    height: s(35),
+  iconHit: {
+    width: s(44),
+    height: s(44),
     alignItems: "center",
     justifyContent: "center",
+    zIndex: 6,
+  },
+  plus: {
+    width: s(44),
+    height: s(44),
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 6,
   },
   send: {
-    marginLeft: s(8),
+    width: s(44),
+    height: s(44),
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 6,
+  },
+  drawerScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    zIndex: 3,
   },
   drawer: {
     backgroundColor: "#2f2d3c",
     paddingTop: s(24),
     paddingHorizontal: s(24),
-    zIndex: 4,
+    zIndex: 5,
   },
   drawerRow: {
     flexDirection: "row",
@@ -774,6 +885,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "center",
     gap: s(8),
+  },
+  dotHit: {
+    width: s(44),
+    height: s(44),
+    alignItems: "center",
+    justifyContent: "center",
   },
   dot: {
     width: s(6),

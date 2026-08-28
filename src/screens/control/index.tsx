@@ -1,33 +1,112 @@
+import React, { useEffect, useRef } from "react";
+import {
+  Animated,
+  Easing,
+  FlatList,
+  ListRenderItem,
+  StyleSheet,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { ControlType, useControl } from "./hooks";
+import { ScreenWrapper } from "@common/components/screen-wrapper";
+import { FULL_SIZE } from "@common/constant";
+import { colors } from "@common/styles/colors";
+import { fontSizes, fontWeights } from "@common/styles/fonts";
+import { BaseText } from "@common/components/base-text";
+import { spacings } from "@common/styles/spacings";
+import { ConnectionPill } from "@common/components/connection-pill";
 
-import React from 'react';
-import { View, StyleSheet, TouchableOpacity, FlatList, ListRenderItem } from 'react-native';
-import { ControlType, useControl } from './hooks';
-import { ScreenWrapper } from '@common/components/screen-wrapper';
-import { FULL_SIZE } from '@common/constant';
-import { colors } from '@common/styles/colors';
-import { fontSizes, fontWeights } from '@common/styles/fonts';
-import { BaseText } from '@common/components/base-text';
-import { spacings } from '@common/styles/spacings';
-import { ConnectionPill } from '@common/components/connection-pill';
-import { SessionLovePill } from '../love/pill';
-import { s } from '../avatar/scale';
+const CARD_ICON_SIZE = 72;
+const CARD_TITLE_GAP = 20;
+
+const AutoRing = ({ active }: { active: boolean }) => {
+  const spin = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!active) {
+      spin.stopAnimation();
+      spin.setValue(0);
+      return undefined;
+    }
+    const loop = Animated.loop(
+      Animated.timing(spin, {
+        toValue: 1,
+        duration: 1600,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+    };
+  }, [active, spin]);
+
+  if (!active) {
+    return null;
+  }
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.autoRing,
+        {
+          transform: [
+            {
+              rotate: spin.interpolate({
+                inputRange: [0, 1],
+                outputRange: ["0deg", "360deg"],
+              }),
+            },
+          ],
+        },
+      ]}
+    />
+  );
+};
 
 export const Control = () => {
-  const { controls } = useControl();
+  const { controls, autoOn, autoIntensity, setAutoIntensity } = useControl();
 
   const renderControls: ListRenderItem<ControlType> = ({ item }) => {
-    const { title, Icon, onPress } = item;
+    const { title, Icon, onPress, active, id } = item;
+    const isAuto = id === "auto";
 
     return (
-      <TouchableOpacity style={styles.cards}
-        onPress={onPress} >
-        <Icon />
-        <View >
+      <View style={[styles.cards, active ? styles.cardOn : null]}>
+        <TouchableOpacity
+          style={styles.cardHit}
+          onPress={onPress}
+          activeOpacity={0.85}
+        >
+          <View style={styles.iconStage}>
+            {isAuto ? <AutoRing active={Boolean(active)} /> : null}
+            <View style={styles.iconClip} pointerEvents="none">
+              <Icon width={CARD_ICON_SIZE} height={CARD_ICON_SIZE} />
+            </View>
+          </View>
           <BaseText style={styles.controlTitle}>{title}</BaseText>
-        </View>
-      </TouchableOpacity>
-    )
-  }
+        </TouchableOpacity>
+        {isAuto && autoOn ? (
+          <View style={styles.intensityRow}>
+            {[1, 2, 3, 4, 5].map((value) => (
+              <TouchableOpacity
+                key={value}
+                hitSlop={8}
+                style={[
+                  styles.intensityDot,
+                  value <= autoIntensity ? styles.intensityDotOn : null,
+                ]}
+                onPress={() => setAutoIntensity(value)}
+              />
+            ))}
+          </View>
+        ) : null}
+      </View>
+    );
+  };
 
   return (
     <ScreenWrapper disableScrolling>
@@ -36,12 +115,12 @@ export const Control = () => {
         <FlatList
           data={controls}
           renderItem={renderControls}
-          keyExtractor={(item, index) => index.toString()}
+          keyExtractor={(item) => item.id}
+          extraData={`${autoOn}-${autoIntensity}`}
           numColumns={2}
           contentContainerStyle={styles.cardContainer}
           columnWrapperStyle={styles.columnWrapper}
         />
-        <SessionLovePill style={{ top: s(80) }} />
       </View>
     </ScreenWrapper>
   );
@@ -50,35 +129,88 @@ export const Control = () => {
 const styles = StyleSheet.create({
   container: {
     height: FULL_SIZE,
-    overflow: 'visible',
+    overflow: "visible",
     width: FULL_SIZE,
-    display: 'flex',
-    alignItems: 'center',
+    display: "flex",
+    alignItems: "center",
   },
   cardContainer: {
     paddingTop: spacings.h85,
     gap: spacings.h16,
   },
   columnWrapper: {
-    justifyContent: 'space-between', // Ensure space between columns
+    justifyContent: "space-between",
   },
   cards: {
     backgroundColor: colors.grayLight,
     borderRadius: 10,
-    justifyContent: 'space-between',
+    justifyContent: "flex-start",
     paddingHorizontal: spacings.w18,
     minWidth: 160,
     minHeight: 156,
     marginHorizontal: 8,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
     paddingVertical: spacings.h16,
+  },
+  cardHit: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "flex-start",
+    width: "100%",
+    gap: CARD_TITLE_GAP,
+  },
+  cardOn: {
+    borderWidth: 1,
+    borderColor: colors.accentLightPink,
+  },
+  iconStage: {
+    width: CARD_ICON_SIZE,
+    height: CARD_ICON_SIZE,
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  iconClip: {
+    width: CARD_ICON_SIZE,
+    height: CARD_ICON_SIZE,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  autoRing: {
+    position: "absolute",
+    width: CARD_ICON_SIZE,
+    height: CARD_ICON_SIZE,
+    borderRadius: CARD_ICON_SIZE / 2,
+    borderWidth: 2,
+    borderColor: "rgba(204, 160, 221, 0.25)",
+    borderTopColor: colors.white,
+    borderRightColor: colors.accentLightPink,
+    zIndex: 1,
   },
   controlTitle: {
     fontWeight: fontWeights.bold,
-    flexWrap: 'wrap',
+    flexWrap: "wrap",
     color: colors.white,
     fontSize: fontSizes.smallX,
-  }
+    textAlign: "center",
+    zIndex: 1,
+  },
+  intensityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  intensityDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.grayLightest,
+  },
+  intensityDotOn: {
+    backgroundColor: colors.accentLightPink,
+  },
 });

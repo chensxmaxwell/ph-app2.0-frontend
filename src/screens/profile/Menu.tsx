@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   ScrollView,
 } from "react-native";
-import { useEffect, useState } from "react";
 import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
 import { useNavigation } from "@react-navigation/native";
@@ -16,11 +15,11 @@ import LinearGradient from "react-native-linear-gradient";
 import { SCREENS } from "@common/constant";
 import { NavigationType } from "../../../App";
 import { useProfile } from "./hooks";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { writeSessionUser } from "../../backend/session";
 
 const MenuScreen = () => {
   const navigation = useNavigation<NavigationType>();
-  const { user, profile, formatDate } = useProfile();
+  const { user, profile, displayName, formatDate } = useProfile();
 
   const rootNavigation = () => {
     let current = navigation as NavigationType;
@@ -33,7 +32,7 @@ const MenuScreen = () => {
   };
 
   const handleLogout = async () => {
-    await AsyncStorage.removeItem("user");
+    await writeSessionUser(null);
     rootNavigation().reset({
       index: 0,
       routes: [{ name: SCREENS.AUTH }],
@@ -76,18 +75,24 @@ const MenuScreen = () => {
           style={styles.profileImage}
           source={require("../../../assets/images/Avatar_default.png")}
         />
-        <Text style={styles.nameText}>{profile?.name ?? "Loading..."}</Text>
+        <Text style={styles.nameText}>{displayName}</Text>
         <Text style={styles.emailText}>{user?.email ?? "Loading..."}</Text>
       </View>
 
       {/* Buttons Section */}
       <View style={styles.infoSection}>
-        <View style={styles.button}>
-          <Text style={styles.buttonText}>Female</Text>
-        </View>
-        <View style={styles.button}>
-          <Text style={styles.buttonText}>{formatDate(profile.birthday)}</Text>
-        </View>
+        {profile.gender ? (
+          <View style={styles.infoChip}>
+            <Text style={styles.infoChipText}>{profile.gender}</Text>
+          </View>
+        ) : null}
+        {profile.birthday ? (
+          <View style={styles.infoChip}>
+            <Text style={styles.infoChipText}>
+              {formatDate(profile.birthday)}
+            </Text>
+          </View>
+        ) : null}
         <TouchableOpacity
           style={styles.button}
           onPress={() => navigation.navigate(SCREENS.PROFILE_EDIT)}
@@ -234,6 +239,19 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginTop: 20,
     paddingHorizontal: 32,
+  },
+  infoChip: {
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  infoChipText: {
+    fontSize: fontSizes.small,
+    fontFamily: "Quicksand-Bold",
+    color: colors.grayLighter,
+    fontWeight: fontWeights.bold,
+    textAlign: "center",
   },
   button: {
     backgroundColor: colors.grayLightest,

@@ -1,5 +1,4 @@
-import React, { useState } from 'react';
-import { Tab } from '../sub-components/tab-bar';
+import React, { useEffect, useState } from 'react';
 import NewKink from '@images/icons/new-kink.svg';
 import Hardcore from '@images/icons/hardcore.svg';
 import Gentle from '@images/icons/gentle.svg';
@@ -15,6 +14,8 @@ import { useNavigation } from '@react-navigation/native';
 import { NavigationType } from '../../../../../App';
 import { SCREENS } from '@common/constant';
 import { BUILTIN_PATTERNS, wavePattern } from '../../../../store/patterns';
+import { subscribeSessionUser } from '../../../../backend/session';
+import { loadSavedKinks, SavedKink } from '../../../../backend/store';
 
 const renderNewKink: React.FC = () => {
   return (
@@ -33,34 +34,34 @@ const renderNewKink: React.FC = () => {
 
 export const useKink = () => {
   const navigation = useNavigation<NavigationType>();
-  const [selectedTab, setSelectedTab] = useState('patterns');
-  const handleTabSelect = (value: string) => {
-    setSelectedTab(value);
-  };
-  const [tabs, _] = useState<Tab[]>([
-    {
-      title: 'Patterns',
-      value: 'patterns',
-      onPress: () => handleTabSelect('patterns')
-    },
-    {
-      title: 'Saved',
-      value: 'saved',
-      onPress: () => handleTabSelect('saved')
-    },
-    {
-      title: 'Generated',
-      value: 'generated',
-      onPress: () => handleTabSelect('generated')
-    },
-    {
-      title: 'Recent',
-      value: 'recent',
-      onPress: () => handleTabSelect('recent')
-    },
-  ]);
+  const [saved, setSaved] = useState<SavedKink[]>([]);
+  const [favorites, setFavorites] = useState<Record<string, boolean>>({
+    Hardcore: true,
+  });
 
-  const handleLightbulbPress = () => {};
+  useEffect(() => {
+    return subscribeSessionUser((user) => {
+      if (!user?.id) {
+        setSaved([]);
+        return;
+      }
+      loadSavedKinks(user.id).then(setSaved).catch(() => setSaved([]));
+    });
+  }, []);
+
+  const toggleFavorite = (id: string) => {
+    setFavorites((current) => ({
+      ...current,
+      [id]: !(current[id] ?? false),
+    }));
+  };
+
+  const withFavorite = (id: string, card: CardType): CardType => ({
+    ...card,
+    favorite: favorites[id] ?? card.favorite ?? false,
+    onFavoritePress: () => toggleFavorite(id),
+  });
+
   const play = (title: string, peak = 80) =>
     navigation.navigate(SCREENS.DISPLAY_PATTERN, {
       title,
@@ -69,63 +70,68 @@ export const useKink = () => {
         wavePattern(peak),
     });
 
-  // *TODO: Get patterns from API
   const kinks: CardType[] = [
     {
       Icon: Plus,
       title: 'Generate',
       description: 'Generate your own fun',
-      onPress: () => navigation.navigate(SCREENS.KINK),
+      onPress: () =>
+        navigation.navigate(SCREENS.KINK, {
+          screen: SCREENS.KINK_EMOTIONSELECTION,
+        }),
       hideFavorite: true,
     },
-    {
+    withFavorite('Hardcore', {
       Icon: Hardcore,
       title: 'Hardcore',
       description: 'High-energy and intense',
       onPress: () => play('Hardcore', 100),
-      favorite: true,
-    },
-    {
+    }),
+    withFavorite('Gentle', {
       Icon: Gentle,
       title: 'Gentle',
       description: 'Soft and even',
       onPress: () => play('Gentle', 42),
-    },
-    {
+    }),
+    withFavorite('Lazy', {
       Icon: Lazy,
       title: 'Lazy',
       description: 'Low-intensity and smooth',
       onPress: () => play('Lazy', 28),
-    },
-    {
+    }),
+    withFavorite('Playful', {
       Icon: Playful,
       title: 'Playful',
       description: 'Fun and unexpected',
       onPress: () => play('Playful', 70),
-    },
-    {
+    }),
+    withFavorite('Random', {
       Icon: Random,
       title: 'Random',
       description: 'Surprise!',
       onPress: () => play('Random', 88),
-    },
-    {
+    }),
+    withFavorite('Dominant', {
       Icon: Dominant,
       title: 'Dominant',
       description: 'Sharp and fast',
       onPress: () => play('Dominant', 96),
-    },
-    {
+    }),
+    withFavorite('Untitled', {
       Icon: renderNewKink,
       title: 'Untitled',
       onPress: () => play('Untitled'),
-    },
+    }),
+    ...saved.map((item) =>
+      withFavorite(item.id, {
+        Icon: renderNewKink,
+        title: item.name || 'Untitled',
+        onPress: () => play(item.name || 'Untitled', 80),
+      })
+    ),
   ];
 
   return {
-    tabs,
-    selectedTab,
-    handleLightbulbPress,
     kinks
   };
 };

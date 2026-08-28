@@ -16,7 +16,8 @@ const renderCards: ListRenderItem<CardType> = ({ item }) => {
         onPress,
         description,
         favorite,
-        hideFavorite
+        hideFavorite,
+        onFavoritePress,
     } = item;
 
     return (
@@ -24,10 +25,19 @@ const renderCards: ListRenderItem<CardType> = ({ item }) => {
             style={styles.cards}
             onPress={onPress}
         >
-            <TouchableOpacity
-                style={styles.favorite}>
-                {hideFavorite || (favorite ? <HeartFill /> : <Heart />)}
-            </TouchableOpacity>
+            {hideFavorite ? null : onFavoritePress ? (
+                <TouchableOpacity
+                    style={styles.favorite}
+                    onPress={onFavoritePress}
+                    hitSlop={8}
+                >
+                    {favorite ? <HeartFill /> : <Heart />}
+                </TouchableOpacity>
+            ) : (
+                <View style={styles.favorite} pointerEvents="none">
+                    {favorite ? <HeartFill /> : <Heart />}
+                </View>
+            )}
             <View style={[
                 styles.cardContainer,
                 (description || title) ? styles.cardWithText : null,
@@ -75,6 +85,8 @@ export type CardType = {
     description?: string,
     favorite?: boolean,
     hideFavorite?: boolean,
+    onFavoritePress?: () => void,
+    pattern?: number[],
 }
 
 const styles = StyleSheet.create({

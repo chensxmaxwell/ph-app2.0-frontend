@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, StyleProp, ViewStyle } from "react-native";
-import Xmark from '@images/icons/xmark.svg';
+import ChevronLeft from '@images/chevron-left-white.svg';
 import { useNavigation } from '@react-navigation/native';
 
 export const BackButton: React.FC<BackButtonProps> = ({ style }) => {
@@ -9,7 +9,7 @@ export const BackButton: React.FC<BackButtonProps> = ({ style }) => {
         <Pressable
             style={style}
             onPress={() => navigation.goBack()}>
-            <Xmark />
+            <ChevronLeft width={35} height={35} />
         </Pressable>
     )
 };

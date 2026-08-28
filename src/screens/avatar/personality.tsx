@@ -2,6 +2,7 @@ import React from "react";
 import { StyleSheet, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { SCREENS } from "@common/constant";
+import { useWizardChrome } from "./chrome";
 import {
   PERSONALITY_OPTIONS,
   PersonalityOption,
@@ -12,17 +13,15 @@ import {
   FieldHint,
   FieldLabel,
   OptionPill,
+  StepNote,
   WizardShell,
-  useLeaveGuard,
+  progressFor,
 } from "./shared";
 
 export const AvatarPersonalityScreen = () => {
   const navigation = useNavigation();
-  const { draft, patchDraft, resetDraft, isDirty } = useAvatarWizard();
-  const { requestLeave, modal } = useLeaveGuard(isDirty, () => {
-    resetDraft();
-    navigation.getParent()?.goBack();
-  });
+  const { draft, patchDraft } = useAvatarWizard();
+  const { mode, title, requestLeave, goBackStep, modal } = useWizardChrome();
   const canContinue = draft.personalities.length >= 1;
 
   const toggleTrait = (option: PersonalityOption) => {
@@ -41,10 +40,12 @@ export const AvatarPersonalityScreen = () => {
 
   return (
     <WizardShell
-      title="Craft your ideal lover"
-      progressFill={131}
-      leftIcon="close"
-      onLeftPress={requestLeave}
+      title={title}
+      progressFill={progressFor(mode, "personality")}
+      leftIcon="back"
+      rightIcon="close"
+      onLeftPress={goBackStep}
+      onRightPress={requestLeave}
       primaryLabel="Continue"
       primaryDisabled={!canContinue}
       onPrimary={() => {
@@ -53,14 +54,13 @@ export const AvatarPersonalityScreen = () => {
         }
         navigation.navigate(SCREENS.AVATAR_STORY);
       }}
-      secondaryLabel="Return"
-      onSecondary={() => navigation.goBack()}
     >
       {modal}
       <View style={styles.content}>
+        <StepNote>These traits shape chat persona, not the 3D look.</StepNote>
         <FieldLabel>Personality</FieldLabel>
         <FieldHint>
-          {`What traits set your heart aflame? \nChoose up to 3 qualities that will make your love story unforgettable.`}
+          {`What traits set your heart aflame?\nChoose up to 3.`}
         </FieldHint>
         <View style={styles.options}>
           {PERSONALITY_OPTIONS.map((option) => (
@@ -79,7 +79,7 @@ export const AvatarPersonalityScreen = () => {
 
 const styles = StyleSheet.create({
   content: {
-    paddingTop: s(40),
+    paddingTop: s(24),
     alignItems: "center",
     gap: s(12),
   },

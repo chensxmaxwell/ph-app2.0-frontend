@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -12,28 +12,31 @@ import { useNavigation } from "@react-navigation/native";
 import LinearGradient from "react-native-linear-gradient";
 import ChevronLeftfrom from "@images/chevron-left-white.svg";
 import LightBulb from "@images/lightbulb.svg";
-import GreenIcon from "@images/greenIcon.svg";
 import AntennaIcon from "@images/antenna.svg";
 import SearchIcon from "@images/search.svg";
 import { SCREENS } from "@common/constant";
 import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
-
-const images = {
-  avatar1: require("../../../assets/images/avatar.png"),
-  avatar2: require("../../../assets/images/avatar.png"),
-  avatar3: require("../../../assets/images/avatar.png"),
-};
+import { ConnectionPill } from "@common/components/connection-pill";
+import { faceSourceForId } from "../chat/faces";
 
 const users = [
-  { id: "1", name: "Kevin", avatar: "avatar1" },
-  { id: "2", name: "Kevin", avatar: "avatar2" },
-  { id: "3", name: "Kevin", avatar: "avatar3" },
+  { id: "kevin", name: "Kevin" },
+  { id: "chad", name: "Chad" },
+  { id: "amanda", name: "Amanda" },
 ];
 
 const SyncSelectionScreen = () => {
   const navigation = useNavigation();
   const [text, setText] = useState("");
+  const searchRef = useRef<TextInput>(null);
+  const filteredUsers = useMemo(() => {
+    const query = text.trim().toLowerCase();
+    if (!query) {
+      return users;
+    }
+    return users.filter((user) => user.name.toLowerCase().includes(query));
+  }, [text]);
 
   return (
     <View style={styles.container}>
@@ -67,15 +70,11 @@ const SyncSelectionScreen = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Connected Status */}
-      <View style={styles.connectedContainer}>
-        <GreenIcon width={10} height={10} />
-        <Text style={styles.connectedText}>Connected</Text>
-        <Text style={styles.batteryText}>100%</Text>
-      </View>
+      <ConnectionPill />
 
       <View style={styles.searchBarContainer}>
         <TextInput
+          ref={searchRef}
           style={styles.searchInput}
           placeholder="Search in your contacts"
           placeholderTextColor={colors.grayLighter}
@@ -83,7 +82,7 @@ const SyncSelectionScreen = () => {
           onChangeText={setText}
           maxLength={30}
         />
-        <TouchableOpacity>
+        <TouchableOpacity onPress={() => searchRef.current?.focus()} hitSlop={8}>
           <SearchIcon width={35} height={35} style={styles.searchIcon} />
         </TouchableOpacity>
       </View>
@@ -91,14 +90,19 @@ const SyncSelectionScreen = () => {
       {/* Recent List */}
       <Text style={styles.recentTitle}>Recent</Text>
       <FlatList
-        data={users}
+        data={filteredUsers}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
           <TouchableOpacity
             style={styles.listItem}
-            onPress={() => navigation.navigate(SCREENS.SYNC_SCREEN)}
+            onPress={() =>
+              navigation.navigate(
+                SCREENS.SYNC_SCREEN as never,
+                { name: item.name, companionId: item.id } as never
+              )
+            }
           >
-            <Image source={images[item.avatar]} style={styles.avatar} />
+            <Image source={faceSourceForId(item.id)} style={styles.avatar} />
             <Text style={styles.userName}>{item.name}</Text>
             <View style={styles.waveButton}>
               <AntennaIcon width={35} height={35}></AntennaIcon>
@@ -144,34 +148,6 @@ const styles = StyleSheet.create({
     width: 35,
     height: 35,
   },
-  // Connected Styles
-  connectedContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "center",
-    justifyContent: "space-between",
-    backgroundColor: colors.grayLightest,
-    borderWidth: 1,
-    borderColor: colors.white,
-    marginVertical: 16,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    borderRadius: 50,
-    width: 220,
-  },
-  connectedText: {
-    color: colors.white,
-    fontSize: fontSizes.medium,
-    fontFamily: "Quicksand-Bold",
-    fontWeight: fontWeights.bold,
-  },
-  batteryText: {
-    color: colors.grayLighter,
-    fontSize: fontSizes.medium,
-    fontFamily: "Quicksand-Bold",
-    fontWeight: fontWeights.bold,
-  },
-  // SearchBar Styles
   searchBarContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -184,6 +160,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 32,
   },
   searchInput: {
+    flex: 1,
     paddingLeft: 8,
     color: colors.white,
     fontFamily: "Quicksand-Bold",

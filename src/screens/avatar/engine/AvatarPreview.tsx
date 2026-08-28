@@ -1,27 +1,32 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
+  Dimensions,
   LayoutChangeEvent,
-  NativeModules,
   StyleSheet,
+  Text,
+  TouchableOpacity,
   View,
 } from "react-native";
-import { WebView } from "react-native-webview";
+import { colors } from "@common/styles/colors";
 import { AvatarLook } from "./viewer-html";
+import { LookFace } from "../look-face";
+import {
+  allocAvatarSlotId,
+  attachAvatarSlot,
+  AvatarViewMode,
+  detachAvatarSlot,
+  updateAvatarSlotLook,
+  useAvatarEngine,
+} from "./AvatarEngineHost";
 
-const avatarViewerUri = () => {
-  const scriptURL = NativeModules.SourceCode?.scriptURL || "";
-  const match = String(scriptURL).match(/^(https?):\/\/([^/:]+)(?::(\d+))?/);
-  const protocol = match?.[1] || "http";
-  const host = match?.[2] || "localhost";
-  const metroPort = match?.[3] || "8081";
-  return `${protocol}://${host}:${metroPort}/ph-avatar/viewer.html?v=bozo9`;
-};
+export { avatarViewerUri } from "./AvatarEngineHost";
 
 type AvatarPreviewProps = {
   look: AvatarLook;
   width: number;
   height: number;
-  viewMode?: "full" | "bust";
+  viewMode?: AvatarViewMode;
+  revealBody?: boolean;
 };
 
 export const AvatarPreview = ({
@@ -29,52 +34,91 @@ export const AvatarPreview = ({
   width,
   height,
   viewMode = "full",
+  revealBody = false,
 }: AvatarPreviewProps) => {
-  const webRef = useRef<WebView>(null);
-  const viewerUri = useMemo(() => avatarViewerUri(), []);
-  const payload = JSON.stringify({ ...look, viewMode });
+  const viewRef = useRef<View>(null);
+  const slotIdRef = useRef<number | null>(null);
+  if (slotIdRef.current == null) {
+    slotIdRef.current = allocAvatarSlotId();
+  }
+  const slotId = slotIdRef.current;
+  const propsRef = useRef({ look, viewMode, revealBody });
+  propsRef.current = { look, viewMode, revealBody };
+  const { status, errorMessage, retry, viewerUri } = useAvatarEngine();
 
-  const pushLook = () => {
-    webRef.current?.injectJavaScript(
-      `window.applyLook && window.applyLook(${payload}); true;`
-    );
+  const publish = () => {
+    const current = propsRef.current;
+    viewRef.current?.measureInWindow((x, y, measuredWidth, measuredHeight) => {
+      if (measuredWidth < 2 || measuredHeight < 2) {
+        return;
+      }
+      attachAvatarSlot(slotId, {
+        rect: {
+          x: Math.round(x),
+          y: Math.round(y),
+          width: Math.round(measuredWidth),
+          height: Math.round(measuredHeight),
+        },
+        look: current.look,
+        viewMode: current.viewMode,
+        revealBody: current.revealBody,
+      });
+    });
   };
 
   useEffect(() => {
-    pushLook();
-  }, [payload]);
+    updateAvatarSlotLook(slotId, look, viewMode, revealBody);
+    publish();
+  }, [look, viewMode, revealBody, width, height, slotId]);
+
+  useEffect(() => {
+    const handle = Dimensions.addEventListener("change", publish);
+    return () => handle.remove();
+  }, [slotId]);
+
+  useEffect(() => {
+    return () => detachAvatarSlot(slotId);
+  }, [slotId]);
+
+  if (!viewerUri) {
+    return (
+      <View
+        style={[
+          styles.wrap,
+          { width, height, alignItems: "center", justifyContent: "center" },
+        ]}
+      >
+        <LookFace look={look} size={Math.min(width, height)} />
+      </View>
+    );
+  }
 
   return (
-    <View style={[styles.wrap, { width, height }]}>
-      <WebView
-        ref={webRef}
-        originWhitelist={["*"]}
-        source={{ uri: viewerUri }}
-        style={[styles.web, { width, height }]}
-        scrollEnabled={false}
-        bounces={false}
-        showsVerticalScrollIndicator={false}
-        showsHorizontalScrollIndicator={false}
-        androidLayerType="hardware"
-        mixedContentMode="always"
-        javaScriptEnabled
-        onLoadEnd={pushLook}
-        onHttpError={(event) => {
-          console.log("Avatar HTTP error", event.nativeEvent);
-        }}
-        onError={(event) => {
-          console.log("Avatar WebView error", event.nativeEvent);
-        }}
-        onMessage={(event) => {
-          const data = event.nativeEvent.data || "";
-          if (data === "ready" || data.startsWith("error:")) {
-            console.log("Avatar WebView", data);
-            if (data === "ready") {
-              pushLook();
-            }
-          }
-        }}
-      />
+    <View
+      ref={viewRef}
+      collapsable={false}
+      style={[
+        styles.wrap,
+        { width, height, alignItems: "center", justifyContent: "center" },
+      ]}
+      onLayout={publish}
+    >
+      {status !== "ready" && status !== "error" ? (
+        <LookFace look={look} size={Math.min(width, height)} />
+      ) : null}
+      {status === "error" ? (
+        <View style={styles.overlay}>
+          <Text style={styles.overlayTitle}>Couldn’t load 3D preview</Text>
+          <Text style={styles.overlayBody}>{errorMessage}</Text>
+          <TouchableOpacity
+            onPress={retry}
+            style={styles.retry}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
     </View>
   );
 };
@@ -83,10 +127,12 @@ export const FittedAvatarPreview = ({
   look,
   aspect = 186 / 402,
   viewMode = "full",
+  revealBody = false,
 }: {
   look: AvatarLook;
   aspect?: number;
-  viewMode?: "full" | "bust";
+  viewMode?: AvatarViewMode;
+  revealBody?: boolean;
 }) => {
   const [size, setSize] = useState({ width: 1, height: 1 });
 
@@ -117,6 +163,7 @@ export const FittedAvatarPreview = ({
           width={size.width}
           height={size.height}
           viewMode={viewMode}
+          revealBody={revealBody}
         />
       ) : null}
     </View>
@@ -128,15 +175,47 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     backgroundColor: "transparent",
   },
-  web: {
-    flex: 1,
-    backgroundColor: "transparent",
-  },
   fit: {
     flex: 1,
     width: "100%",
     minHeight: 0,
     alignItems: "center",
     justifyContent: "center",
+  },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(20, 16, 40, 0.72)",
+    paddingHorizontal: 16,
+    gap: 10,
+  },
+  overlayTitle: {
+    color: colors.white,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 15,
+    textAlign: "center",
+  },
+  overlayBody: {
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: "center",
+  },
+  retry: {
+    marginTop: 4,
+    minWidth: 112,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.grayLightest,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 18,
+  },
+  retryText: {
+    color: colors.white,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 14,
   },
 });

@@ -44,9 +44,12 @@ Read this file first. It is the working memory for the next agent: product decis
 | Video call | **None.** Voice only. |
 | Chat data | Local mock (Kevin / Chad / Amanda). No GraphQL chat API. |
 | Launch | Not shipping. Must run complete on one phone. |
-| 3D beauty | **Ignore for now** (user, 2026-08-24). |
+| 3D beauty | **Ignore polish** (user, 2026-08-24). Options must work; demo presentable. |
+| 3D gender | **Male-only.** Only `bozo-male.glb` exists. Female / Non-binary disabled with “Demo: male avatar only for now”. Do not pretend gender swaps the model. |
 | Real BLE / toy hardware | **Ignore for now** (user, 2026-08-24). Use **fake Bluetooth**. |
 | LLM | User wants a real OpenAI-compatible API, “just add a key.” Service exists; **Love/Message UI still uses local scripted replies** until wired. |
+| Companion Sync | Love chat or Message thread already has a person. Sync **starts with that person** (Love SYNC overlay). No picker. Control Sync has no person, so the selection stack is OK. |
+| Control Auto | **Toggle in place** on the hub. Rotating ring while on. Do **not** push `auto.tsx` as the primary tap. |
 
 ---
 
@@ -62,7 +65,7 @@ npm run ios          # or Xcode; bundle id org.reactjs.native.pleasurehouse.--PL
 - Boot splash: `OpenAnimationScreen` in `App.tsx` (~1.6s + `AsyncStorage` `user`).
 - Fast path into the app: Login → **Bypass login**.
 - iPhone 15 Simulator UDID used in past sessions: `D4A6B178-D63E-41F3-8E7D-E7E966E3CF46` (may have changed).
-- Avatar 3D: Metro serves `http://<metro-host>:8081/ph-avatar/viewer.html`. `metro.config.js` also starts `scripts/avatar-static-server.js` (port **8099**). Preview WebView now uses the **Metro URL**, so a physical phone works if it can reach the Mac’s Metro. GLB is **not** bundled in the app binary.
+- Avatar 3D: Metro serves `http://<metro-host>:8081/ph-avatar/viewer.html`. `metro.config.js` also starts `scripts/avatar-static-server.js` (port **8099**). Preview WebView uses the **Metro URL** from `SourceCode.scriptURL`. **Physical iPhone:** same Wi‑Fi as the Mac running `npm start`. In Safari on the phone, open `http://<mac-lan-ip>:8081/ph-avatar/viewer.html` — if that fails, the in-app preview will fail too (error + Retry). USB-only without that host reachable is not enough. GLB is **not** bundled in the app binary.
 
 ### Env / secrets
 
@@ -103,7 +106,7 @@ First screen: `SCREENS.NAV_BAR` = 4 tabs in `src/common/components/nav-bar/nav-b
 
 Screen name constants: **`src/common/constant/index.ts`** (`SCREENS`). Always add routes there **and** in the relevant stack.
 
-Love is **not** a tab. Open via companion avatars on Home, avatar wizard finish, or `SessionLovePill` when minimized.
+Love is **not** a tab. Open via companion avatars on Home, avatar wizard finish, or the **global** `SessionLovePill` when minimized. The pill is mounted once on `HomeStack` (`GlobalSessionLovePill`), not per screen.
 
 ---
 
@@ -135,10 +138,12 @@ Love is **not** a tab. Open via companion avatars on Home, avatar wizard finish,
 
 **Pill product logic (do not regress):**
 
-- Home / Control / Manual / Auto / Performance-play / Pattern / Kink list / Bliss slider render **`SessionLovePill`**, not bare `LovePill`.
-- Header back on Love chat = **end session** (no pill).
-- Side pill on Love chat / minimize icon on Call&Sync = **minimize** (pill on Home).
-- Hangup X on Sync/Call = end that layer, **not** minimize. After full exit of Love, pill gone.
+- Minimized Love shows **one global** `SessionLovePill` overlay on `HomeStack` (all tabs + deep screens). `SessionLovePill` returns null unless `minimized`. Never always-on LovePill on Home.
+- Love overlay chrome still uses bare `LovePill` (chat side pill / Call&Sync minimize).
+- Header back on Love chat = **end session** (no pill). `end()` also clears `companionId` and Call/Sync timers.
+- Side pill on Love chat / minimize icon on Call&Sync = **minimize**. Hangup X ends that layer, **not** minimize.
+- Call/Sync elapsed time lives in `LoveSessionProvider` (`callStartedAt` / `syncStartedAt`) so minimize → restore does not reset to 00:00.
+- Control → Kink opens the Hardcore/Gentle **hub** (`SCREENS.KINK_HUB`). Generate on the hub still enters the wizard (`SCREENS.KINK`).
 
 ### Message tab
 
@@ -175,8 +180,8 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 | `src/hooks/useBleManager.ts` | Real `react-native-ble-manager` (unused for demo) |
 | `src/screens/onboarding/ConnectDevice/index.tsx` | Device list; **demo row first**, then real scan |
 | `src/common/components/connection-pill/` | Connected/Disconnected; tap → `CONNECT_DEVICE` |
-| `src/screens/control/index.tsx` | Hub: Auto, Playground, Pattern, Manual, Kink, Sync |
-| `src/screens/control/auto.tsx` | Color wheel + intensity + play → `wavePattern` + motor |
+| `src/screens/control/index.tsx` | Hub: Auto, Playground, Pattern, Manual, Kink, Sync. **Auto tap toggles** (ring + motor). Kink → `KINK_HUB` (`control/sub-screens/kink`), then Generate → wizard |
+| `src/screens/control/auto.tsx` | Leftover color-wheel screen — not the primary Auto action |
 | `src/screens/control/sub-screens/manual/` | Slider + play; `setMotorInput([1, level, level, level])` |
 | `src/screens/control/sub-screens/pattern/` | Library |
 | `src/store/patterns.ts` | `BUILTIN_PATTERNS`, `wavePattern`, `nextNamedPattern` |
@@ -231,18 +236,35 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 ## 6. Landmines (bugs we already paid for)
 
 1. **Transparent modal + non-modal push** = screen appears under Love. Fix: `dismissLoveOverlays` then navigate Pattern/Kink/Bliss. Same class of bug as Love → old `SYNC_STACK`.
-2. **Home always showing Love pill** was wrong. Pill = minimized session only.
+2. **Home always showing Love pill** was wrong. Pill = minimized session only. Global overlay is the restore affordance; do not re-add per-screen pills.
 3. **Love chat remounts** if you don’t keep messages in `LoveSessionProvider`. Don’t put Love transcript only in component `useState` if minimize/restore must keep it.
 4. **`start()` on LoveChat mount** must `keepLayer` so restoring into Sync/Call doesn’t reset layer to chat.
 5. Pattern play from Love must **minimize Love first**, then Pattern, so the pill is the way back.
 6. Chat call `useEffect` cleanup used to `setInCall(null)` on minimize. Hangup vs minimize must use a ref (see `src/screens/chat/call.tsx`).
-7. Figma Control tab *is* the color remote; current Control is a **6-card hub**, Auto is the wheel. User never 拍版; leave hub unless they ask.
+7. Figma Control tab *is* the color remote; current Control is a **6-card hub**. **Auto is a hub toggle** (ring + fake motor), not a full-screen push. `auto.tsx` color wheel is leftover advanced UI — do not make it the primary Auto tap.
+8. Message/Love Sync with a known companion must open Love SYNC overlay bound to that person. Never dump the user on `SYNC_SELECTION_SCREEN` to pick again.
+9. Control Sync minimize must **keep the session** (Love session + global pill). Red X ends Sync. Do not treat minimize as hangup.
 
 ---
 
 ## 7. Next work (priority the user already stated)
 
-Do these unless they change their mind:
+Overnight QA close-out (global Love pill, dead taps, Control→Kink hub, fake tabs, Profile/Sync/Switch-account copy, tab focus, Call/Sync timer persist, `end()` clears companionId) is done.
+
+### Avatar / companion lifecycle (2026-08-24)
+
+Treat **Create → Save → Edit look → Edit persona → Save again** as one product. Same `companionId`. `upsertCompanion` never clones.
+
+- **Create wizard** (`mode: create`): Identity → Ready → Appearance → Customize → Personality → Story → Intimate → Candle → Waiting. Back = previous step; close = discard if dirty. Each step says 3D vs chat persona. Male-only 3D.
+- **First save:** Waiting upserts companion + matching Message thread immediately, blocks system back, then opens Love. Home strip + Love header/pill use `LookFace`.
+- **Edit look** (`mode: editLook`): Appearance → Customize → **Save look**. Loads existing look. Cancel restores baseline.
+- **Edit persona** (`mode: editPersona`): Identity → Personality → Story → Intimate → **Save persona**. Does not open the full new-avatar wizard.
+- **Entry:** Love `···` → Edit avatar / Edit persona (dismisses Love overlay first). Chat settings: same if a companion exists; otherwise Edit traits (`create.tsx`) or Create avatar (wizard with that thread id).
+- Preview Metro path unchanged. Outfit cards still do not wipe Customize.
+
+Do not regress SessionLovePill / Sync / Auto.
+
+Remaining product work:
 
 1. **Wire LLM into Love + Message**  
    - `src/screens/love/chat.tsx` `send`  
@@ -250,7 +272,7 @@ Do these unless they change their mind:
    Call `completeCompanionChat` from `src/services/llm.ts`. Fall back to `companionReply` if no key / fetch fail.  
    Add a Profile row “Companion AI” to paste API key, base URL, model (`saveLlmConfig`). OpenAI-compatible (OpenAI / Groq / OpenRouter).
 2. **Keep fake BLE; finish leftover play surfaces** that still don’t call `setMotorInput`: Bliss timer, Deep Discovery timer, Sound meter, Canvas pan, Motion (partial), Alarm, Performance-play prev/next.
-3. **Do not** polish 3D. **Do not** implement real toy BLE unless asked.
+3. **Do not** sculpt a female GLB or polish 3D beauty. **Do not** implement real toy BLE unless asked.
 4. Optional later: bundle GLB for offline phone; real WebRTC; real LLM streaming.
 
 ---

@@ -1,33 +1,24 @@
-import { ApolloClient, InMemoryCache, createHttpLink } from '@apollo/client';
-import { setContext } from '@apollo/client/link/context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ApolloClient, InMemoryCache } from '@apollo/client';
+import { SchemaLink } from '@apollo/client/link/schema';
+import { makeExecutableSchema } from '@graphql-tools/schema';
 
-const httpLink = createHttpLink({
-  // used for testing on ios simulator
-  // uri: 'http://localhost:4000/graphql',
-  // used for cloud connection
-  uri: 'https://o31edlh788.execute-api.us-east-1.amazonaws.com/',
+import { resolvers } from './backend/resolvers';
+import { typeDefs } from './backend/schema';
+import { getSessionUser } from './backend/session';
 
-  // used for testing on real ios device, adapt to your own ip address
-  // uri: 'http://192.168.1.227:4000/graphql',
+const schema = makeExecutableSchema({
+  typeDefs,
+  resolvers,
 });
 
-const authLink = setContext(async (_, { headers }) => {
-  // Get the authentication token from storage if it exists
-  const tokenStorage = await AsyncStorage.getItem('user');
-  const token = tokenStorage ? JSON.parse(tokenStorage)?.token : null;
-
-  // Return the headers to the context so httpLink can read them
-  return {
-    headers: {
-      ...headers,
-      authorization: token ? `Bearer ${token}` : '',
-    },
-  };
-});
-
+// On-device GraphQL only. Never HttpLink to localhost, AWS, or any remote.
 const client = new ApolloClient({
-  link: authLink.concat(httpLink),
+  link: new SchemaLink({
+    schema,
+    context: () => ({
+      token: getSessionUser()?.token || '',
+    }),
+  }),
   cache: new InMemoryCache(),
 });
 

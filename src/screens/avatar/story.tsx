@@ -10,37 +10,36 @@ import {
 import { useNavigation } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
+import { useWizardChrome } from "./chrome";
 import { useAvatarWizard } from "./context";
 import { s } from "./scale";
-import { FieldLabel, WizardShell, useLeaveGuard } from "./shared";
+import { FieldLabel, StepNote, WizardShell, progressFor } from "./shared";
 
 const STORY_LIMIT = 3000;
 
 export const AvatarStoryScreen = () => {
   const navigation = useNavigation();
-  const { draft, patchDraft, resetDraft, isDirty } = useAvatarWizard();
-  const { requestLeave, modal } = useLeaveGuard(isDirty, () => {
-    resetDraft();
-    navigation.getParent()?.goBack();
-  });
+  const { draft, patchDraft } = useAvatarWizard();
+  const { mode, title, requestLeave, goBackStep, modal } = useWizardChrome();
   const name = draft.name.trim() || "[name]";
 
   return (
     <WizardShell
-      title="Craft your ideal lover"
-      progressFill={167}
-      leftIcon="close"
-      onLeftPress={requestLeave}
+      title={title}
+      progressFill={progressFor(mode, "story")}
+      leftIcon="back"
+      rightIcon="close"
+      onLeftPress={goBackStep}
+      onRightPress={requestLeave}
       primaryLabel="Continue"
       onPrimary={() => navigation.navigate(SCREENS.AVATAR_INTIMATE)}
-      secondaryLabel="Return"
-      onSecondary={() => navigation.goBack()}
     >
       {modal}
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.content}
       >
+        <StepNote>Affects chat persona, not 3D.</StepNote>
         <FieldLabel>Their story</FieldLabel>
         <Text style={styles.hint}>
           Weave the tale of their life. Describe{" "}
@@ -72,7 +71,7 @@ export const AvatarStoryScreen = () => {
 
 const styles = StyleSheet.create({
   content: {
-    paddingTop: s(136),
+    paddingTop: s(80),
     alignItems: "center",
   },
   hint: {

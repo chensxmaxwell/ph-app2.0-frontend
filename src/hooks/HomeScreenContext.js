@@ -4,6 +4,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useBleManager } from './useBleManager';
 import { useDevice } from '../store/device';
 import { applyToyMotor, stopToy } from '../store/toy';
+import { wavePattern } from '../store/patterns';
 
 const HomeScreenContext = createContext();
 
@@ -25,6 +26,7 @@ export const HomeScreenProvider = ({ children }) => {
   // this record the PeripheralId of ble device related to the user
   const [userPeripheralId, setUserPeripheralId] = useState('');
   const [motorInput, setMotorInput] = useState([]);
+  const [autoIntensity, setAutoIntensity] = useState(3);
 
   const motor_selection_table = {
     0: [1, 95, 95, 95],
@@ -90,6 +92,22 @@ export const HomeScreenProvider = ({ children }) => {
   }, [currentMode]);
 
   useEffect(() => {
+    if (currentMode !== 'auto') {
+      return undefined;
+    }
+    const pattern = wavePattern(20 + autoIntensity * 16);
+    let index = 0;
+    const timer = setInterval(() => {
+      const value = pattern[index % pattern.length];
+      setMotorInput([1, value, value, value]);
+      index += 1;
+    }, 280);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [autoIntensity, currentMode]);
+
+  useEffect(() => {
     if (bleConnected && motorInput) {
       const intervalId = setInterval(() => {
         writeToMotor(
@@ -111,6 +129,7 @@ export const HomeScreenProvider = ({ children }) => {
   }, [bleConnected, demoConnected, motorInput, peripheralId, writeToMotor]);
 
   const { loading, error, data, refetch } = useQuery(GET_DEVICE_BY_USER, {
+    skip: true,
     notifyOnNetworkStatusChange: true,
   });
 
@@ -167,6 +186,8 @@ export const HomeScreenProvider = ({ children }) => {
         setUserPeripheralId,
         Connect: connect,
         setMotorInput,
+        autoIntensity,
+        setAutoIntensity,
         motor_selection_table,
         isMonitoring,
         listenToDevice,

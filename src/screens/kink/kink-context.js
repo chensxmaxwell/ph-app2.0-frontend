@@ -1,4 +1,5 @@
-import React, { createContext, useState, useContext } from "react";
+import React, { createContext, useState, useContext, useEffect } from "react";
+import { subscribeSessionUser } from "../../backend/session";
 
 const AppContext = createContext();
 
@@ -9,6 +10,17 @@ export function AppProvider({ children }) {
   const [funType, setfunType] = useState("");
   const [kinkName, setkinkName] = useState("");
   const [kinkAvatar, setKinkAvatar] = useState(null);
+
+  useEffect(() => {
+    return subscribeSessionUser(() => {
+      setEmotion(null);
+      setIntensity(0);
+      setSensitivity(0);
+      setfunType("");
+      setkinkName("");
+      setKinkAvatar(null);
+    });
+  }, []);
 
   return (
     <AppContext.Provider

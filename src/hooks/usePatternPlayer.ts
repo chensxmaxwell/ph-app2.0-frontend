@@ -22,18 +22,22 @@ export const usePatternPlayer = (
       return undefined;
     }
     setCurrentMode(mode);
-    const tick = () => {
+    const timer = setInterval(() => {
       setCursor((current) => {
         const list = patternRef.current;
-        const value = list[current] ?? 0;
-        setMotorInput([1, value, value, value]);
         return list.length === 0 ? 0 : (current + 1) % list.length;
       });
-    };
-    tick();
-    const timer = setInterval(tick, 380);
+    }, 380);
     return () => clearInterval(timer);
   }, [mode, playing, setCurrentMode, setMotorInput]);
+
+  useEffect(() => {
+    if (!playing) {
+      return;
+    }
+    const value = patternRef.current[cursor] ?? 0;
+    setMotorInput([1, value, value, value]);
+  }, [cursor, playing, setMotorInput]);
 
   useEffect(
     () => () => {

@@ -1,11 +1,5 @@
 import React from "react";
-import {
-  View,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Image,
-} from "react-native";
+import { View, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
 import { useHome } from "./hooks";
 import House from "@images/3d-rendering-cartoon-house.svg";
 import AddIcon from "@images/AddIcon.svg";
@@ -17,48 +11,78 @@ import { BaseText } from "@common/components/base-text";
 import { spacings } from "@common/styles/spacings";
 import { useNavigation, NavigationProp, ParamListBase } from "@react-navigation/native";
 import { lookFromCompanion, useCompanions } from "../../store/companions";
-import { s } from "../avatar/scale";
-import { AvatarPreview } from "../avatar/engine/AvatarPreview";
-import { SessionLovePill, useOpenLove } from "../love/pill";
+import { LookFace } from "../avatar/look-face";
+import { ROW_AVATAR_SIZE, circleAvatarStyle } from "../avatar/circle-avatar";
+import { faceSourceForId } from "../chat/faces";
+import type { AvatarLook } from "../avatar/engine/viewer-html";
 
-const FACE = require("../../../assets/images/love/face.png");
+const HomeFace = ({
+  companionId,
+  look,
+  size,
+}: {
+  companionId: string;
+  look?: AvatarLook | null;
+  size: number;
+}) => (
+  <LookFace
+    look={look}
+    size={size}
+    fallbackSource={faceSourceForId(companionId)}
+  />
+);
 
 export const Home = () => {
   const { companions, events, navigateToNestedScreen } = useHome();
-  const { companions: createdCompanions, activeCompanion } = useCompanions();
+  const { companions: createdCompanions } = useCompanions();
   const navigation = useNavigation();
   const parentNavigation = navigation.getParent() as
     | NavigationProp<ParamListBase>
     | undefined;
-  const openLove = useOpenLove();
-
   const openAvatarCreation = () => {
-    parentNavigation?.navigate(SCREENS.AVATAR_STACK);
+    parentNavigation?.navigate(
+      SCREENS.AVATAR_STACK as never,
+      { mode: "create" } as never
+    );
+  };
+
+  const openCompanion = (companionId: string) => {
+    parentNavigation?.navigate(
+      SCREENS.CHAT_THREAD as never,
+      { threadId: companionId } as never
+    );
   };
 
   const renderCreatedCompanions = () =>
     createdCompanions.map((companion) => (
       <TouchableOpacity
         key={companion.id}
-        style={styles.companionPicture}
-        onPress={() => openLove({ companionId: companion.id })}
+        style={[styles.companionPicture, circleAvatarStyle(ROW_AVATAR_SIZE)]}
+        onPress={() => openCompanion(companion.id)}
       >
-        <Image source={FACE} style={styles.companionImage} />
+        <HomeFace
+          companionId={companion.id}
+          look={lookFromCompanion(companion)}
+          size={ROW_AVATAR_SIZE}
+        />
       </TouchableOpacity>
     ));
 
   const renderCompanions = () =>
-    companions.map((companion, index) => (
-      <TouchableOpacity
-        key={`mock-${index}`}
-        style={styles.companionPicture}
-        onPress={() => openLove()}
-      >
-        {companion.profilePicture && (
-          <companion.profilePicture height="100%" width="100%" />
-        )}
-      </TouchableOpacity>
-    ));
+    companions
+      .filter(
+        (companion) =>
+          !createdCompanions.some((created) => created.id === companion.id)
+      )
+      .map((companion) => (
+        <TouchableOpacity
+          key={companion.id}
+          style={[styles.companionPicture, circleAvatarStyle(ROW_AVATAR_SIZE)]}
+          onPress={() => openCompanion(companion.id)}
+        >
+          <HomeFace companionId={companion.id} look={null} size={ROW_AVATAR_SIZE} />
+        </TouchableOpacity>
+      ));
 
   const generatePath = (screens: string[]) => {
     return screens.map((screen) => ({
@@ -75,12 +99,19 @@ export const Home = () => {
           key={index}
           style={[styles.cards, styles.events]}
           onPress={() => {
+            if (event.type === "Alarm") {
+              parentNavigation?.navigate(SCREENS.PLAYGROUND_STACK, {
+                screen: SCREENS.ALARM_STACK,
+                params: { screen: SCREENS.SETALARM_INTRO },
+              });
+              return;
+            }
             if (event.screen) {
               parentNavigation?.navigate(event.screen, event.params);
               return;
             }
             navigateToNestedScreen({
-              navigation: navigation as NavigationProp<any>,
+              navigation: parentNavigation ?? (navigation as NavigationProp<any>),
               path: dynamicPath,
             });
           }}
@@ -105,25 +136,15 @@ export const Home = () => {
       <View style={styles.container}>
         <BaseText style={styles.pleasureHouse}>Pleasure House</BaseText>
         <View style={styles.hero}>
-          {activeCompanion ? (
-            <AvatarPreview
-              look={lookFromCompanion(activeCompanion)}
-              width={s(300)}
-              height={s(300)}
-            />
-          ) : (
-            <House />
-          )}
-          <SessionLovePill style={styles.floatingPill} />
+          <House />
         </View>
         <View style={styles.cardContainer}>
-          <BaseText style={styles.companionsText}>
-            {activeCompanion ? "Your Companions" : "My Companions"}
-          </BaseText>
+          <BaseText style={styles.companionsText}>My Companions</BaseText>
           <View style={[styles.companions, styles.cards]}>
             <ScrollView
               horizontal
               style={styles.companionsScrollView}
+              contentContainerStyle={styles.companionRow}
               showsHorizontalScrollIndicator={false}
             >
               {renderCreatedCompanions()}
@@ -167,9 +188,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     overflow: "visible",
   },
-  floatingPill: {
-    top: s(54),
-  },
   cardContainer: {
     display: "flex",
     width: FULL_SIZE,
@@ -194,25 +212,21 @@ const styles = StyleSheet.create({
     paddingLeft: spacings.w12,
   },
   companionsScrollView: {
-    display: "flex",
+    flexGrow: 0,
+  },
+  companionRow: {
     flexDirection: "row",
+    alignItems: "center",
   },
   companionPicture: {
-    width: 70,
-    height: 70,
     marginRight: spacings.w12,
-    overflow: "hidden",
-    borderRadius: 50,
-  },
-  companionImage: {
-    width: "100%",
-    height: "100%",
   },
   addCompanion: {
-    width: 70,
-    height: 70,
+    width: ROW_AVATAR_SIZE,
+    height: ROW_AVATAR_SIZE,
     marginRight: spacings.w12,
-    borderRadius: 50,
+    borderRadius: ROW_AVATAR_SIZE / 2,
+    flexShrink: 0,
     backgroundColor: colors.grayLightest,
     alignItems: "center",
     justifyContent: "center",

@@ -10,6 +10,7 @@ import { ScreenWrapper } from "@common/components/screen-wrapper";
 import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
 import { useNavigation } from "@react-navigation/native";
+import { SCREENS } from "@common/constant";
 import Xmark from "@images/xmark.svg";
 
 const SyncIntro = () => {
@@ -27,13 +28,19 @@ const SyncIntro = () => {
         </TouchableOpacity>
       </View>
       <ScrollView contentContainerStyle={styles.scrollContainer}>
-        <Text style={styles.title}>Snyc</Text>
+        <Text style={styles.title}>Sync</Text>
         <Text style={styles.content}>
           One of the key benefits of using Pleasure House is its ability to
           sync, enabling you to stay connected with those you enjoy, even from a
           distance. This feature adds an extra spark to your experience, keeping
           the fun alive no matter where you are with your partner.
         </Text>
+        <TouchableOpacity
+          style={styles.continueButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.continueText}>Continue</Text>
+        </TouchableOpacity>
       </ScrollView>
     </ScreenWrapper>
   );
@@ -74,6 +81,20 @@ const styles = StyleSheet.create({
     fontFamily: "Quicksand-Bold",
     lineHeight: 24,
     marginTop: 20,
+  },
+  continueButton: {
+    marginTop: 32,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: colors.grayLightest,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  continueText: {
+    color: colors.white,
+    fontFamily: "Quicksand-Bold",
+    fontSize: fontSizes.medium2X,
+    fontWeight: fontWeights.bold,
   },
 });
 
