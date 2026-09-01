@@ -87,6 +87,7 @@ export const ChatThreadScreen = () => {
     setRequest,
     cancelFriendRequest,
     humanLimitReached,
+    chatNotice,
   } = useChat();
   const thread = getThread(route.params.threadId);
   const openLove = useOpenLove();
@@ -258,6 +259,11 @@ export const ChatThreadScreen = () => {
               </View>
             ) : null}
             {thread.messages.map(renderBubble)}
+            {chatNotice(thread.id) ? (
+              <View style={styles.notice}>
+                <Text style={styles.noticeText}>{chatNotice(thread.id)}</Text>
+              </View>
+            ) : null}
             {thread.synced ? (
               <Text style={styles.syncLine}>
                 {`You are now syncing with ${thread.name}`}
@@ -651,6 +657,21 @@ const styles = StyleSheet.create({
   },
   listenHitOn: {
     opacity: 1,
+  },
+  notice: {
+    alignSelf: "center",
+    maxWidth: s(280),
+    marginTop: s(8),
+    paddingHorizontal: s(16),
+    paddingVertical: s(12),
+    borderRadius: s(16),
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+  },
+  noticeText: {
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 13,
+    textAlign: "center",
   },
   syncLine: {
     alignSelf: "center",

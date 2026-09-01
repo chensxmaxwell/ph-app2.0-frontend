@@ -98,6 +98,7 @@ export const STORE_KEYS = {
   kinks: "ph.kinks.v1",
   profile: "ph.profile.v1",
   loveSession: "ph.loveSession.v1",
+  llm: "ph.llm.v1",
 } as const;
 
 export const scopedKey = (base: string, userId: string) => `${base}:${userId}`;
