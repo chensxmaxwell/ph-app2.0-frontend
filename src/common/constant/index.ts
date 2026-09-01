@@ -145,7 +145,6 @@ const SCREENS = {
   AUTO: "Auto" as never,
   PERFORMANCE: "Performance" as never,
   PERFORMANCE_PLAY: "PerformancePlay" as never,
-  FEED: "Feed" as never,
   PREMIUM: "Premium" as never,
   TUTORIAL: "Tutorial" as never,
   SWITCH_ACCOUNTS: "SwitchAccounts" as never,
