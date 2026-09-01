@@ -52,6 +52,8 @@
 	<string></string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Pleasure House Requires the Usage of Microphone to Offer Better Experience</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Pleasure House Requires Speech Recognition so you can dictate messages and use voice input.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Pleasure House Requires the Usage of Photos to Offer Better Experience</string>
 	<key>UIAppFonts</key>
