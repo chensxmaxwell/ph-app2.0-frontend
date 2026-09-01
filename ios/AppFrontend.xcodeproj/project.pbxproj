@@ -541,7 +541,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = AppFrontend/AppFrontend.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = TBVGP5AS5L;
+				DEVELOPMENT_TEAM = R969S599QC;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = AppFrontend/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PleasureHouse2;
@@ -555,8 +555,8 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "org.reactjs.native.pleasurehouse.--PLEASUREHOUSE2-rfc1034identifier-";
-				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = org.reactjs.native.pleasurehouse.2.2;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.pleasurehouse.app;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = ai.pleasurehouse.app;
 				PRODUCT_NAME = AppFrontend;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
@@ -573,7 +573,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = AppFrontend/AppFrontend.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = TBVGP5AS5L;
+				DEVELOPMENT_TEAM = R969S599QC;
 				INFOPLIST_FILE = AppFrontend/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = PleasureHouse2;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -586,8 +586,8 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "org.reactjs.native.pleasurehouse.--PLEASUREHOUSE2-rfc1034identifier-";
-				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = org.reactjs.native.pleasurehouse.2.2;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.pleasurehouse.app;
+				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = ai.pleasurehouse.app;
 				PRODUCT_NAME = AppFrontend;
 				SWIFT_VERSION = 5.0;
 				VERSIONING_SYSTEM = "apple-generic";
