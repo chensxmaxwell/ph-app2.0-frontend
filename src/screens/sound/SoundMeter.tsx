@@ -19,6 +19,11 @@ import { SCREENS } from "@common/constant";
 import WaveformAdjustable from "./Wave";
 import AudioRecorderPlayer from "react-native-audio-recorder-player";
 import { useHomeScreen } from "../../hooks/HomeScreenContext";
+import {
+  MIC_ERROR_MESSAGES,
+  startMicSession,
+  stopMicSession,
+} from "../../services/mic-session";
 
 const SoundMeter = () => {
   const navigation = useNavigation();
@@ -26,21 +31,36 @@ const SoundMeter = () => {
   const [stop, setStop] = useState(true);
   const [dBLevel, setdBLevel] = useState(0);
   const [intensity, setIntensity] = useState(0);
+  const [micError, setMicError] = useState<string | null>(null);
 
   const audioRecorderPlayer = useRef(new AudioRecorderPlayer()).current;
 
   const startMic = async () => {
-    if (Platform.OS === "android") {
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
-      );
-      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-        return false;
-      }
+    const result = await startMicSession({
+      platform: Platform.OS,
+      requestAndroidAudio: async () => {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO
+        );
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      },
+      startRecorder: async () => {
+        audioRecorderPlayer.setSubscriptionDuration(0.08);
+        await audioRecorderPlayer.startRecorder(undefined, undefined, true);
+      },
+    });
+    if (!result.ok) {
+      setMicError(result.message);
+      return false;
     }
-    audioRecorderPlayer.setSubscriptionDuration(0.08);
-    await audioRecorderPlayer.startRecorder(undefined, undefined, true);
+    setMicError(null);
     return true;
+  };
+
+  const haltMic = async () => {
+    await stopMicSession(() => audioRecorderPlayer.stopRecorder());
+    setStop(true);
+    setIntensity(0);
   };
 
   const toggleStop = async () => {
@@ -51,32 +71,42 @@ const SoundMeter = () => {
       }
       return;
     }
-    await audioRecorderPlayer.stopRecorder();
-    setStop(true);
-    setIntensity(0);
+    await haltMic();
   };
 
   useEffect(() => {
-    audioRecorderPlayer.addRecordBackListener((e) => {
-      const raw = typeof e.currentMetering === "number" ? e.currentMetering : -60;
-      let db = raw;
-      if (raw > 0) {
-        db = 20 * Math.log10(Math.max(raw, 1) / 120);
-      }
-      const level = Math.max(0, Math.min(100, Math.round((db + 50) * 2)));
-      setdBLevel(Math.round(db));
-      setIntensity(level);
-    });
+    try {
+      audioRecorderPlayer.addRecordBackListener((e) => {
+        const raw =
+          typeof e.currentMetering === "number" ? e.currentMetering : -60;
+        let db = raw;
+        if (raw > 0) {
+          db = 20 * Math.log10(Math.max(raw, 1) / 120);
+        }
+        const level = Math.max(0, Math.min(100, Math.round((db + 50) * 2)));
+        setdBLevel(Math.round(db));
+        setIntensity(level);
+      });
+    } catch {
+      setMicError(MIC_ERROR_MESSAGES.unavailable);
+      return undefined;
+    }
     startMic()
       .then((ok) => {
         if (ok) {
           setStop(false);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        setMicError(MIC_ERROR_MESSAGES["start-failed"]);
+      });
     return () => {
-      audioRecorderPlayer.stopRecorder();
-      audioRecorderPlayer.removeRecordBackListener();
+      stopMicSession(() => audioRecorderPlayer.stopRecorder()).catch(() => {});
+      try {
+        audioRecorderPlayer.removeRecordBackListener();
+      } catch {
+        // Native recorder may be missing in a broken Release build.
+      }
       setCurrentMode("");
       setMotorInput([]);
     };
@@ -135,6 +165,7 @@ const SoundMeter = () => {
             <Stop width={35} height={35} />
           )}
         </TouchableOpacity>
+        {micError ? <Text style={styles.micError}>{micError}</Text> : null}
       </View>
 
       <WaveformAdjustable />
@@ -199,6 +230,14 @@ const styles = StyleSheet.create({
     borderRadius: 100,
     justifyContent: "center",
     alignItems: "center",
+  },
+  micError: {
+    marginTop: 16,
+    marginHorizontal: 24,
+    color: colors.white,
+    fontFamily: "Quicksand-Bold",
+    fontSize: fontSizes.small,
+    textAlign: "center",
   },
 });
 
