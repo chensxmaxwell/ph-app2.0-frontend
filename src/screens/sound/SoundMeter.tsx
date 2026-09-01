@@ -46,7 +46,9 @@ const SoundMeter = () => {
       },
       startRecorder: async () => {
         audioRecorderPlayer.setSubscriptionDuration(0.08);
-        await audioRecorderPlayer.startRecorder(undefined, undefined, true);
+        // Empty audioSets (not undefined): the iOS native method takes a
+        // non-optional NSDictionary and can kill the process on a nil bridge arg.
+        await audioRecorderPlayer.startRecorder("DEFAULT", {}, true);
       },
     });
     if (!result.ok) {
