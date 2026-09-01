@@ -13,8 +13,11 @@ import { fontSizes, fontWeights } from "@common/styles/fonts";
 import { useNavigation } from "@react-navigation/native";
 import ChevronLeft from "@images/chevron-left-white.svg";
 import {
+  ARK_BASE_URL,
+  ARK_MODEL,
   LlmConfig,
   defaultLlmConfig,
+  hasLlmKey,
   loadLlmConfig,
   saveLlmConfig,
 } from "../../services/llm-config";
@@ -30,7 +33,7 @@ export const CompanionAiScreen = () => {
 
   const save = async () => {
     await saveLlmConfig(config);
-    setStatus("Saved. New chats will use this API.");
+    setStatus("Saved for this account. New chats will use this API.");
   };
 
   return (
@@ -46,15 +49,16 @@ export const CompanionAiScreen = () => {
       </View>
       <ScrollView contentContainerStyle={styles.body}>
         <Text style={styles.copy}>
-          Paste an OpenAI-compatible key. Groq, OpenRouter, and local OpenAI
-          proxies work if you change the base URL.
+          Companion chat calls Volcengine Ark from this device. Paste a key here
+          so Release builds can reply. The key stays on this account on this
+          phone — it is not uploaded and is not read from a shipped .env.
         </Text>
         <Text style={styles.label}>API key</Text>
         <TextInput
           value={config.apiKey}
           onChangeText={(apiKey) => setConfig((current) => ({ ...current, apiKey }))}
           style={styles.input}
-          placeholder="sk-..."
+          placeholder="Ark API key"
           placeholderTextColor={colors.grayLighter}
           autoCapitalize="none"
           autoCorrect={false}
@@ -67,7 +71,7 @@ export const CompanionAiScreen = () => {
             setConfig((current) => ({ ...current, baseUrl }))
           }
           style={styles.input}
-          placeholder="https://api.openai.com/v1"
+          placeholder={ARK_BASE_URL}
           placeholderTextColor={colors.grayLighter}
           autoCapitalize="none"
           autoCorrect={false}
@@ -77,7 +81,7 @@ export const CompanionAiScreen = () => {
           value={config.model}
           onChangeText={(model) => setConfig((current) => ({ ...current, model }))}
           style={styles.input}
-          placeholder="gpt-4o-mini"
+          placeholder={ARK_MODEL}
           placeholderTextColor={colors.grayLighter}
           autoCapitalize="none"
           autoCorrect={false}
@@ -86,6 +90,11 @@ export const CompanionAiScreen = () => {
           <Text style={styles.saveText}>Save</Text>
         </TouchableOpacity>
         {status ? <Text style={styles.status}>{status}</Text> : null}
+        <Text style={styles.hint}>
+          {hasLlmKey(config)
+            ? "A key is saved for this account."
+            : "No key yet. Chat will not invent a companion reply until you save one."}
+        </Text>
       </ScrollView>
     </ScreenWrapper>
   );
@@ -152,5 +161,12 @@ const styles = StyleSheet.create({
     fontFamily: "Quicksand-Bold",
     textAlign: "center",
     marginTop: 12,
+  },
+  hint: {
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    textAlign: "center",
+    marginTop: 8,
+    fontSize: 13,
   },
 });

@@ -43,7 +43,10 @@ import { faceSourceForId } from "../chat/faces";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
 import { resolveLovePerson } from "./partner";
-import { companionChatOrFallback } from "../../services/llm";
+import {
+  companionChatErrorMessage,
+  completeCompanionChat,
+} from "../../services/llm";
 import { useLoveSession } from "./session";
 import { LoveChatItem, LoveMode } from "./types";
 import { ttsSpeak, ttsStop } from "../../services/tts";
@@ -230,6 +233,7 @@ export const LoveChatScreen = () => {
   const [listenBlocked, setListenBlocked] = useState(false);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [sendError, setSendError] = useState("");
   const listenRef = useRef(false);
 
   const messages = chat?.messages ?? [];
@@ -360,31 +364,37 @@ export const LoveChatScreen = () => {
     }));
     setDraft("");
     setDrawerOpen(false);
+    setSendError("");
     const replyId = `${id}-them`;
-    companionChatOrFallback({
+    completeCompanionChat({
       name,
       userText: text,
       history,
       personality: personality,
       story: story,
-    }).then((reply) => {
-      patchChat((current) => ({
-        ...current,
-        messages: [
-          ...current.messages,
-          {
-            kind: "bubble",
-            id: replyId,
-            from: "them",
-            text: reply,
-            synced: current.synced || undefined,
-          },
-        ],
-      }));
-      if (listenRef.current) {
-        ttsSpeak({ id: replyId, text: reply });
-      }
-    });
+    })
+      .then((reply) => {
+        setSendError("");
+        patchChat((current) => ({
+          ...current,
+          messages: [
+            ...current.messages,
+            {
+              kind: "bubble",
+              id: replyId,
+              from: "them",
+              text: reply,
+              synced: current.synced || undefined,
+            },
+          ],
+        }));
+        if (listenRef.current) {
+          ttsSpeak({ id: replyId, text: reply });
+        }
+      })
+      .catch((error) => {
+        setSendError(companionChatErrorMessage(error));
+      });
   };
 
   const pageZero: DrawerItem[] = [
@@ -537,6 +547,11 @@ export const LoveChatScreen = () => {
               keyboardShouldPersistTaps="handled"
             >
               {messages.map((item) => renderChatItem(item, name, listen))}
+              {sendError ? (
+                <View style={styles.notice}>
+                  <Text style={styles.noticeText}>{sendError}</Text>
+                </View>
+              ) : null}
             </ScrollView>
             {drawerOpen ? (
               <Pressable
@@ -787,6 +802,20 @@ const styles = StyleSheet.create({
   },
   listenHit: {
     marginTop: s(8),
+  },
+  notice: {
+    alignSelf: "center",
+    width: s(292),
+    paddingHorizontal: s(16),
+    paddingVertical: s(12),
+    borderRadius: s(16),
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+  },
+  noticeText: {
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 13,
+    textAlign: "center",
   },
   syncLine: {
     alignSelf: "center",

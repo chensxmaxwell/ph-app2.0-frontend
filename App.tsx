@@ -13,8 +13,9 @@ import {
   NavigationProp,
   ParamListBase,
 } from "@react-navigation/native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { COMMON_HEADER_OPTIONS_CONFIG, SCREENS } from "./src/common/constant";
+import { hydrateSession } from "./src/backend/session";
+import { prepareLoveSessionBoot } from "./src/screens/love/session-persist";
 import { AuthStack } from "./navigations/auth-stack";
 import { ApolloProvider } from "@apollo/client";
 import client from "./src/apolloClient";
@@ -39,11 +40,14 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     Promise.all([
-      AsyncStorage.getItem("user"),
+      hydrateSession().then(async (user) => {
+        await prepareLoveSessionBoot(user?.id ?? null);
+        return user;
+      }),
       new Promise((resolve) => setTimeout(resolve, 1600)),
     ])
-      .then(([value]) => {
-        setBootRoute(value ? SCREENS.MAIN : SCREENS.AUTH);
+      .then(([user]) => {
+        setBootRoute(user ? SCREENS.MAIN : SCREENS.AUTH);
       })
       .catch(() => {
         setBootRoute(SCREENS.AUTH);

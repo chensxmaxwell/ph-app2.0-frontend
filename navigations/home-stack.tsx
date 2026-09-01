@@ -33,7 +33,6 @@ import BlissStack from "../src/screens/quick_bliss/bliss_stack";
 import { AutoScreen } from "../src/screens/control/auto";
 import { PerformanceScreen } from "../src/screens/home/performance";
 import { PerformancePlayScreen } from "../src/screens/home/performance-play";
-import { FeedScreen } from "../src/screens/home/feed";
 import { PremiumScreen } from "../src/screens/profile/Premium";
 
 const Stack = createNativeStackNavigator<HomeStackScreenProps>();
@@ -113,8 +112,7 @@ export const HomeStack = () => (
       name={SCREENS.PERFORMANCE_PLAY}
       component={PerformancePlayScreen}
     />
-    <Stack.Screen name={SCREENS.FEED} component={FeedScreen} />
-      <Stack.Screen name={SCREENS.PREMIUM} component={PremiumScreen} />
+    <Stack.Screen name={SCREENS.PREMIUM} component={PremiumScreen} />
     </Stack.Navigator>
     <GlobalSessionLovePill />
   </View>
@@ -162,6 +160,5 @@ export type HomeStackScreenProps = {
   Auto: undefined;
   Performance: undefined;
   PerformancePlay: { title?: string } | undefined;
-  Feed: undefined;
   Premium: undefined;
 };

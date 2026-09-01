@@ -9,8 +9,10 @@ import React, {
   useState,
 } from "react";
 import { ttsSpeak, ttsStop } from "../../services/tts";
-import { companionChatOrFallback } from "../../services/llm";
-import { nextRegeneratedReply } from "../love/replies";
+import {
+  companionChatErrorMessage,
+  completeCompanionChat,
+} from "../../services/llm";
 import { seedDirectory, seedThreads } from "../../backend/chat-seed";
 import { getCurrentUserId, subscribeSessionUser } from "../../backend/session";
 import { loadChat, saveChat } from "../../backend/store";
@@ -69,6 +71,7 @@ type ChatContextValue = {
     story: string;
   }) => void;
   humanLimitReached: (thread: ChatThread) => boolean;
+  chatNotice: (threadId: string) => string | undefined;
 };
 
 
@@ -186,6 +189,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [inCallThreadId, setInCallThreadId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [chatNotices, setChatNotices] = useState<Record<string, string>>({});
 
   const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userIdRef = useRef<string | null>(null);
@@ -202,9 +206,11 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       if (!nextId) {
         setThreads(seedThreads());
         setIsPremium(false);
+        setChatNotices({});
         setHydrated(true);
         return;
       }
+      setChatNotices({});
       loadThreadsFromStore(nextId)
         .then((loaded) => {
           if (userIdRef.current !== nextId) {
@@ -363,6 +369,39 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     [inCallThreadId, speakMessage, updateThread]
   );
 
+  const clearChatNotice = useCallback((threadId: string) => {
+    setChatNotices((current) => {
+      if (!(threadId in current)) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[threadId];
+      return next;
+    });
+  }, []);
+
+  const requestBotReply = useCallback(
+    (
+      threadId: string,
+      input: Parameters<typeof completeCompanionChat>[0],
+      onSuccess: (text: string) => void
+    ) => {
+      clearChatNotice(threadId);
+      completeCompanionChat(input)
+        .then((text) => {
+          clearChatNotice(threadId);
+          onSuccess(text);
+        })
+        .catch((error) => {
+          setChatNotices((current) => ({
+            ...current,
+            [threadId]: companionChatErrorMessage(error),
+          }));
+        });
+    },
+    [clearChatNotice]
+  );
+
   const sendText = useCallback(
     (threadId: string, text: string) => {
       const trimmed = text.trim();
@@ -385,19 +424,23 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       }));
       const thread = threads.find((item) => item.id === threadId);
       if (thread?.kind === "bot" || thread?.request === "accepted") {
-        companionChatOrFallback({
-          name: thread.name,
-          userText: trimmed,
-          history: thread.messages.map((item) => ({
-            from: item.from,
-            text: item.text,
-          })),
-          personality: thread.personality,
-          story: thread.description,
-        }).then((reply) => replyTo(threadId, reply));
+        requestBotReply(
+          threadId,
+          {
+            name: thread.name,
+            userText: trimmed,
+            history: thread.messages.map((item) => ({
+              from: item.from,
+              text: item.text,
+            })),
+            personality: thread.personality,
+            story: thread.description,
+          },
+          (reply) => replyTo(threadId, reply)
+        );
       }
     },
-    [replyTo, threads, updateThread]
+    [replyTo, requestBotReply, threads, updateThread]
   );
 
   const sendVoice = useCallback(
@@ -419,19 +462,23 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       }));
       const thread = threads.find((item) => item.id === threadId);
       if (thread?.kind === "bot" || thread?.request === "accepted") {
-        companionChatOrFallback({
-          name: thread.name,
-          userText: "I sent you a voice note.",
-          history: thread.messages.map((item) => ({
-            from: item.from,
-            text: item.text,
-          })),
-          personality: thread.personality,
-          story: thread.description,
-        }).then((reply) => replyTo(threadId, reply));
+        requestBotReply(
+          threadId,
+          {
+            name: thread.name,
+            userText: "I sent you a voice note.",
+            history: thread.messages.map((item) => ({
+              from: item.from,
+              text: item.text,
+            })),
+            personality: thread.personality,
+            story: thread.description,
+          },
+          (reply) => replyTo(threadId, reply)
+        );
       }
     },
-    [replyTo, threads, updateThread]
+    [replyTo, requestBotReply, threads, updateThread]
   );
 
   const editLastMine = useCallback(
@@ -463,24 +510,55 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
 
   const regenerate = useCallback(
     (threadId: string) => {
-      updateThread(threadId, (thread) => {
-        const lastThem = [...thread.messages]
-          .reverse()
-          .find((item) => item.from === "them");
-        if (!lastThem) {
-          return thread;
+      const thread = threads.find((item) => item.id === threadId);
+      if (!thread || (thread.kind !== "bot" && thread.request !== "accepted")) {
+        return;
+      }
+      const lastThem = [...thread.messages]
+        .reverse()
+        .find((item) => item.from === "them");
+      const lastMine = [...thread.messages]
+        .reverse()
+        .find((item) => item.from === "me");
+      if (!lastMine) {
+        return;
+      }
+      const history = lastThem
+        ? thread.messages.filter((item) => item.id !== lastThem.id)
+        : thread.messages;
+      requestBotReply(
+        threadId,
+        {
+          name: thread.name,
+          userText: lastMine.text,
+          history: history.map((item) => ({
+            from: item.from,
+            text: item.text,
+          })),
+          personality: thread.personality,
+          story: thread.description,
+        },
+        (text) => {
+          if (!lastThem) {
+            replyTo(threadId, text);
+            return;
+          }
+          updateThread(threadId, (current) => ({
+            ...current,
+            preview: text,
+            messages: current.messages.map((item) =>
+              item.id === lastThem.id ? { ...item, text } : item
+            ),
+          }));
         }
-        const next = nextRegeneratedReply(lastThem.text);
-        return {
-          ...thread,
-          preview: next,
-          messages: thread.messages.map((item) =>
-            item.id === lastThem.id ? { ...item, text: next } : item
-          ),
-        };
-      });
+      );
     },
-    [updateThread]
+    [replyTo, requestBotReply, threads, updateThread]
+  );
+
+  const chatNotice = useCallback(
+    (threadId: string) => chatNotices[threadId],
+    [chatNotices]
   );
 
   const setRequest = useCallback(
@@ -732,9 +810,11 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       updateBot,
       upsertCompanionThread,
       humanLimitReached,
+      chatNotice,
     }),
     [
       cancelFriendRequest,
+      chatNotice,
       createBot,
       updateBot,
       upsertCompanionThread,

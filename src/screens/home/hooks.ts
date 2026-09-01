@@ -1,6 +1,5 @@
 import Alarm from "@images/alarm.svg";
 import Heart from "@images/heart.svg";
-import HeartFull from "@images/heartFull.svg";
 import { SCREENS } from "../../../src/common/constant";
 import { NavigationProp } from "@react-navigation/native";
 import { MOCK_HOME_COMPANIONS } from "./mock-companions";
@@ -41,14 +40,6 @@ export const useHome = () => {
       detail: "Changes vibration patterns based on your selection.",
       screen: SCREENS.PERFORMANCE_PLAY,
       params: { title: "Hardcore" },
-      forward: [],
-    },
-    {
-      type: "Feed",
-      title: "Feed",
-      icon: HeartFull,
-      detail: "See what others are saying.",
-      screen: SCREENS.FEED,
       forward: [],
     },
   ];

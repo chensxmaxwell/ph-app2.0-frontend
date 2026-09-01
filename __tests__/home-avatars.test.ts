@@ -1,4 +1,4 @@
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "@jest/globals";
 import { ROW_AVATAR_SIZE, circleAvatarStyle } from "../src/screens/avatar/circle-avatar";
@@ -7,6 +7,18 @@ import { MOCK_HOME_COMPANIONS } from "../src/screens/home/mock-companions";
 
 const homeSource = readFileSync(
   join(__dirname, "../src/screens/home/index.tsx"),
+  "utf8"
+);
+const homeHooksSource = readFileSync(
+  join(__dirname, "../src/screens/home/hooks.ts"),
+  "utf8"
+);
+const homeStackSource = readFileSync(
+  join(__dirname, "../navigations/home-stack.tsx"),
+  "utf8"
+);
+const screenConstantsSource = readFileSync(
+  join(__dirname, "../src/common/constant/index.ts"),
   "utf8"
 );
 
@@ -50,5 +62,37 @@ describe("home header", () => {
     expect(homeSource).not.toContain("Anonymous User");
     expect(homeSource).not.toContain("userName");
     expect(homeSource).not.toContain("resolveProfileDisplayName");
+  });
+
+  it("keeps the My Companions circular row and companion tap to a Message thread", () => {
+    expect(homeSource).toContain("My Companions");
+    expect(homeSource).toContain("circleAvatarStyle(ROW_AVATAR_SIZE)");
+    expect(homeSource).toContain("SCREENS.CHAT_THREAD");
+    expect(homeSource).toMatch(/openCompanion\(companion\.id\)/);
+  });
+});
+
+describe("home recent feed", () => {
+  it("does not seed a fake other-people comment wall", () => {
+    expect(existsSync(join(__dirname, "../src/screens/home/feed.tsx"))).toBe(
+      false
+    );
+    expect(homeHooksSource).not.toContain("See what others are saying.");
+    expect(homeHooksSource).not.toMatch(/type:\s*"Feed"/);
+    expect(homeHooksSource).not.toContain("SCREENS.FEED");
+    expect(homeSource).not.toContain("SCREENS.FEED");
+    expect(homeSource).not.toContain("This one hit different.");
+    expect(homeSource).not.toContain("Saving this for later tonight.");
+    expect(homeSource).not.toContain("Hardcore is the move.");
+    expect(homeStackSource).not.toContain("FeedScreen");
+    expect(homeStackSource).not.toContain("SCREENS.FEED");
+    expect(screenConstantsSource).not.toMatch(/FEED:\s*"Feed"/);
+  });
+
+  it("keeps the real Recent shortcuts and does not leave an empty Recent block", () => {
+    expect(homeSource).toContain("Recent");
+    expect(homeHooksSource).toContain('type: "Alarm"');
+    expect(homeHooksSource).toContain('title: "Hardcore"');
+    expect(homeHooksSource).toContain("SCREENS.PERFORMANCE_PLAY");
   });
 });

@@ -3,11 +3,23 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { shouldReuseLoveChat } from "./session-logic";
+import { subscribeSessionUser } from "../../backend/session";
+import {
+  LiveLoveSession,
+  emptyLoveSession,
+  liveFromPersisted,
+  shouldReuseLoveChat,
+} from "./session-logic";
+import {
+  initialLoveSessionFromBoot,
+  loadLoveSessionForUser,
+  saveLoveSessionForUser,
+} from "./session-persist";
 import { LoveChatItem, LoveChatState, LoveLayer } from "./types";
 
 type StartOptions = {
@@ -109,14 +121,108 @@ export const seedLoveChat = ({
   };
 };
 
+const applyToChats = (
+  chats: Record<string, LoveChatState>,
+  chat: LoveChatState | null
+) => {
+  if (chat?.companionId) {
+    chats[chat.companionId] = chat;
+  }
+};
+
 export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
-  const [companionId, setCompanionId] = useState<string | undefined>();
-  const [layer, setLayer] = useState<LoveLayer | null>(null);
-  const [minimized, setMinimized] = useState(false);
-  const [chat, setChat] = useState<LoveChatState | null>(null);
-  const [callStartedAt, setCallStartedAt] = useState<number | null>(null);
-  const [syncStartedAt, setSyncStartedAt] = useState<number | null>(null);
-  const chatsByCompanionId = useRef<Record<string, LoveChatState>>({});
+  const boot = initialLoveSessionFromBoot();
+  const [companionId, setCompanionId] = useState<string | undefined>(
+    boot.live.companionId
+  );
+  const [layer, setLayer] = useState<LoveLayer | null>(boot.live.layer);
+  const [minimized, setMinimized] = useState(boot.live.minimized);
+  const [chat, setChat] = useState<LoveChatState | null>(boot.live.chat);
+  const [callStartedAt, setCallStartedAt] = useState<number | null>(
+    boot.live.callStartedAt
+  );
+  const [syncStartedAt, setSyncStartedAt] = useState<number | null>(
+    boot.live.syncStartedAt
+  );
+  const [userId, setUserId] = useState<string | null>(boot.userId);
+  const [hydrated, setHydrated] = useState(boot.ready);
+  const chatsByCompanionId = useRef<Record<string, LoveChatState>>(
+    boot.live.chat?.companionId
+      ? { [boot.live.chat.companionId]: boot.live.chat }
+      : {}
+  );
+  const loadedUserIdRef = useRef<string | null | undefined>(
+    boot.ready ? boot.userId : undefined
+  );
+
+  const applyLive = useCallback((next: LiveLoveSession) => {
+    setCompanionId(next.companionId);
+    setLayer(next.layer);
+    setMinimized(next.minimized);
+    setChat(next.chat);
+    setCallStartedAt(next.callStartedAt);
+    setSyncStartedAt(next.syncStartedAt);
+    chatsByCompanionId.current = {};
+    applyToChats(chatsByCompanionId.current, next.chat);
+  }, []);
+
+  useEffect(() => {
+    return subscribeSessionUser((user) => {
+      const nextId = user?.id ?? null;
+      if (loadedUserIdRef.current === nextId) {
+        return;
+      }
+      loadedUserIdRef.current = nextId;
+      setUserId(nextId);
+      setHydrated(false);
+      applyLive(emptyLoveSession());
+      if (!nextId) {
+        setHydrated(true);
+        return;
+      }
+      loadLoveSessionForUser(nextId)
+        .then((parsed) => {
+          if (loadedUserIdRef.current !== nextId) {
+            return;
+          }
+          applyLive(liveFromPersisted(parsed));
+        })
+        .catch(() => {
+          if (loadedUserIdRef.current !== nextId) {
+            return;
+          }
+          applyLive(emptyLoveSession());
+        })
+        .finally(() => {
+          if (loadedUserIdRef.current === nextId) {
+            setHydrated(true);
+          }
+        });
+    });
+  }, [applyLive]);
+
+  useEffect(() => {
+    if (!hydrated || !userId) {
+      return;
+    }
+    saveLoveSessionForUser(userId, {
+      companionId,
+      layer,
+      minimized,
+      chat,
+      callStartedAt,
+      syncStartedAt,
+    }).catch(() => undefined);
+  }, [
+    callStartedAt,
+    chat,
+    companionId,
+    hydrated,
+    layer,
+    minimized,
+    syncStartedAt,
+    userId,
+  ]);
 
   const start = useCallback((options: StartOptions) => {
     setMinimized(false);
@@ -252,6 +358,10 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
     setChat(null);
     setCallStartedAt(null);
     setSyncStartedAt(null);
+    const id = loadedUserIdRef.current;
+    if (typeof id === "string" && id.length > 0) {
+      saveLoveSessionForUser(id, emptyLoveSession()).catch(() => undefined);
+    }
   }, []);
 
   const value = useMemo(
