@@ -30,6 +30,7 @@ import Heartbeat from "@images/message/heartbeat.svg";
 import { s } from "../avatar/scale";
 import { useOpenLove } from "../love/pill";
 import { ChatGradient } from "./background";
+import { Dialog } from "./dialog";
 import { useChat } from "./store";
 import { ChatBubble, ChatThread } from "./types";
 import { faceSourceForId } from "./faces";
@@ -42,35 +43,6 @@ type ThreadRoute = RouteProp<{ ChatThread: { threadId: string } }, "ChatThread">
 
 const faceFor = (thread: ChatThread) =>
   faceSourceForId(thread.id, thread.kind);
-
-const Dialog = ({
-  title,
-  body,
-  primary,
-  secondary,
-  onPrimary,
-  onSecondary,
-}: {
-  title: string;
-  body: string;
-  primary: string;
-  secondary: string;
-  onPrimary: () => void;
-  onSecondary: () => void;
-}) => (
-  <View style={styles.dialogScrim}>
-    <View style={styles.dialog}>
-      <Text style={styles.dialogTitle}>{title}</Text>
-      <Text style={styles.dialogBody}>{body}</Text>
-      <TouchableOpacity style={styles.dialogPrimary} onPress={onPrimary}>
-        <Text style={styles.dialogPrimaryText}>{primary}</Text>
-      </TouchableOpacity>
-      <TouchableOpacity onPress={onSecondary}>
-        <Text style={styles.dialogSecondary}>{secondary}</Text>
-      </TouchableOpacity>
-    </View>
-  </View>
-);
 
 export const ChatThreadScreen = () => {
   const navigation = useNavigation();
@@ -925,52 +897,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   link: {
-    color: colors.white,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 16,
-  },
-  dialogScrim: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.45)",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: s(40),
-  },
-  dialog: {
-    width: "100%",
-    borderRadius: s(20),
-    backgroundColor: "#3b3850",
-    padding: s(24),
-    alignItems: "center",
-    gap: s(12),
-  },
-  dialogTitle: {
-    color: colors.white,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 20,
-    textAlign: "center",
-  },
-  dialogBody: {
-    color: colors.grayLighter,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 13,
-    textAlign: "center",
-  },
-  dialogPrimary: {
-    marginTop: s(8),
-    width: "100%",
-    height: s(50),
-    borderRadius: s(25),
-    backgroundColor: colors.grayLightSolid,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  dialogPrimaryText: {
-    color: colors.white,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 16,
-  },
-  dialogSecondary: {
     color: colors.white,
     fontFamily: "Quicksand-Bold",
     fontSize: 16,
