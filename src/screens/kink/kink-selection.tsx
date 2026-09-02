@@ -6,7 +6,6 @@ import {
   StyleSheet,
   FlatList,
   Alert,
-  Vibration,
   Animated,
 } from "react-native";
 import { colors } from "@common/styles/colors";
@@ -171,13 +170,11 @@ const ChooseKinkScreen = () => {
   // Function to enter delete mode on long press
   const handleLongPress = () => {
     setDeleteMode(true);
-    // Vibration.vibrate([100, 200, 100, 200], true);
   };
 
   const handleDelete = (id: number) => {
     const newData = kinkData.filter((item) => item.id !== id);
     setKinkData(newData);
-    // Vibration.cancel();
     setDeleteMode(false); // Exit delete mode after deletion
   };
 

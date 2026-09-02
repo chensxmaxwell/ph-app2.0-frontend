@@ -1,5 +1,4 @@
 import React, { useEffect, useRef } from "react";
-import { Vibration } from "react-native";
 import { useHomeScreen } from "../hooks/HomeScreenContext";
 import { alarmMatchesNow, loadAlarms } from "./alarms";
 import { syncNativeAlarms } from "../native/ph-native";
@@ -25,7 +24,6 @@ export const AlarmRunner = () => {
       if (playing) {
         if (Date.now() >= stopAt) {
           playing = false;
-          Vibration.cancel();
           setCurrentMode("");
           setMotorInput([]);
           return;
@@ -51,12 +49,10 @@ export const AlarmRunner = () => {
       cursor = 0;
       stopAt = Date.now() + PLAY_MS;
       setCurrentMode("alarm");
-      Vibration.vibrate([400, 200, 400, 200, 400], true);
     }, 1000);
 
     return () => {
       clearInterval(timer);
-      Vibration.cancel();
       setCurrentMode("");
       setMotorInput([]);
     };
