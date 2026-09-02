@@ -20,11 +20,7 @@ const TimerDurationProbe = ({
   };
 }) => {
   const { time, setTime } = useDuration();
-  return React.createElement(
-    Text,
-    { onPress: () => setTime(5) },
-    time * 60
-  );
+  return React.createElement(Text, { onPress: () => setTime(5) }, time * 60);
 };
 
 describe.each([
