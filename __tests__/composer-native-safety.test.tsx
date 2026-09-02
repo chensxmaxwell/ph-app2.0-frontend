@@ -229,4 +229,39 @@ describe("composer regression contracts", () => {
       expect(source).toContain("sanitizeComposerText(draft)");
     }
   );
+
+  it.each([
+    [
+      "Kevin",
+      messageSource,
+      "const submit = () => {",
+      "const openListen = () => {",
+      "if (editingId)",
+    ],
+    [
+      "Love",
+      loveSource,
+      "const send = () => {",
+      "const pageZero:",
+      "patchChat(",
+    ],
+  ])(
+    "%s send ends native editing before clearing the controlled value",
+    (_name, source, startMarker, endMarker, mutationMarker) => {
+      const start = source.indexOf(startMarker);
+      const end = source.indexOf(endMarker, start);
+      const sendHandler = source.slice(start, end);
+
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      expect(sendHandler).toContain("clearSubmittedDraft();");
+      expect(sendHandler).not.toContain('setDraft("");');
+      expect(sendHandler.indexOf("clearSubmittedDraft();")).toBeLessThan(
+        sendHandler.indexOf(mutationMarker)
+      );
+      expect(source).toContain("clearComposerAfterSubmit({");
+      expect(source).toContain('endEditingBeforeClear: Platform.OS === "ios"');
+      expect(source).toContain("onBlur={finishSubmittedDraftClear}");
+    }
+  );
 });
