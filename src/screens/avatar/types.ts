@@ -5,13 +5,13 @@ export type AvatarStackParams = {
   companionId?: string;
 };
 
+// "identity" is the basic info page (name, gender, birthday, description).
 export const CREATE_STEPS = [
   "identity",
   "ready",
   "appearance",
   "customize",
   "personality",
-  "story",
   "intimate",
   "candle",
 ] as const;
@@ -21,7 +21,6 @@ export const EDIT_LOOK_STEPS = ["appearance", "customize"] as const;
 export const EDIT_PERSONA_STEPS = [
   "identity",
   "personality",
-  "story",
   "intimate",
 ] as const;
 

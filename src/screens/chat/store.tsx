@@ -46,12 +46,6 @@ type ChatContextValue = {
   cancelFriendRequest: (threadId: string) => void;
   setPremium: (value: boolean) => void;
   setInCall: (threadId: string | null) => void;
-  createBot: (input: {
-    name: string;
-    gender: string;
-    birthday: string;
-    description: string;
-  }) => string;
   updateBot: (
     threadId: string,
     input: {
@@ -633,62 +627,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     );
   }, []);
 
-  const createBot = useCallback(
-    (input: {
-      name: string;
-      gender: string;
-      birthday: string;
-      description: string;
-    }) => {
-      const name = input.name.trim() || "Kevin";
-      let createdId = defaultBotIdForName(name) ?? `bot-${nextId()}`;
-      setThreads((current) => {
-        const existing = findSameBot(current, createdId, name);
-        if (existing) {
-          createdId = existing.id;
-          return current.map((thread) =>
-            thread.id === existing.id
-              ? {
-                  ...thread,
-                  name,
-                  gender: input.gender,
-                  birthday: input.birthday,
-                  description: input.description,
-                  time: "Now",
-                }
-              : thread
-          );
-        }
-        return [
-          {
-            id: createdId,
-            name,
-            kind: "bot" as const,
-            preview: `Start chatting with ${name}.`,
-            time: "Now",
-            pinned: false,
-            listen: false,
-            synced: false,
-            request: "none" as const,
-            gender: input.gender,
-            birthday: input.birthday,
-            description: input.description,
-            messages: [
-              {
-                id: nextId(),
-                from: "them" as const,
-                text: `Hey, it's ${name}. Start whenever you're ready.`,
-              },
-            ],
-          },
-          ...current,
-        ];
-      });
-      return createdId;
-    },
-    []
-  );
-
   const updateBot = useCallback(
     (
       threadId: string,
@@ -805,7 +743,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       cancelFriendRequest,
       setPremium: setIsPremium,
       setInCall: setInCallThreadId,
-      createBot,
       updateBot,
       upsertCompanionThread,
       humanLimitReached,
@@ -814,7 +751,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     [
       cancelFriendRequest,
       chatNotice,
-      createBot,
       updateBot,
       upsertCompanionThread,
       directory,
