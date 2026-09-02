@@ -21,6 +21,9 @@ export type ChatThread = {
   pinned: boolean;
   listen: boolean;
   synced: boolean;
+  // Set by the Message list swipe action; cleared when the thread is opened.
+  // Optional so blobs persisted before the flag existed still parse as read.
+  unread?: boolean;
   request: FriendRequest;
   gender?: string;
   birthday?: string;

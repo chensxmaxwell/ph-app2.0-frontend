@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Image,
   Keyboard,
@@ -56,6 +56,7 @@ export const ChatThreadScreen = () => {
     setListen,
     setPinned,
     setSynced,
+    setUnread,
     speakMessage,
     speakingId,
     inCallThreadId,
@@ -67,6 +68,16 @@ export const ChatThreadScreen = () => {
   } = useChat();
   const thread = getThread(route.params.threadId);
   const openLove = useOpenLove();
+  const threadId = thread?.id;
+  const threadUnread = !!thread?.unread;
+
+  // Opening a thread reads it, whichever screen navigated here (Message list,
+  // Home avatar strip, search, contact).
+  useEffect(() => {
+    if (threadId && threadUnread) {
+      setUnread(threadId, false);
+    }
+  }, [setUnread, threadId, threadUnread]);
   const [draft, setDraft] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
