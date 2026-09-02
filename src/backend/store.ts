@@ -55,6 +55,9 @@ type CompanionBlob = {
 type ChatBlob = {
   threads: ChatThread[];
   isPremium?: boolean;
+  // Threads the user deleted from the Message list. Seeded bots are merged
+  // back in on every hydrate unless their id is listed here.
+  deletedThreadIds?: string[];
 };
 
 const MIGRATION_FLAG = "ph.namespace.migrated.v1";
@@ -233,8 +236,14 @@ export const loadChat = async (userId: string): Promise<ChatBlob> => {
     userId,
     null
   );
-  if (data && Array.isArray(data.threads) && data.threads.length > 0) {
-    return data;
+  if (data && Array.isArray(data.threads)) {
+    // An empty list is only a real state once the user has deleted friends;
+    // otherwise treat it like a missing blob and seed.
+    const deletedAny =
+      Array.isArray(data.deletedThreadIds) && data.deletedThreadIds.length > 0;
+    if (data.threads.length > 0 || deletedAny) {
+      return data;
+    }
   }
   const seeded: ChatBlob = { threads: seedThreads(), isPremium: false };
   await writeUserStore(STORE_KEYS.chat, userId, seeded);
@@ -271,6 +280,7 @@ export const upsertThread = async (
     pinned: input.pinned ?? existing?.pinned ?? false,
     listen: input.listen ?? existing?.listen ?? false,
     synced: input.synced ?? existing?.synced ?? false,
+    unread: input.unread ?? existing?.unread,
     request: input.request ?? existing?.request ?? "none",
     gender: input.gender ?? existing?.gender,
     birthday: input.birthday ?? existing?.birthday,

@@ -35,6 +35,8 @@ type ChatContextValue = {
   setListen: (threadId: string, listen: boolean) => void;
   setPinned: (threadId: string, pinned: boolean) => void;
   setSynced: (threadId: string, synced: boolean) => void;
+  setUnread: (threadId: string, unread: boolean) => void;
+  deleteThread: (threadId: string) => void;
   sendText: (threadId: string, text: string) => void;
   sendVoice: (threadId: string) => void;
   editLastMine: (threadId: string, text: string) => void;
@@ -72,21 +74,29 @@ type ChatContextValue = {
 const loadThreadsFromStore = async (userId: string): Promise<{
   threads: ChatThread[];
   isPremium: boolean;
+  deletedThreadIds: string[];
 }> => {
   const blob = await loadChat(userId);
   const threads = Array.isArray(blob.threads) ? blob.threads : [];
+  const deletedThreadIds = Array.isArray(blob.deletedThreadIds)
+    ? blob.deletedThreadIds.filter(
+        (id): id is string => typeof id === "string" && id.length > 0
+      )
+    : [];
   return {
-    threads: mergeSeedThreads(dedupeThreads(threads)),
+    threads: mergeSeedThreads(dedupeThreads(threads), deletedThreadIds),
     isPremium: !!blob.isPremium,
+    deletedThreadIds,
   };
 };
 
 const persistThreadsToStore = async (
   userId: string,
   threads: ChatThread[],
-  isPremium: boolean
+  isPremium: boolean,
+  deletedThreadIds: string[]
 ) => {
-  await saveChat(userId, { threads, isPremium });
+  await saveChat(userId, { threads, isPremium, deletedThreadIds });
 };
 
 const ChatContext = createContext<ChatContextValue | null>(null);
@@ -151,13 +161,20 @@ const dedupeThreads = (threads: ChatThread[]) => {
   return result;
 };
 
-const mergeSeedThreads = (stored: ChatThread[]) => {
+const mergeSeedThreads = (
+  stored: ChatThread[],
+  deletedThreadIds: string[] = []
+) => {
   const seeds = seedThreads();
+  const deleted = new Set(deletedThreadIds);
   const byId = new Map(stored.map((thread) => [thread.id, thread]));
   for (const seed of seeds) {
     const existing = byId.get(seed.id);
     if (!existing) {
-      byId.set(seed.id, seed);
+      // A seeded bot the user deleted from the Message list stays deleted.
+      if (!deleted.has(seed.id)) {
+        byId.set(seed.id, seed);
+      }
       continue;
     }
     if (!existing.messages.length && seed.messages.length) {
@@ -178,6 +195,7 @@ const mergeSeedThreads = (stored: ChatThread[]) => {
 
 export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const [threads, setThreads] = useState<ChatThread[]>(seedThreads);
+  const [deletedThreadIds, setDeletedThreadIds] = useState<string[]>([]);
   const [directory] = useState<DirectoryPerson[]>(seedDirectory);
   const [isPremium, setIsPremium] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
@@ -199,6 +217,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       setHydrated(false);
       if (!nextId) {
         setThreads(seedThreads());
+        setDeletedThreadIds([]);
         setIsPremium(false);
         setChatNotices({});
         setHydrated(true);
@@ -210,16 +229,16 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
           if (userIdRef.current !== nextId) {
             return;
           }
-          if (loaded.threads.length > 0) {
-            setThreads(loaded.threads);
-          } else {
-            setThreads(seedThreads());
-          }
+          // Seeds are already merged in; an empty list means every seeded
+          // bot was deleted and must not come back.
+          setThreads(loaded.threads);
+          setDeletedThreadIds(loaded.deletedThreadIds);
           setIsPremium(loaded.isPremium);
         })
         .catch(() => {
           if (userIdRef.current === nextId) {
             setThreads(seedThreads());
+            setDeletedThreadIds([]);
           }
         })
         .finally(() => {
@@ -237,21 +256,24 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   useEffect(() => {
-    if (!hydrated || !userIdRef.current) {
+    const userId = userIdRef.current;
+    if (!hydrated || !userId) {
       return;
     }
     if (persistTimer.current) {
       clearTimeout(persistTimer.current);
     }
     persistTimer.current = setTimeout(() => {
-      persistThreadsToStore(userIdRef.current, threads, isPremium).catch(() => undefined);
+      persistThreadsToStore(userId, threads, isPremium, deletedThreadIds).catch(
+        () => undefined
+      );
     }, 250);
     return () => {
       if (persistTimer.current) {
         clearTimeout(persistTimer.current);
       }
     };
-  }, [hydrated, isPremium, threads]);
+  }, [deletedThreadIds, hydrated, isPremium, threads]);
 
   useEffect(() => {
     const next = dedupeThreads(threads);
@@ -336,6 +358,35 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       updateThread(threadId, (thread) => ({ ...thread, synced }));
     },
     [updateThread]
+  );
+
+  const setUnread = useCallback(
+    (threadId: string, unread: boolean) => {
+      updateThread(threadId, (thread) =>
+        !!thread.unread === unread ? thread : { ...thread, unread }
+      );
+    },
+    [updateThread]
+  );
+
+  // "Delete friend" on the Message list. Chat is local-only, so dropping the
+  // thread is the whole delete; the id is remembered so a seeded bot is not
+  // merged back in on the next hydrate.
+  const deleteThread = useCallback(
+    (threadId: string) => {
+      const thread = threads.find((item) => item.id === threadId);
+      if (thread?.messages.some((message) => message.id === speakingId)) {
+        stopSpeaking();
+      }
+      if (inCallThreadId === threadId) {
+        setInCallThreadId(null);
+      }
+      setThreads((current) => current.filter((item) => item.id !== threadId));
+      setDeletedThreadIds((current) =>
+        current.includes(threadId) ? current : [...current, threadId]
+      );
+    },
+    [inCallThreadId, speakingId, stopSpeaking, threads]
   );
 
   const replyTo = useCallback(
@@ -732,6 +783,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       setListen,
       setPinned,
       setSynced,
+      setUnread,
+      deleteThread,
       sendText,
       sendVoice,
       editLastMine,
@@ -751,6 +804,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     [
       cancelFriendRequest,
       chatNotice,
+      deleteThread,
       updateBot,
       upsertCompanionThread,
       directory,
@@ -767,6 +821,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       setPinned,
       setRequest,
       setSynced,
+      setUnread,
       speakMessage,
       speakingId,
       stopSpeaking,
