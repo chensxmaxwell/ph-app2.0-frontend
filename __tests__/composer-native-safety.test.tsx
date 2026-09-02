@@ -12,7 +12,13 @@ import {
   AvatarEngineHost,
   detachAvatarSlot,
 } from "../src/screens/avatar/engine/AvatarEngineHost";
+import { AvatarPreview } from "../src/screens/avatar/engine/AvatarPreview";
 import { DEFAULT_LOOK } from "../src/screens/avatar/engine/viewer-html";
+
+let mockIsFocused = true;
+jest.mock("@react-navigation/native", () => ({
+  useIsFocused: () => mockIsFocused,
+}));
 
 jest.mock("react-native-webview", () => ({
   WebView: "MockWebView",
@@ -36,7 +42,15 @@ const slot = {
 const mountedWebViews = (tree: ReactTestRenderer): ReactTestInstance[] =>
   tree.root.findAll((node) => String(node.type) === "MockWebView");
 
+type MeasureCallback = (
+  x: number,
+  y: number,
+  width: number,
+  height: number
+) => void;
+
 const trees: ReactTestRenderer[] = [];
+let pendingMeasure: MeasureCallback | null = null;
 
 const renderHost = () => {
   let tree: ReactTestRenderer;
@@ -47,13 +61,48 @@ const renderHost = () => {
   return tree!;
 };
 
+const renderPreview = () => {
+  let tree: ReactTestRenderer;
+  act(() => {
+    tree = renderer.create(
+      <AvatarPreview look={DEFAULT_LOOK} width={200} height={400} />,
+      {
+        createNodeMock: (element) =>
+          element.props.collapsable === false
+            ? {
+                measureInWindow: (callback: MeasureCallback) => {
+                  pendingMeasure = callback;
+                },
+              }
+            : {},
+      }
+    );
+  });
+  trees.push(tree!);
+  return tree!;
+};
+
+const publishMeasurement = (x = 0, y = 0, width = 200, height = 400) => {
+  const callback = pendingMeasure;
+  if (!callback) {
+    throw new Error("Avatar preview did not request a measurement");
+  }
+  pendingMeasure = null;
+  act(() => callback(x, y, width, height));
+};
+
 afterEach(() => {
   act(() => {
     detachAvatarSlot(MESSAGE_SLOT_ID);
     detachAvatarSlot(ACTIVE_SLOT_ID);
     detachAvatarSlot(DETACH_SLOT_ID);
+    for (let id = 1; id <= 100; id += 1) {
+      detachAvatarSlot(id);
+    }
     trees.splice(0).forEach((tree) => tree.unmount());
   });
+  pendingMeasure = null;
+  mockIsFocused = true;
 });
 
 describe("keyboard-safe avatar engine lifecycle", () => {
@@ -88,6 +137,43 @@ describe("keyboard-safe avatar engine lifecycle", () => {
     act(() => detachAvatarSlot(DETACH_SLOT_ID));
 
     expect(mountedWebViews(tree)).toHaveLength(0);
+  });
+
+  it("releases WKWebView when a retained avatar screen loses focus", () => {
+    const host = renderHost();
+    const preview = renderPreview();
+    publishMeasurement();
+    expect(mountedWebViews(host)).toHaveLength(1);
+
+    mockIsFocused = false;
+    act(() => {
+      preview.update(
+        <AvatarPreview look={DEFAULT_LOOK} width={200} height={400} />
+      );
+    });
+
+    expect(mountedWebViews(host)).toHaveLength(0);
+  });
+
+  it("ignores a measurement callback delivered after preview unmount", () => {
+    const host = renderHost();
+    const preview = renderPreview();
+    const staleMeasurement = pendingMeasure;
+    expect(staleMeasurement).not.toBeNull();
+
+    act(() => preview.unmount());
+    act(() => staleMeasurement?.(0, 0, 200, 400));
+
+    expect(mountedWebViews(host)).toHaveLength(0);
+  });
+
+  it("ignores non-finite preview measurements", () => {
+    const host = renderHost();
+    renderPreview();
+
+    publishMeasurement(0, 0, Number.NaN, 400);
+
+    expect(mountedWebViews(host)).toHaveLength(0);
   });
 });
 
