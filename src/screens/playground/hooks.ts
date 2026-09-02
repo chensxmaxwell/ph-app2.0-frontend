@@ -17,7 +17,7 @@ export const usePlayground = () => {
       name: "Quick bliss",
       detail: "Achieve ultimate pleasure faster.",
       icon: QuickBliss,
-      time: "15 mins",
+      time: "5–15 minutes",
       onPress: () => navigation.navigate(SCREENS.BLISS_STACK),
     },
     {
