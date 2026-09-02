@@ -1,5 +1,4 @@
 import React, { useEffect, useRef } from "react";
-import { Vibration } from "react-native";
 import { useHomeScreen } from "../hooks/HomeScreenContext";
 import { alarmMatchesNow, loadAlarms } from "./alarms";
 import { syncNativeAlarms } from "../native/ph-native";
@@ -25,7 +24,6 @@ export const AlarmRunner = () => {
       if (playing) {
         if (Date.now() >= stopAt) {
           playing = false;
-          Vibration.cancel();
           setCurrentMode("");
           setMotorInput([]);
           return;
@@ -38,25 +36,27 @@ export const AlarmRunner = () => {
 
       const alarms = await loadAlarms();
       const hit = alarms.find((alarm) => {
-        const stamp = `${alarm.id}-${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
+        const stamp = `${
+          alarm.id
+        }-${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
         return alarmMatchesNow(alarm, now) && !fired.current.has(stamp);
       });
       if (!hit) {
         return;
       }
-      const stamp = `${hit.id}-${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
+      const stamp = `${
+        hit.id
+      }-${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
       fired.current.add(stamp);
       playing = true;
       pattern = hit.pattern.length ? hit.pattern : [40, 70, 100, 70];
       cursor = 0;
       stopAt = Date.now() + PLAY_MS;
       setCurrentMode("alarm");
-      Vibration.vibrate([400, 200, 400, 200, 400], true);
     }, 1000);
 
     return () => {
       clearInterval(timer);
-      Vibration.cancel();
       setCurrentMode("");
       setMotorInput([]);
     };
