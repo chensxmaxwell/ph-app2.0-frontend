@@ -1,11 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  SafeAreaView,
-} from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import { useNavigation } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
@@ -22,14 +16,17 @@ import {
 } from "react-native-sensors";
 import { SCREENS } from "../../common/constant/index";
 import { useHomeScreen } from "../../hooks/HomeScreenContext";
+import {
+  motionIntensityToWaveAmplitude,
+  shakeMagnitudeToIntensity,
+} from "./shake-to-intensity";
 
 const MotionSensorScreen = () => {
   const navigation = useNavigation();
-  const [amplitude, setAmplitude] = useState(0);
+  const [intensity, setIntensity] = useState(0);
   const waveRef = useRef(null);
 
-  const { setCurrentMode, motor_selection_table, setMotorInput } =
-    useHomeScreen();
+  const { setCurrentMode, setMotorInput } = useHomeScreen();
 
   useEffect(() => {
     setUpdateIntervalForType(SensorTypes.accelerometer, 50);
@@ -53,17 +50,10 @@ const MotionSensorScreen = () => {
         const linear = Math.sqrt(
           (x - gx) * (x - gx) + (y - gy) * (y - gy) + (z - gz) * (z - gz)
         );
-        const next = Math.max(0, Math.min(100, Math.round(linear * 55)));
-        setAmplitude(next);
-        if (waveRef.current) {
-          const waveH =
-            next < 12 ? 20 : next < 28 ? 65 : next < 48 ? 110 : next < 72 ? 155 : 200;
-          // @ts-ignore
-          waveRef.current.setWaveParams([{ A: waveH, T: 360, fill: "#CCA0DD" }]);
-        }
+        setIntensity(shakeMagnitudeToIntensity(linear));
       },
       () => {
-        setAmplitude(0);
+        setIntensity(0);
       }
     );
     return () => {
@@ -80,18 +70,18 @@ const MotionSensorScreen = () => {
 
   useEffect(() => {
     setCurrentMode("motion");
-    const level =
-      amplitude < 12
-        ? 0
-        : amplitude < 22
-        ? 25
-        : amplitude < 32
-        ? 50
-        : amplitude < 42
-        ? 75
-        : 100;
-    setMotorInput([1, level, level, level]);
-  }, [amplitude, setCurrentMode, setMotorInput]);
+    setMotorInput([1, intensity, intensity, intensity]);
+    if (waveRef.current) {
+      // @ts-ignore
+      waveRef.current.setWaveParams([
+        {
+          A: motionIntensityToWaveAmplitude(intensity),
+          T: 360,
+          fill: "#CCA0DD",
+        },
+      ]);
+    }
+  }, [intensity, setCurrentMode, setMotorInput]);
 
   return (
     <View style={styles.container}>
