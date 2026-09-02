@@ -444,6 +444,7 @@ export const ChatThreadScreen = () => {
                             companionId: thread.id,
                             name: thread.name,
                             syncing: true,
+                            fromMessage: true,
                           });
                         },
                       },

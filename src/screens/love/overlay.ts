@@ -5,12 +5,11 @@ import {
 } from "@react-navigation/native";
 import { SCREENS } from "@common/constant";
 import { LoveLayer } from "./types";
-
-const LOVE_SCREENS = new Set([
-  String(SCREENS.LOVE_CHAT),
-  String(SCREENS.LOVE_CALL),
-  String(SCREENS.LOVE_SYNC),
-]);
+import {
+  LOVE_OVERLAY_SCREENS,
+  stackForLoveLayer,
+} from "./stack";
+import type { LoveLayerParams, LoveStackSurface } from "./stack";
 
 let homeStackNavigation: NavigationProp<ParamListBase> | null = null;
 
@@ -22,13 +21,39 @@ export const bindHomeStackNavigation = (
 
 export const getHomeStackNavigation = () => homeStackNavigation;
 
+export const applyLoveLayer = (
+  navigation: NavigationProp<ParamListBase>,
+  {
+    layer,
+    params,
+    surface,
+  }: {
+    layer: LoveLayer | null;
+    params?: LoveLayerParams;
+    surface: LoveStackSurface;
+  }
+) => {
+  navigation.dispatch((state) => {
+    const routes = stackForLoveLayer({
+      routes: state.routes,
+      layer,
+      params,
+      surface,
+    });
+    return CommonActions.reset({
+      index: Math.max(0, routes.length - 1),
+      routes: routes as never,
+    });
+  });
+};
+
 export const dismissLoveOverlays = (
   navigation: NavigationProp<ParamListBase>,
   then?: { name: string; params?: object }
 ) => {
   navigation.dispatch((state) => {
     const kept = state.routes.filter(
-      (route) => !LOVE_SCREENS.has(String(route.name))
+      (route) => !LOVE_OVERLAY_SCREENS.has(String(route.name))
     );
     const routes = then
       ? [...kept, { name: then.name, params: then.params }]
@@ -50,13 +75,9 @@ export const restoreLoveOverlays = (
   companionId?: string,
   name?: string
 ) => {
-  const params = { companionId, name };
-  navigation.navigate(SCREENS.LOVE_CHAT as never, params as never);
-  if (layer === "call") {
-    navigation.navigate(SCREENS.LOVE_CALL as never, params as never);
-    return;
-  }
-  if (layer === "sync") {
-    navigation.navigate(SCREENS.LOVE_SYNC as never, params as never);
-  }
+  applyLoveLayer(navigation, {
+    layer,
+    params: { companionId, name },
+    surface: "love",
+  });
 };

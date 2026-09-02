@@ -41,7 +41,7 @@ import { s } from "../avatar/scale";
 import { useChat } from "../chat/store";
 import { faceSourceForId } from "../chat/faces";
 import { LovePill } from "./pill";
-import { dismissLoveOverlays } from "./overlay";
+import { applyLoveLayer, dismissLoveOverlays } from "./overlay";
 import { resolveLovePerson } from "./partner";
 import {
   companionChatErrorMessage,
@@ -424,10 +424,11 @@ export const LoveChatScreen = () => {
           companionId: partnerId,
           name,
         });
-        navigation.navigate(
-          SCREENS.LOVE_SYNC as never,
-          { companionId: partnerId, name } as never
-        );
+        applyLoveLayer(navigation, {
+          layer: "sync",
+          params: { companionId: partnerId, name },
+          surface: "love",
+        });
       },
     },
     {
