@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -51,6 +52,7 @@ import { useLoveSession } from "./session";
 import { LoveChatItem, LoveMode } from "./types";
 import { ttsSpeak, ttsStop } from "../../services/tts";
 import { sanitizeComposerText } from "../../services/dictation-text";
+import { clearComposerAfterSubmit } from "../../services/composer-submit";
 
 const USER_FACE = require("../../../assets/images/love/face.png");
 
@@ -236,6 +238,8 @@ export const LoveChatScreen = () => {
   const [infoOpen, setInfoOpen] = useState(false);
   const [sendError, setSendError] = useState("");
   const listenRef = useRef(false);
+  const inputRef = useRef<TextInput>(null);
+  const submittedDraftClearRef = useRef<(() => void) | null>(null);
 
   const messages = chat?.messages ?? [];
   const pinned = chat?.pinned ?? true;
@@ -339,11 +343,29 @@ export const LoveChatScreen = () => {
     }
   };
 
+  const finishSubmittedDraftClear = () => {
+    const clear = submittedDraftClearRef.current;
+    submittedDraftClearRef.current = null;
+    clear?.();
+  };
+
+  const clearSubmittedDraft = () => {
+    clearComposerAfterSubmit({
+      input: inputRef.current,
+      dismissKeyboard: Keyboard.dismiss,
+      clearDraft: () => setDraft(""),
+      deferClearUntilBlur: (clear) => {
+        submittedDraftClearRef.current = clear;
+      },
+    });
+  };
+
   const send = () => {
     const text = sanitizeComposerText(draft).trim();
     if (!text) {
       return;
     }
+    clearSubmittedDraft();
     const id = `${Date.now()}`;
     const history = messages
       .filter((item): item is Extract<typeof item, { kind: "bubble" }> =>
@@ -363,7 +385,6 @@ export const LoveChatScreen = () => {
         },
       ],
     }));
-    setDraft("");
     setDrawerOpen(false);
     setSendError("");
     const replyId = `${id}-them`;
@@ -575,6 +596,7 @@ export const LoveChatScreen = () => {
             </TouchableOpacity>
             <View style={styles.inputWrap}>
               <TextInput
+                ref={inputRef}
                 value={draft}
                 onChangeText={(value) => {
                   // Preserve iOS dictation and IME marked text until submission.
@@ -585,6 +607,7 @@ export const LoveChatScreen = () => {
                 placeholder="Hello"
                 placeholderTextColor={colors.white}
                 onFocus={() => setDrawerOpen(false)}
+                onBlur={finishSubmittedDraftClear}
               />
             </View>
             <TouchableOpacity
