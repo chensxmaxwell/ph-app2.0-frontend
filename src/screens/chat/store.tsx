@@ -181,6 +181,7 @@ const mergeSeedThreads = (
       byId.set(seed.id, {
         ...existing,
         preview: existing.preview || seed.preview,
+        lastActivityAt: seed.lastActivityAt,
         messages: seed.messages,
         request:
           existing.request === "incoming" && seed.request === "none"
@@ -391,11 +392,12 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
 
   const replyTo = useCallback(
     (threadId: string, text: string) => {
-      const bubble: ChatBubble = { id: nextId(), from: "them", text };
+      const sentAt = Date.now();
+      const bubble: ChatBubble = { id: nextId(), from: "them", text, sentAt };
       updateThread(threadId, (thread) => ({
         ...thread,
         preview: text,
-        time: "Now",
+        lastActivityAt: sentAt,
         messages: [
           ...thread.messages,
           { ...bubble, synced: thread.synced || undefined },
@@ -453,16 +455,18 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       if (!trimmed) {
         return;
       }
+      const sentAt = Date.now();
       updateThread(threadId, (thread) => ({
         ...thread,
         preview: trimmed,
-        time: "Now",
+        lastActivityAt: sentAt,
         messages: [
           ...thread.messages,
           {
             id: nextId(),
             from: "me",
             text: trimmed,
+            sentAt,
             synced: thread.synced || undefined,
           },
         ],
@@ -490,16 +494,18 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
 
   const sendVoice = useCallback(
     (threadId: string) => {
+      const sentAt = Date.now();
       updateThread(threadId, (thread) => ({
         ...thread,
         preview: "You sent a voice message",
-        time: "Now",
+        lastActivityAt: sentAt,
         messages: [
           ...thread.messages,
           {
             id: nextId(),
             from: "me",
             text: "You sent a voice message",
+            sentAt,
             voice: true,
             synced: thread.synced || undefined,
           },
@@ -608,6 +614,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
 
   const setRequest = useCallback(
     (threadId: string, request: FriendRequest) => {
+      const at = Date.now();
       updateThread(threadId, (thread) => {
         const preview =
           request === "accepted"
@@ -624,10 +631,11 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
                   id: nextId(),
                   from: "them" as const,
                   text: "I have accepted your request. Let’s Chat!",
+                  sentAt: at,
                 },
               ]
             : thread.messages;
-        return { ...thread, request, preview, time: "Now", messages };
+        return { ...thread, request, preview, lastActivityAt: at, messages };
       });
     },
     [updateThread]
@@ -641,6 +649,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         return existing.id;
       }
       const id = person.id;
+      const sentAt = Date.now();
       setThreads((current) => [
         {
           id,
@@ -648,7 +657,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
           kind: "human",
           email: person.email,
           preview: `Waiting for ${person.name} to respond`,
-          time: "Now",
+          lastActivityAt: sentAt,
           pinned: false,
           listen: false,
           synced: false,
@@ -660,6 +669,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
               id: nextId(),
               from: "me",
               text: "Chat request sent.",
+              sentAt,
             },
           ],
         },
@@ -689,6 +699,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         personality?: string;
       }
     ) => {
+      // Editing a persona is not chat activity: the Message row keeps the
+      // time of the last message instead of jumping to "now".
       updateThread(threadId, (thread) => ({
         ...thread,
         name: input.name.trim() || thread.name,
@@ -697,7 +709,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         description: input.description,
         personality: input.personality ?? thread.personality,
         preview: thread.preview,
-        time: "Now",
       }));
     },
     [updateThread]
@@ -714,9 +725,11 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     }) => {
       const name = companion.name.trim() || "Kevin";
       const personality = companion.personalities.join(", ");
+      const createdAt = Date.now();
       setThreads((current) => {
         const existing = findSameBot(current, companion.id, name);
         if (existing) {
+          // Saving an edited look / persona keeps the last message's time.
           return current.map((thread) =>
             thread.id === existing.id
               ? {
@@ -726,7 +739,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
                   birthday: companion.birthday,
                   description: companion.story,
                   personality,
-                  time: "Now",
                 }
               : thread
           );
@@ -737,7 +749,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
             name,
             kind: "bot" as const,
             preview: `Start chatting with ${name}.`,
-            time: "Now",
+            lastActivityAt: createdAt,
             pinned: false,
             listen: false,
             synced: false,
@@ -751,6 +763,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
                 id: nextId(),
                 from: "them" as const,
                 text: `Hey, it's ${name}. Start whenever you're ready.`,
+                sentAt: createdAt,
               },
             ],
           },

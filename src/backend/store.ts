@@ -2,6 +2,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { ChatBubble, ChatThread } from "../screens/chat/types";
 import { seedThreads } from "./chat-seed";
 import {
+  StoredChatThread,
+  normalizeThreadTimestamps,
+} from "./chat-timestamps";
+import {
   STORE_KEYS,
   SessionUser,
   scopedKey,
@@ -230,6 +234,26 @@ export const getProfile = async (userId: string) =>
 export const setProfile = async (profile: LocalProfile) =>
   writeUserStore(STORE_KEYS.profile, profile.userId, profile);
 
+// Blobs written before `sentAt` / `lastActivityAt` existed only carry the
+// display string `time`. Stamp every bubble and thread with a real epoch and
+// write the migrated blob back so the recovered times are stable across reads.
+const withTimestamps = async (
+  userId: string,
+  blob: ChatBlob & { threads: StoredChatThread[] }
+): Promise<ChatBlob> => {
+  const now = Date.now();
+  const seeds = new Map(seedThreads(now).map((seed) => [seed.id, seed]));
+  const threads = blob.threads.map((thread) =>
+    normalizeThreadTimestamps(thread, { now, seed: seeds.get(thread.id) })
+  );
+  if (threads.every((thread, index) => thread === blob.threads[index])) {
+    return blob as ChatBlob;
+  }
+  const migrated: ChatBlob = { ...blob, threads };
+  await writeUserStore(STORE_KEYS.chat, userId, migrated);
+  return migrated;
+};
+
 export const loadChat = async (userId: string): Promise<ChatBlob> => {
   const data = await readUserStore<ChatBlob | null>(
     STORE_KEYS.chat,
@@ -242,7 +266,7 @@ export const loadChat = async (userId: string): Promise<ChatBlob> => {
     const deletedAny =
       Array.isArray(data.deletedThreadIds) && data.deletedThreadIds.length > 0;
     if (data.threads.length > 0 || deletedAny) {
-      return data;
+      return withTimestamps(userId, data);
     }
   }
   const seeded: ChatBlob = { threads: seedThreads(), isPremium: false };
@@ -276,7 +300,8 @@ export const upsertThread = async (
     kind: input.kind === "human" || existing?.kind === "human" ? "human" : "bot",
     email: input.email ?? existing?.email,
     preview: input.preview ?? existing?.preview ?? "",
-    time: input.time ?? existing?.time ?? "Now",
+    lastActivityAt:
+      input.lastActivityAt ?? existing?.lastActivityAt ?? Date.now(),
     pinned: input.pinned ?? existing?.pinned ?? false,
     listen: input.listen ?? existing?.listen ?? false,
     synced: input.synced ?? existing?.synced ?? false,
@@ -299,19 +324,24 @@ export const upsertThread = async (
 export const appendMessage = async (
   userId: string,
   threadId: string,
-  message: ChatBubble
+  message: Omit<ChatBubble, "id" | "sentAt"> & { id?: string; sentAt?: number }
 ) => {
   const blob = await loadChat(userId);
+  const sentAt =
+    typeof message.sentAt === "number" && Number.isFinite(message.sentAt)
+      ? message.sentAt
+      : Date.now();
   const bubble: ChatBubble = {
     ...message,
     id: message.id || nextId("msg"),
+    sentAt,
   };
   const existing = blob.threads.find((thread) => thread.id === threadId);
   const thread: ChatThread = existing
     ? {
         ...existing,
         preview: message.text,
-        time: "Now",
+        lastActivityAt: sentAt,
         messages: [...existing.messages, bubble],
       }
     : {
@@ -319,7 +349,7 @@ export const appendMessage = async (
         name: threadId,
         kind: "bot",
         preview: message.text,
-        time: "Now",
+        lastActivityAt: sentAt,
         pinned: false,
         listen: false,
         synced: false,

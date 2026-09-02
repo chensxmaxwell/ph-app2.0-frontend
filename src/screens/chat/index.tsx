@@ -29,8 +29,10 @@ import PencilIcon from "@images/message/pencil.svg";
 import PersonPlus from "@images/message/person-plus.svg";
 import { DESTRUCTIVE_RED, Dialog } from "./dialog";
 import { useChat } from "./store";
+import { formatChatListTime } from "./time";
 import { ChatThread } from "./types";
 import { faceSourceForId } from "./faces";
+import { useNow } from "./use-now";
 
 const faceFor = (thread: ChatThread) => faceSourceForId(thread.id, thread.kind);
 
@@ -50,6 +52,8 @@ export const Chat = () => {
   const navigation = useNavigation();
   const parent = navigation.getParent() as NavigationProp<ParamListBase>;
   const { threads, setUnread, deleteThread } = useChat();
+  // Ticks so a row's "now" becomes "3 min ago" while the list stays open.
+  const now = useNow();
   const [menuOpen, setMenuOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<ChatThread | null>(null);
   const swipeRows = useRef(new Map<string, Swipeable>());
@@ -262,7 +266,12 @@ export const Chat = () => {
                         ? "Friend request"
                         : thread.name}
                     </Text>
-                    <Text style={styles.rowTime}>{thread.time}</Text>
+                    <Text
+                      testID={`message-row-time-${thread.id}`}
+                      style={styles.rowTime}
+                    >
+                      {formatChatListTime(thread.lastActivityAt, now)}
+                    </Text>
                   </View>
                   <Text style={styles.rowPreview} numberOfLines={1}>
                     {thread.preview}
