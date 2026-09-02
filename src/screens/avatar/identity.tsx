@@ -55,8 +55,7 @@ export const AvatarIdentityScreen = () => {
   const [nameFocused, setNameFocused] = useState(true);
   const [genderOpen, setGenderOpen] = useState(false);
   const birthdayLooksInvalid = !isPlausibleBirthday(draft.birthday);
-  const canContinue =
-    draft.name.trim().length > 0 && !birthdayLooksInvalid;
+  const canContinue = draft.name.trim().length > 0 && !birthdayLooksInvalid;
 
   return (
     <WizardShell
@@ -138,7 +137,9 @@ export const AvatarIdentityScreen = () => {
                   style={[
                     styles.input,
                     styles.genderInput,
-                    draft.gender ? styles.genderValue : styles.genderPlaceholder,
+                    draft.gender
+                      ? styles.genderValue
+                      : styles.genderPlaceholder,
                   ]}
                 >
                   {draft.gender || "Select"}
@@ -182,9 +183,7 @@ export const AvatarIdentityScreen = () => {
                 );
               })
             : null}
-          <Text style={styles.genderNote}>
-            Demo: male avatar only for now
-          </Text>
+          <Text style={styles.genderNote}>Demo: male avatar only for now</Text>
         </View>
       </KeyboardAvoidingView>
     </WizardShell>
