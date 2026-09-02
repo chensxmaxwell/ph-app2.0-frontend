@@ -1,76 +1,41 @@
-import React, { useState } from "react";
-import {
-  View,
-  StyleSheet,
-  Animated,
-  PanResponder,
-  GestureResponderEvent,
-  PanResponderGestureState,
-  Text,
-} from "react-native";
+import React, { useEffect, useRef } from "react";
+import { View, StyleSheet, Animated, Text } from "react-native";
 import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
 
-const WaveformAdjustable = () => {
-  const [waveHeight] = useState(new Animated.Value(300)); // Start with height 300
+const MIN_HEIGHT = 100;
+const MAX_HEIGHT = 300;
 
-  // Define a baseY to track the starting Y position
-  const [baseY, setBaseY] = useState(0); // Store the initial Y position
-  const [currentHeight, setCurrentHeight] = useState(300);
-  const [text, setText] = useState(100);
+const heightForPct = (pct: number) =>
+  MIN_HEIGHT + (Math.max(0, Math.min(100, pct)) / 100) * (MAX_HEIGHT - MIN_HEIGHT);
 
-  let newHeight = 300;
-  // Use PanResponder to capture touch gestures
-  const panResponder = PanResponder.create({
-    onMoveShouldSetPanResponder: () => true,
+type Props = {
+  sensitivityPct: number;
+};
 
-    // Capture the start of the gesture
-    onPanResponderGrant: (event, gestureState) => {
-      setBaseY(gestureState.moveY); // Save the initial Y position when touch begins
-      //   console.log("Gesture Start - x0, y0:", gestureState.x0, gestureState.y0);
-    },
+const WaveformAdjustable = ({ sensitivityPct }: Props) => {
+  const waveHeight = useRef(new Animated.Value(heightForPct(sensitivityPct)))
+    .current;
 
-    // Track the movement and use moveY to set the wave height
-    onPanResponderMove: (
-      event: GestureResponderEvent,
-      gestureState: PanResponderGestureState
-    ) => {
-      newHeight = currentHeight - (gestureState.moveY - baseY); // Adjust based on how far moveY is from baseY
-      newHeight = Math.min(newHeight, 300);
-      newHeight = Math.max(newHeight, 100);
-      // Set the height value
-      waveHeight.setValue(newHeight);
+  useEffect(() => {
+    waveHeight.setValue(heightForPct(sensitivityPct));
+  }, [sensitivityPct, waveHeight]);
 
-      setText(Math.round(((newHeight - 100) / 200) * 100));
-    },
-
-    onPanResponderRelease: () => {
-      setCurrentHeight(newHeight);
-    },
-  });
-
-  // Use interpolation for smoothness
   const animatedHeight = waveHeight.interpolate({
-    inputRange: [100, 300],
-    outputRange: [100, 300],
-    extrapolate: "clamp", // Prevent values outside the range
+    inputRange: [MIN_HEIGHT, MAX_HEIGHT],
+    outputRange: [MIN_HEIGHT, MAX_HEIGHT],
+    extrapolate: "clamp",
   });
 
   return (
-    <View style={styles.container} {...panResponder.panHandlers}>
+    <View style={styles.container}>
       <Text style={styles.header}>Sensitivity</Text>
       <Animated.Image
-        style={[
-          styles.waveImage,
-          { height: animatedHeight }, // Use interpolated value for smoother transition
-        ]}
+        style={[styles.waveImage, { height: animatedHeight }]}
         source={require("../../../assets/images/wave4.png")}
       />
       <Animated.Image
-        style={[
-          styles.waveImage,
-          { height: animatedHeight }, // Another wave with same dynamic height
-        ]}
+        style={[styles.waveImage, { height: animatedHeight }]}
         source={require("../../../assets/images/wave3.png")}
       />
       <Animated.Text
@@ -78,14 +43,14 @@ const WaveformAdjustable = () => {
           styles.sensitivityValue,
           {
             height: animatedHeight.interpolate({
-              inputRange: [100, 300],
-              outputRange: [90, 280], // Shift the height by subtracting 50
+              inputRange: [MIN_HEIGHT, MAX_HEIGHT],
+              outputRange: [90, 280],
               extrapolate: "clamp",
             }),
           },
         ]}
       >
-        {text}%
+        {Math.round(sensitivityPct)}%
       </Animated.Text>
     </View>
   );
@@ -108,14 +73,14 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: 0,
     width: "100%",
-    height: 300, // Default height
+    height: 300,
     resizeMode: "stretch",
   },
   sensitivityValue: {
     position: "absolute",
     left: 175,
     bottom: 0,
-    height: 290, // Default height
+    height: 290,
     fontWeight: fontWeights.bold,
     color: colors.white,
     fontFamily: "Quicksand-Bold",
