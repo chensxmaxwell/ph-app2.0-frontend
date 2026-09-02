@@ -101,7 +101,6 @@ const SCREENS = {
   CHAT_THREAD: "ChatThread" as never,
   CHAT_SEARCH: "ChatSearch" as never,
   CHAT_SETTINGS: "ChatSettings" as never,
-  CHAT_CREATE: "ChatCreate" as never,
   CHAT_CONTACT: "ChatContact" as never,
   CHAT_CALL: "ChatCall" as never,
   SYNC_STACK: "SyncStack" as never,

@@ -9,10 +9,15 @@ import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
 import { BaseText } from "@common/components/base-text";
 import { spacings } from "@common/styles/spacings";
-import { useNavigation, NavigationProp, ParamListBase } from "@react-navigation/native";
+import {
+  useNavigation,
+  NavigationProp,
+  ParamListBase,
+} from "@react-navigation/native";
 import { lookFromCompanion, useCompanions } from "../../store/companions";
 import { LookFace } from "../avatar/look-face";
 import { ROW_AVATAR_SIZE, circleAvatarStyle } from "../avatar/circle-avatar";
+import { openCreateCompanion } from "../avatar/open";
 import { faceSourceForId } from "../chat/faces";
 import type { AvatarLook } from "../avatar/engine/viewer-html";
 
@@ -40,9 +45,8 @@ export const Home = () => {
     | NavigationProp<ParamListBase>
     | undefined;
   const openAvatarCreation = () => {
-    parentNavigation?.navigate(
-      SCREENS.AVATAR_STACK as never,
-      { mode: "create" } as never
+    openCreateCompanion(
+      parentNavigation ?? (navigation as NavigationProp<ParamListBase>)
     );
   };
 
@@ -80,7 +84,11 @@ export const Home = () => {
           style={[styles.companionPicture, circleAvatarStyle(ROW_AVATAR_SIZE)]}
           onPress={() => openCompanion(companion.id)}
         >
-          <HomeFace companionId={companion.id} look={null} size={ROW_AVATAR_SIZE} />
+          <HomeFace
+            companionId={companion.id}
+            look={null}
+            size={ROW_AVATAR_SIZE}
+          />
         </TouchableOpacity>
       ));
 
@@ -111,7 +119,8 @@ export const Home = () => {
               return;
             }
             navigateToNestedScreen({
-              navigation: parentNavigation ?? (navigation as NavigationProp<any>),
+              navigation:
+                parentNavigation ?? (navigation as NavigationProp<any>),
               path: dynamicPath,
             });
           }}
@@ -150,6 +159,7 @@ export const Home = () => {
               {renderCreatedCompanions()}
               {renderCompanions()}
               <TouchableOpacity
+                testID="home-add-companion"
                 style={styles.addCompanion}
                 onPress={openAvatarCreation}
               >

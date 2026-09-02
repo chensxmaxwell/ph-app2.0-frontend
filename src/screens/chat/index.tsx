@@ -16,6 +16,7 @@ import {
 import { ScreenWrapper } from "@common/components/screen-wrapper";
 import { SCREENS } from "@common/constant";
 import { colors } from "@common/styles/colors";
+import { openCreateCompanion } from "../avatar/open";
 import { s } from "../avatar/scale";
 import SearchIcon from "@images/message/search.svg";
 import PlusIcon from "@images/message/plus.svg";
@@ -25,8 +26,7 @@ import { useChat } from "./store";
 import { ChatThread } from "./types";
 import { faceSourceForId } from "./faces";
 
-const faceFor = (thread: ChatThread) =>
-  faceSourceForId(thread.id, thread.kind);
+const faceFor = (thread: ChatThread) => faceSourceForId(thread.id, thread.kind);
 
 export const Chat = () => {
   const navigation = useNavigation();
@@ -67,6 +67,7 @@ export const Chat = () => {
             <SearchIcon width={s(33)} height={s(35)} />
           </TouchableOpacity>
           <TouchableOpacity
+            testID="message-add"
             onPress={() => setMenuOpen((open) => !open)}
             activeOpacity={0.85}
             hitSlop={12}
@@ -84,10 +85,11 @@ export const Chat = () => {
         {menuOpen ? (
           <View style={styles.menu}>
             <TouchableOpacity
+              testID="message-create-new"
               style={styles.menuItem}
               onPress={() => {
                 setMenuOpen(false);
-                parent.navigate(SCREENS.CHAT_CREATE);
+                openCreateCompanion(parent);
               }}
             >
               <Text style={styles.menuText}>Create new</Text>
@@ -97,9 +99,12 @@ export const Chat = () => {
               style={styles.menuItem}
               onPress={() => {
                 setMenuOpen(false);
-                parent.navigate(SCREENS.CHAT_SEARCH as never, {
-                  addFriends: true,
-                } as never);
+                parent.navigate(
+                  SCREENS.CHAT_SEARCH as never,
+                  {
+                    addFriends: true,
+                  } as never
+                );
               }}
             >
               <Text style={styles.menuText}>Add friends</Text>
