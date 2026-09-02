@@ -30,6 +30,7 @@ import Heartbeat from "@images/message/heartbeat.svg";
 import { s } from "../avatar/scale";
 import { useOpenLove } from "../love/pill";
 import { ChatGradient } from "./background";
+import { regenerateTargetId } from "./regenerate";
 import { useChat } from "./store";
 import { ChatBubble, ChatThread } from "./types";
 import { faceSourceForId } from "./faces";
@@ -92,6 +93,7 @@ export const ChatThreadScreen = () => {
     cancelFriendRequest,
     humanLimitReached,
     chatNotice,
+    replyPending,
   } = useChat();
   const thread = getThread(route.params.threadId);
   const openLove = useOpenLove();
@@ -130,12 +132,17 @@ export const ChatThreadScreen = () => {
     thread.request === "sent" ||
     limited ||
     thread.messages.length === 0;
-  const lastThem = [...thread.messages]
-    .reverse()
-    .find((item) => item.from === "them");
   const lastMine = [...thread.messages]
     .reverse()
     .find((item) => item.from === "me" && !item.voice);
+  // Regenerate belongs to exactly one row: the final bubble, when it is a
+  // finished bot reply and no reply is still waiting on Ark. While the user's
+  // bubble is last (send in flight, or the request failed) there is nothing
+  // to regenerate, so no row carries the control.
+  const regenerateId =
+    thread.kind === "bot" && !typing && !talkMode
+      ? regenerateTargetId(thread.messages, replyPending(thread.id))
+      : null;
 
   const goBack = () => {
     if (thread.synced || inCallThreadId === thread.id) {
@@ -188,7 +195,7 @@ export const ChatThreadScreen = () => {
 
   const renderBubble = (item: ChatBubble) => {
     const isMe = item.from === "me";
-    return (
+    const row = (
       <Pressable
         key={item.id}
         onLongPress={() => {
@@ -222,6 +229,21 @@ export const ChatThreadScreen = () => {
           </TouchableOpacity>
         ) : null}
       </Pressable>
+    );
+    if (item.id !== regenerateId) {
+      return row;
+    }
+    return (
+      <React.Fragment key={item.id}>
+        {row}
+        <TouchableOpacity
+          onPress={() => regenerate(thread.id)}
+          style={styles.regen}
+          testID={`regenerate-${item.id}`}
+        >
+          <Text style={styles.regenText}>Regenerate</Text>
+        </TouchableOpacity>
+      </React.Fragment>
     );
   };
 
@@ -294,14 +316,6 @@ export const ChatThreadScreen = () => {
               <Text style={styles.syncLine}>
                 {`You are now syncing with ${thread.name}`}
               </Text>
-            ) : null}
-            {lastThem && !typing && thread.kind === "bot" && !talkMode ? (
-              <TouchableOpacity
-                onPress={() => regenerate(thread.id)}
-                style={styles.regen}
-              >
-                <Text style={styles.regenText}>Regenerate</Text>
-              </TouchableOpacity>
             ) : null}
           </ScrollView>
           {drawerOpen ? (
