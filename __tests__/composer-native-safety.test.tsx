@@ -1,12 +1,20 @@
 import fs from "fs";
 import path from "path";
 import React from "react";
+import { View } from "react-native";
 import renderer, {
   act,
   ReactTestInstance,
   ReactTestRenderer,
 } from "react-test-renderer";
-import { afterEach, describe, expect, it, jest } from "@jest/globals";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from "@jest/globals";
 import {
   attachAvatarSlot,
   AvatarEngineHost,
@@ -51,6 +59,18 @@ type MeasureCallback = (
 
 const trees: ReactTestRenderer[] = [];
 let pendingMeasure: MeasureCallback | null = null;
+const measureInWindowMock = (
+  View as unknown as {
+    prototype: {
+      measureInWindow: {
+        mockImplementation: (
+          callback: (measure: MeasureCallback) => void
+        ) => void;
+        mockReset: () => void;
+      };
+    };
+  }
+).prototype.measureInWindow;
 
 const renderHost = () => {
   let tree: ReactTestRenderer;
@@ -65,14 +85,7 @@ const renderPreview = () => {
   let tree: ReactTestRenderer;
   act(() => {
     tree = renderer.create(
-      <AvatarPreview look={DEFAULT_LOOK} width={200} height={400} />,
-      {
-        createNodeMock: () => ({
-          measureInWindow: (callback: MeasureCallback) => {
-            pendingMeasure = callback;
-          },
-        }),
-      }
+      <AvatarPreview look={DEFAULT_LOOK} width={200} height={400} />
     );
   });
   trees.push(tree!);
@@ -88,6 +101,12 @@ const publishMeasurement = (x = 0, y = 0, width = 200, height = 400) => {
   act(() => callback(x, y, width, height));
 };
 
+beforeEach(() => {
+  measureInWindowMock.mockImplementation((callback) => {
+    pendingMeasure = callback;
+  });
+});
+
 afterEach(() => {
   act(() => {
     detachAvatarSlot(MESSAGE_SLOT_ID);
@@ -100,6 +119,7 @@ afterEach(() => {
   });
   pendingMeasure = null;
   mockIsFocused = true;
+  measureInWindowMock.mockReset();
 });
 
 describe("keyboard-safe avatar engine lifecycle", () => {
