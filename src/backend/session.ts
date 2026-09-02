@@ -96,6 +96,7 @@ export const STORE_KEYS = {
   device: "ph.device.v1",
   patterns: "ph.patterns.v1",
   kinks: "ph.kinks.v1",
+  kinkFavorites: "ph.kinkFavorites.v1",
   profile: "ph.profile.v1",
   loveSession: "ph.loveSession.v1",
   llm: "ph.llm.v1",
