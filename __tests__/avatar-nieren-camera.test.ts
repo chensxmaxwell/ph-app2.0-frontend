@@ -2,6 +2,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "@jest/globals";
 import {
+  cameraDistance,
   FALLBACK_STANDING_HEIGHT,
   prefixIndex,
   standingCameraPose,
@@ -23,6 +24,16 @@ const customizeSource = readFileSync(
   "utf8"
 );
 
+const appearanceSource = readFileSync(
+  join(__dirname, "../src/screens/avatar/appearance.tsx"),
+  "utf8"
+);
+
+const engineHostSource = readFileSync(
+  join(__dirname, "../src/screens/avatar/engine/AvatarEngineHost.tsx"),
+  "utf8"
+);
+
 describe("捏人 camera framing", () => {
   it("full-body camera looks at mid-height and covers head to shoes", () => {
     const height = 1.75;
@@ -35,6 +46,18 @@ describe("捏人 camera framing", () => {
     expect(cover).toBeGreaterThanOrEqual(height);
     expect(pose.lookAtY - cover / 2).toBeLessThan(0.05);
     expect(pose.lookAtY + cover / 2).toBeGreaterThan(height);
+  });
+
+  it("bust camera is closer and covers less than half the full-body span", () => {
+    const height = 1.75;
+    const fullPose = standingCameraPose(height);
+    const bustFov = 28;
+    const bustCover = height * 0.48;
+    const bustDistance = cameraDistance(bustCover, bustFov);
+
+    expect(bustDistance).toBeLessThan(fullPose.z);
+    expect(bustCover).toBeLessThan(verticalCoverage(fullPose) * 0.5);
+    expect(height * 0.8 - bustCover / 2).toBeGreaterThan(height * 0.5);
   });
 
   it("does not treat the BoZo bind-pose pancake as standing height", () => {
@@ -77,6 +100,21 @@ describe("捏人 viewer HTML", () => {
     expect(html).toMatch(/resize\(\);\s*frameCamera/);
   });
 
+  it("uses the corrected standing height for a real bust crop", () => {
+    const html = viewerHtml();
+    expect(html).toMatch(
+      /camera\.position\.set\(h \* 0\.05, h \* 0\.82, cameraDistance\(h \* 0\.48, camera\.fov\)\)/
+    );
+    expect(html).toMatch(/camera\.lookAt\(0, h \* 0\.8, 0\)/);
+    expect(html).toMatch(
+      /h = Math\.max\(MIN_STANDING_HEIGHT, modelHeight \|\| FALLBACK_STANDING_HEIGHT\)/
+    );
+  });
+
+  it("receives viewMode from the native host payload", () => {
+    expect(engineHostSource).toMatch(/viewMode: slot\.viewMode/);
+  });
+
   it("keeps all bundled viewer copies in sync", () => {
     const canonical = viewerHtml();
     viewerCopies.forEach((relative) => {
@@ -87,8 +125,21 @@ describe("捏人 viewer HTML", () => {
 });
 
 describe("捏人 customize steps", () => {
-  it("frames a full standing figure on Hair/Face/Skin/Body/Eyes/Age", () => {
-    expect(customizeSource).not.toContain('return "bust"');
-    expect(customizeSource).toContain('viewMode="full"');
+  it("keeps Outfit explicitly full-body", () => {
+    expect(appearanceSource).toMatch(
+      /<FittedAvatarPreview[\s\S]*?viewMode="full"[\s\S]*?\/>/
+    );
+  });
+
+  it("keeps Body full-body while face-focused categories request bust", () => {
+    expect(customizeSource).toMatch(/case "Body":\s*return "full"/);
+    ["Hair", "Face", "Skin", "Eyes", "Age"].forEach((category) => {
+      expect(customizeSource).toMatch(
+        new RegExp(`case "${category}":[\\s\\S]*?return "bust"`)
+      );
+    });
+    expect(customizeSource).toContain(
+      "viewMode={previewViewMode(category)}"
+    );
   });
 });
