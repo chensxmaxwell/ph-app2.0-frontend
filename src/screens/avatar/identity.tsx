@@ -111,7 +111,9 @@ export const AvatarIdentityScreen = () => {
             <TextInput
               value={draft.birthday}
               onChangeText={(birthday) =>
-                patchDraft({ birthday: formatBirthdayInput(birthday) })
+                patchDraft({
+                  birthday: formatBirthdayInput(birthday, draft.birthday),
+                })
               }
               placeholder="mm/dd/yyyy"
               placeholderTextColor={colors.grayLighter}
