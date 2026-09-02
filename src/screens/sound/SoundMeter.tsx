@@ -24,6 +24,7 @@ import {
   startMicSession,
   stopMicSession,
 } from "../../services/mic-session";
+import { dbToSensitivityPct } from "./db-to-sensitivity";
 
 const SoundMeter = () => {
   const navigation = useNavigation();
@@ -85,9 +86,9 @@ const SoundMeter = () => {
         if (raw > 0) {
           db = 20 * Math.log10(Math.max(raw, 1) / 120);
         }
-        const level = Math.max(0, Math.min(100, Math.round((db + 50) * 2)));
-        setdBLevel(Math.round(db));
-        setIntensity(level);
+        const displayedDb = Math.round(db);
+        setdBLevel(displayedDb);
+        setIntensity(dbToSensitivityPct(displayedDb));
       });
     } catch {
       setMicError(MIC_ERROR_MESSAGES.unavailable);
@@ -170,7 +171,7 @@ const SoundMeter = () => {
         {micError ? <Text style={styles.micError}>{micError}</Text> : null}
       </View>
 
-      <WaveformAdjustable />
+      <WaveformAdjustable sensitivityPct={intensity} />
     </View>
   );
 };
