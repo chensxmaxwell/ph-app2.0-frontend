@@ -31,6 +31,10 @@ import { CompanionsProvider } from "./src/store/companions";
 import { LoveSessionProvider } from "./src/screens/love/session";
 import { ChatProvider } from "./src/screens/chat/store";
 import { TtsHost } from "./src/services/TtsHost";
+import {
+  CrashGuardBanner,
+  CrashGuardBoundary,
+} from "./src/services/crash-guard";
 import { AvatarEngineHost } from "./src/screens/avatar/engine/AvatarEngineHost";
 import { OpenAnimationScreen } from "./src/screens/auth/open-animation";
 
@@ -69,21 +73,24 @@ function App(): React.JSX.Element {
               <LoveSessionProvider>
               <ChatProvider>
               <TtsHost />
-              <NavigationContainer>
-                <Stack.Navigator
-                  initialRouteName={bootRoute}
-                  screenOptions={COMMON_HEADER_OPTIONS_CONFIG}
-                >
-                  <Stack.Screen name={SCREENS.AUTH} component={AuthStack} />
-                  <Stack.Screen name={SCREENS.MAIN} component={HomeStack} />
-                  <Stack.Screen
-                    name={SCREENS.ONBOARDING}
-                    component={OnboardingStack}
-                  />
-                </Stack.Navigator>
-              </NavigationContainer>
-              <AvatarEngineHost />
+              <CrashGuardBoundary>
+                <NavigationContainer>
+                  <Stack.Navigator
+                    initialRouteName={bootRoute}
+                    screenOptions={COMMON_HEADER_OPTIONS_CONFIG}
+                  >
+                    <Stack.Screen name={SCREENS.AUTH} component={AuthStack} />
+                    <Stack.Screen name={SCREENS.MAIN} component={HomeStack} />
+                    <Stack.Screen
+                      name={SCREENS.ONBOARDING}
+                      component={OnboardingStack}
+                    />
+                  </Stack.Navigator>
+                </NavigationContainer>
+                <AvatarEngineHost />
+              </CrashGuardBoundary>
               <CustomAlert />
+              <CrashGuardBanner />
               </ChatProvider>
               </LoveSessionProvider>
             </CompanionsProvider>
