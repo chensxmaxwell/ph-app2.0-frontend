@@ -1,9 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import {
-  STORE_KEYS,
-  currentUserId,
-  scopedKey,
-} from "../backend/session";
+import { LLM_API_KEY, LLM_BASE_URL, LLM_MODEL } from "@env";
+import { STORE_KEYS, currentUserId, scopedKey } from "../backend/session";
 
 export const ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 export const ARK_MODEL = "deepseek-v4-flash-ga-260731";
@@ -16,26 +13,21 @@ export type LlmConfig = {
   model: string;
 };
 
-type EnvLlm = {
-  LLM_API_KEY?: string;
-  LLM_BASE_URL?: string;
-  LLM_MODEL?: string;
-};
+const envString = (value: unknown) =>
+  typeof value === "string" && value.length > 0 ? value : undefined;
 
-// Metro @env is optional and empty in Release IPAs. Keep this require inside
-// try/catch so a missing dotenv module cannot crash companion chat.
-const readEnvOverlay = (): Partial<LlmConfig> => {
-  try {
-    const env = require("@env") as EnvLlm;
-    return {
-      apiKey: env.LLM_API_KEY ?? "",
-      baseUrl: env.LLM_BASE_URL,
-      model: env.LLM_MODEL,
-    };
-  } catch {
-    return {};
-  }
-};
+// react-native-dotenv inlines the `@env` import above at build time, so
+// there is no module to look up on the phone. Never load `@env` with a
+// runtime require() here (even inside try/catch): Metro 0.80 silently drops
+// an optional dependency it cannot resolve and shifts every later
+// `_dependencyMap` index, so a later require in this file becomes
+// require(undefined) and the Metro runtime reports that as a fatal error ->
+// RCTFatal in Release. That fired on the first loadLlmConfig(), i.e. on send.
+const readEnvOverlay = (): Partial<LlmConfig> => ({
+  apiKey: envString(LLM_API_KEY) ?? "",
+  baseUrl: envString(LLM_BASE_URL),
+  model: envString(LLM_MODEL),
+});
 
 export const defaultLlmConfig = (): LlmConfig => {
   const env = readEnvOverlay();
