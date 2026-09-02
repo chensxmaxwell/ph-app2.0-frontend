@@ -247,7 +247,7 @@ describe("Love session persist and restore", () => {
   };
 
   it("records the entry surface and keeps it while session layers change", () => {
-    let tree: renderer.ReactTestRenderer;
+    let tree!: renderer.ReactTestRenderer;
     act(() => {
       tree = renderer.create(
         React.createElement(
