@@ -58,6 +58,14 @@
   }
 
   function clamp01(v) { return Math.max(0, Math.min(1, Number(v) || 0)); }
+  var MIN_STANDING_HEIGHT = 1.2;
+  var FALLBACK_STANDING_HEIGHT = 1.75;
+  function usableStandingHeight(sx, sy, sz) {
+    if (sy >= MIN_STANDING_HEIGHT) return sy;
+    var longest = Math.max(sx, sy, sz);
+    if (longest >= MIN_STANDING_HEIGHT) return longest;
+    return FALLBACK_STANDING_HEIGHT;
+  }
   function hexColor(hex) { return new THREE.Color(hex); }
 
   function materialsOf(obj) {
@@ -572,9 +580,64 @@
     return (coverHeight * 0.5) / Math.tan(half);
   }
 
+  function sampleMeshPoint(obj, index, target) {
+    if (obj.isSkinnedMesh && typeof obj.boneTransform === "function") {
+      obj.boneTransform(index, target);
+      target.applyMatrix4(obj.matrixWorld);
+      return;
+    }
+    target.fromBufferAttribute(obj.geometry.attributes.position, index);
+    target.applyMatrix4(obj.matrixWorld);
+  }
+
+  function measureVisibleBox() {
+    var box = new THREE.Box3();
+    var sample = new THREE.Vector3();
+    if (!modelRoot) return box;
+    modelRoot.updateMatrixWorld(true);
+    modelRoot.traverse(function (obj) {
+      if (!obj.isMesh || !obj.visible || !obj.geometry || !obj.geometry.attributes.position) return;
+      var n = obj.name || "";
+      if (
+        n.indexOf("Body_") !== 0 &&
+        n.indexOf("Head_") !== 0 &&
+        n.indexOf("Eyes_") !== 0 &&
+        n.indexOf("Outfit_") !== 0 &&
+        n.indexOf("Hair_") !== 0
+      ) {
+        return;
+      }
+      var pos = obj.geometry.attributes.position;
+      var stride = Math.max(1, Math.floor(pos.count / 400));
+      var i;
+      for (i = 0; i < pos.count; i += stride) {
+        sampleMeshPoint(obj, i, sample);
+        box.expandByPoint(sample);
+      }
+    });
+    return box;
+  }
+
+  function placeStandingFigure() {
+    var box = measureVisibleBox();
+    if (box.isEmpty()) {
+      box.setFromObject(modelRoot);
+    }
+    var size = box.getSize(new THREE.Vector3());
+    var center = box.getCenter(new THREE.Vector3());
+    modelHeight = usableStandingHeight(size.x, size.y, size.z);
+    if (size.y >= MIN_STANDING_HEIGHT) {
+      modelRoot.position.x -= center.x;
+      modelRoot.position.z -= center.z;
+      modelRoot.position.y -= box.min.y;
+    }
+    modelRestY = modelRoot.position.y;
+  }
+
   function frameCamera(mode) {
     if (!camera) return;
-    var h = modelHeight;
+    resize();
+    var h = Math.max(MIN_STANDING_HEIGHT, modelHeight || FALLBACK_STANDING_HEIGHT);
     if (mode === "bust") {
       camera.fov = 28;
       camera.position.set(h * 0.05, h * 0.82, cameraDistance(h * 0.48, camera.fov));
@@ -584,6 +647,8 @@
       camera.position.set(h * 0.06, h * 0.5, cameraDistance(h * 1.18, camera.fov));
       camera.lookAt(0, h * 0.5, 0);
     }
+    camera.near = 0.05;
+    camera.far = Math.max(40, h * 20);
     camera.updateProjectionMatrix();
   }
 
@@ -648,7 +713,7 @@
     renderer.toneMappingExposure = 1.12;
     if ("physicallyCorrectLights" in renderer) renderer.physicallyCorrectLights = true;
     scene = new THREE.Scene();
-    camera = new THREE.PerspectiveCamera(24, 1, 0.05, 40);
+    camera = new THREE.PerspectiveCamera(24, 1, 0.05, 80);
     var envMap = makeEnvMap();
     scene.add(new THREE.HemisphereLight(0xffefe4, 0x2a2036, 0.62));
     var key = new THREE.DirectionalLight(0xffe6d2, 1.25);
@@ -662,10 +727,13 @@
     scene.add(rim);
     addGroundContact();
     resize();
-    window.addEventListener("resize", resize);
+    window.addEventListener("resize", function () {
+      resize();
+      frameCamera(look.viewMode === "bust" ? "bust" : "full");
+    });
 
     new THREE.GLTFLoader().load(
-      "bozo-male.glb?v=bozo24",
+      "bozo-male.glb?v=bozo25",
       function (gltf) {
         try {
           modelRoot = gltf.scene;
@@ -778,34 +846,7 @@
             };
           });
           applyVisibility(look);
-          var box = new THREE.Box3();
-          var sample = new THREE.Vector3();
-          modelRoot.updateMatrixWorld(true);
-          modelRoot.traverse(function (obj) {
-            if (!obj.isMesh || !obj.visible || !obj.geometry || !obj.geometry.attributes.position) return;
-            var n = obj.name || "";
-            if (n.indexOf("Body_") !== 0 && n.indexOf("Head_") !== 0 && n.indexOf("Eyes_") !== 0 && n.indexOf("Outfit_") !== 0) {
-              return;
-            }
-            var pos = obj.geometry.attributes.position;
-            var stride = Math.max(1, Math.floor(pos.count / 400));
-            var i;
-            for (i = 0; i < pos.count; i += stride) {
-              sample.fromBufferAttribute(pos, i);
-              sample.applyMatrix4(obj.matrixWorld);
-              box.expandByPoint(sample);
-            }
-          });
-          if (box.isEmpty()) {
-            box.setFromObject(modelRoot);
-          }
-          var size = box.getSize(new THREE.Vector3());
-          var center = box.getCenter(new THREE.Vector3());
-          modelRoot.position.x -= center.x;
-          modelRoot.position.z -= center.z;
-          modelRoot.position.y -= box.min.y;
-          modelRestY = modelRoot.position.y;
-          modelHeight = Math.max(0.8, size.y);
+          placeStandingFigure();
           scene.add(modelRoot);
           ready = true;
           setStatus("");
