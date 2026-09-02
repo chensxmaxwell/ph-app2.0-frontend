@@ -46,6 +46,7 @@ export const AvatarWaitingScreen = () => {
     savedIdRef.current = companion.id;
     start({
       layer: "chat",
+      surface: "love",
       companionId: companion.id,
       name: companion.name,
       fromCreation: true,

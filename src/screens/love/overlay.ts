@@ -8,6 +8,7 @@ import { LoveLayer } from "./types";
 import {
   LOVE_OVERLAY_SCREENS,
   stackForLoveLayer,
+  stackForRestoredLoveLayer,
 } from "./stack";
 import type { LoveLayerParams, LoveStackSurface } from "./stack";
 
@@ -72,12 +73,20 @@ export const dismissLoveOverlays = (
 export const restoreLoveOverlays = (
   navigation: NavigationProp<ParamListBase>,
   layer: LoveLayer | null,
+  surface: LoveStackSurface,
   companionId?: string,
   name?: string
 ) => {
-  applyLoveLayer(navigation, {
-    layer,
-    params: { companionId, name },
-    surface: "love",
+  navigation.dispatch((state) => {
+    const routes = stackForRestoredLoveLayer({
+      routes: state.routes,
+      layer,
+      params: { companionId, name },
+      surface,
+    });
+    return CommonActions.reset({
+      index: Math.max(0, routes.length - 1),
+      routes: routes as never,
+    });
   });
 };

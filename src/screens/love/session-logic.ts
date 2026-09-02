@@ -1,4 +1,5 @@
 import { LoveChatItem, LoveChatState, LoveLayer, LoveMode } from "./types";
+import type { LoveStackSurface } from "./stack";
 
 export const shouldReuseLoveChat = ({
   currentCompanionId,
@@ -22,6 +23,7 @@ export type LiveLoveSession = {
   companionId?: string;
   layer: LoveLayer | null;
   minimized: boolean;
+  surface: LoveStackSurface;
   chat: LoveChatState | null;
   callStartedAt: number | null;
   syncStartedAt: number | null;
@@ -31,6 +33,7 @@ export const emptyLoveSession = (): LiveLoveSession => ({
   companionId: undefined,
   layer: null,
   minimized: false,
+  surface: "love",
   chat: null,
   callStartedAt: null,
   syncStartedAt: null,
@@ -46,6 +49,7 @@ export const snapshotLoveSession = (
     companionId: live.companionId,
     layer: live.layer,
     minimized: live.minimized,
+    surface: live.surface,
     chat: live.chat,
     callStartedAt: live.callStartedAt,
     syncStartedAt: live.syncStartedAt,
@@ -62,6 +66,7 @@ export const liveFromPersisted = (
     companionId: persisted.companionId,
     layer: persisted.layer,
     minimized: true,
+    surface: persisted.surface,
     chat: persisted.chat,
     callStartedAt: persisted.callStartedAt,
     syncStartedAt: persisted.syncStartedAt,
@@ -73,6 +78,9 @@ export const showsSessionLovePill = (live: LiveLoveSession) =>
 
 const isLoveLayer = (value: unknown): value is LoveLayer =>
   value === "chat" || value === "call" || value === "sync";
+
+const isLoveStackSurface = (value: unknown): value is LoveStackSurface =>
+  value === "love" || value === "message";
 
 const isLoveMode = (value: unknown): value is LoveMode =>
   value === "none" || value === "pattern" || value === "kink" || value === "bliss";
@@ -147,6 +155,7 @@ export const parsePersistedLoveSession = (
       typeof value.companionId === "string" ? value.companionId : undefined,
     layer: value.layer,
     minimized: value.minimized === true,
+    surface: isLoveStackSurface(value.surface) ? value.surface : "love",
     chat: parseChat(value.chat),
     callStartedAt: parseTimestamp(value.callStartedAt),
     syncStartedAt: parseTimestamp(value.syncStartedAt),
