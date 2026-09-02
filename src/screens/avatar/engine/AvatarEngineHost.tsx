@@ -163,6 +163,10 @@ export const detachAvatarSlot = (id: number) => {
   if (index >= 0) {
     store.order.splice(index, 1);
   }
+  if (!topSlot()) {
+    store.status = "loading";
+    store.errorMessage = "";
+  }
   notify();
 };
 
@@ -196,7 +200,6 @@ export const useAvatarEngine = () => {
 };
 
 const LOAD_TIMEOUT_MS = 15000;
-const OFFSCREEN_X = -4000;
 const metroHint = (uri: string) =>
   `Phone must reach Metro at ${uri.replace(/\/ph-avatar\/.*$/, "")}. Same Wi‑Fi as the Mac running npm start.`;
 export const AvatarEngineHost = () => {
@@ -206,10 +209,6 @@ export const AvatarEngineHost = () => {
   const status = engine.status;
   const generation = engine.generation;
   const viewerUri = engine.viewerUri;
-  const lastSize = useRef({ width: 300, height: 520 });
-  if (slot && slot.rect.width > 2 && slot.rect.height > 2) {
-    lastSize.current = { width: slot.rect.width, height: slot.rect.height };
-  }
   const payload = slot
     ? JSON.stringify({
         ...slot.look,
@@ -260,16 +259,12 @@ export const AvatarEngineHost = () => {
     setEngineStatus("error", detail + "\n" + hint);
   };
 
-  if (!viewerUri) {
+  if (!viewerUri || !slot) {
     return null;
   }
 
-  const hasSlot = !!slot;
-  const show = hasSlot && status === "ready";
-  const width = slot?.rect.width || lastSize.current.width;
-  const height = slot?.rect.height || lastSize.current.height;
-  const left = hasSlot && slot ? slot.rect.x : OFFSCREEN_X;
-  const top = hasSlot && slot ? slot.rect.y : 0;
+  const show = status === "ready";
+  const { width, height, x: left, y: top } = slot.rect;
 
   return (
     <View style={styles.root} pointerEvents="box-none">
@@ -308,6 +303,8 @@ export const AvatarEngineHost = () => {
           androidLayerType="hardware"
           mixedContentMode="always"
           javaScriptEnabled
+          mediaPlaybackRequiresUserAction
+          mediaCapturePermissionGrantType="deny"
           onLoadEnd={() => {
             if (store.status === "ready") {
               pushLook();

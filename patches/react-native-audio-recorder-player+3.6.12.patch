@@ -1,0 +1,30 @@
+diff --git a/node_modules/react-native-audio-recorder-player/ios/RNAudioRecorderPlayer.swift b/node_modules/react-native-audio-recorder-player/ios/RNAudioRecorderPlayer.swift
+index a95ebeb..8c7a49c 100644
+--- a/node_modules/react-native-audio-recorder-player/ios/RNAudioRecorderPlayer.swift
++++ b/node_modules/react-native-audio-recorder-player/ios/RNAudioRecorderPlayer.swift
+@@ -152,21 +152,10 @@ class RNAudioRecorderPlayer: RCTEventEmitter, AVAudioRecorderDelegate {
+     // handle interrupt events
+     @objc 
+     func handleAudioSessionInterruption(_ notification: Notification) {
+-        guard let userInfo = notification.userInfo,
+-            let interruptionType = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt else {
+-            return
+-        }
+-
+-        switch interruptionType {
+-        case AVAudioSession.InterruptionType.began.rawValue:
+-            pauseRecorder { _ in } rejecter: { _, _, _ in }
+-            break
+-        case AVAudioSession.InterruptionType.ended.rawValue:
+-            resumeRecorder { _ in } rejecter: { _, _, _ in }
+-            break
+-        default:
+-            break
+-        }
++        // Idle interruptions from dictation / TTS / other apps must not
++        // touch the recorder. This module is created at RN bridge start
++        // (requiresMainQueueSetup) even when Sound is not on screen.
++        return
+     }
+ 
+     /**********               Player               **********/
