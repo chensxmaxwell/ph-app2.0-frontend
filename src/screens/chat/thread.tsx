@@ -153,6 +153,7 @@ export const ChatThreadScreen = () => {
 
   const clearSubmittedDraft = () => {
     clearComposerAfterSubmit({
+      endEditingBeforeClear: Platform.OS === "ios",
       input: inputRef.current,
       dismissKeyboard: Keyboard.dismiss,
       clearDraft: () => setDraft(""),

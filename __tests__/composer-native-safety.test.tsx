@@ -260,6 +260,7 @@ describe("composer regression contracts", () => {
         sendHandler.indexOf(mutationMarker)
       );
       expect(source).toContain("clearComposerAfterSubmit({");
+      expect(source).toContain('endEditingBeforeClear: Platform.OS === "ios"');
       expect(source).toContain("onBlur={finishSubmittedDraftClear}");
     }
   );

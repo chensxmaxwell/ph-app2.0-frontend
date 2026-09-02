@@ -7,6 +7,7 @@ describe("clearComposerAfterSubmit", () => {
     let deferredClear: (() => void) | undefined;
 
     clearComposerAfterSubmit({
+      endEditingBeforeClear: true,
       input: {
         isFocused: () => {
           order.push("isFocused");
@@ -46,7 +47,28 @@ describe("clearComposerAfterSubmit", () => {
     const blur = jest.fn();
 
     clearComposerAfterSubmit({
+      endEditingBeforeClear: true,
       input: { isFocused: () => false, blur },
+      dismissKeyboard,
+      clearDraft,
+      deferClearUntilBlur,
+    });
+
+    expect(clearDraft).toHaveBeenCalledTimes(1);
+    expect(deferClearUntilBlur).not.toHaveBeenCalled();
+    expect(blur).not.toHaveBeenCalled();
+    expect(dismissKeyboard).not.toHaveBeenCalled();
+  });
+
+  it("preserves the focused keyboard when no native blur barrier is required", () => {
+    const clearDraft = jest.fn();
+    const deferClearUntilBlur = jest.fn();
+    const dismissKeyboard = jest.fn();
+    const blur = jest.fn();
+
+    clearComposerAfterSubmit({
+      endEditingBeforeClear: false,
+      input: { isFocused: () => true, blur },
       dismissKeyboard,
       clearDraft,
       deferClearUntilBlur,

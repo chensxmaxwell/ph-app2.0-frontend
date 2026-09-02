@@ -4,6 +4,7 @@ type ComposerInput = {
 };
 
 type ClearComposerAfterSubmitInput = {
+  endEditingBeforeClear: boolean;
   input: ComposerInput | null;
   dismissKeyboard: () => void;
   clearDraft: () => void;
@@ -11,12 +12,13 @@ type ClearComposerAfterSubmitInput = {
 };
 
 export const clearComposerAfterSubmit = ({
+  endEditingBeforeClear,
   input,
   dismissKeyboard,
   clearDraft,
   deferClearUntilBlur,
 }: ClearComposerAfterSubmitInput) => {
-  if (!input?.isFocused()) {
+  if (!endEditingBeforeClear || !input?.isFocused()) {
     clearDraft();
     return;
   }
