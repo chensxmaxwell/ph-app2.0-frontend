@@ -54,7 +54,7 @@ export const LoveSyncScreen = () => {
   const insets = useSafeAreaInsets();
   const route = useRoute<SyncRoute>();
   const { companions, activeCompanion } = useCompanions();
-  const { threads } = useChat();
+  const { threads, setSynced } = useChat();
   const {
     start,
     patchChat,
@@ -163,6 +163,9 @@ export const LoveSyncScreen = () => {
           style={styles.hangup}
           onPress={() => {
             patchChat({ synced: false });
+            if (partnerId) {
+              setSynced(partnerId, false);
+            }
             clearLayerTimer("sync");
             stopMotor();
             start({
