@@ -35,23 +35,6 @@ type SliderKey = keyof Pick<
 
 type SliderConfig = { key: SliderKey; label: string };
 
-const previewViewMode = (category: Category): "full" | "bust" => {
-  switch (category) {
-    case "Body":
-      return "full";
-    case "Hair":
-    case "Face":
-    case "Skin":
-    case "Eyes":
-    case "Age":
-      return "bust";
-    default: {
-      const exhaustive: never = category;
-      return exhaustive;
-    }
-  }
-};
-
 const slidersForCategory = (category: Category): SliderConfig[] => {
   switch (category) {
     case "Hair":
@@ -267,7 +250,7 @@ export const AvatarCustomizeScreen = () => {
         </StepNote>
         <FittedAvatarPreview
           look={lookFromDraft(draft)}
-          viewMode={previewViewMode(category)}
+          viewMode="full"
           revealBody={category === "Body"}
         />
         <View style={styles.panel}>{renderPanel()}</View>
