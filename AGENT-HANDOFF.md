@@ -149,7 +149,8 @@ Love is **not** a tab. Open via companion avatars on Home, avatar wizard finish,
 
 | File | What |
 |---|---|
-| `src/screens/chat/store.tsx` | Threads, send, listen, call flag, persist `ph.chat.v1` |
+| `src/screens/chat/store.tsx` | Threads, send, listen, call flag, `replyPending(threadId)` while Ark is answering, persist `ph.chat.v1` |
+| `src/screens/chat/regenerate.ts` | `regenerateTargetId(messages, replyPending)`: the one row that may carry **Regenerate** (final bubble, finished bot reply to a user message, nothing in flight) |
 | `src/screens/chat/types.ts` | Thread/bubble types |
 | `src/screens/chat/index.tsx` | Inbox |
 | `src/screens/chat/thread.tsx` | Thread + drawer |
@@ -247,6 +248,7 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 10. **Never `require("@env")` at runtime** (not even inside `try/catch`). `react-native-dotenv` only rewrites `import` declarations. Metro 0.80 treats a `require` inside `try` as optional, drops the unresolvable dependency from the module's `_dependencyMap`, and keeps the baked indices, so a later `require()` in that file becomes `require(undefined)` → the Metro runtime reports it via `ErrorUtils.reportFatalError` → `RCTFatal` in Release. This killed TestFlight 1.2 (3)–(6) on the first `loadLlmConfig()` (chat send, Profile → Companion AI). Maxwell had already hit it in `0cbd091` and worked around it in `5cd2912`; PR #5 reintroduced it. Use `import { LLM_API_KEY } from "@env"`; `__tests__/metro-release-bundle.test.ts` guards every project module.
 11. **Release JS errors are process kills.** An uncaught JS exception in a Release IPA is `RCTFatal` → `abort()`, indistinguishable from a native crash on the phone. `src/services/crash-guard.tsx` (installed in `index.js`, boundary + banner in `App.tsx`) now keeps the process alive and shows the message; if a build still quits with no banner, the cause is native and needs the Xcode Organizer log.
 12. **Check stacked PR branches actually contain the fixes you think they do.** `cursor/persist-kink-favorites-b118` (#19) was cut from an older #6 commit and never had `e9cb6f1` (TtsHost WKWebView removal), #12 (avatar WKWebView only for a focused slot) or #17. `git merge-base --is-ancestor <fix-sha> HEAD` before building a TestFlight from a stack tip.
+13. **Regenerate is a property of one message row, not a list footer.** Message thread used to render **Regenerate** at the bottom of the `ScrollView` whenever *any* bot bubble existed (`lastThem && !typing`). Once replies became real Ark round trips (`3389cd6`), that footer sat under the user's own bubble for the whole wait and after a failed send. The store now counts in-flight replies per thread (`replyPending`), and `src/screens/chat/regenerate.ts` decides the only row that may carry the control: the final bubble, from `them`, non-empty, non-voice, answering an earlier user message, with nothing pending. Love chat has no Regenerate at all; keep it that way unless it follows the same rule. `__tests__/chat-regenerate-gate.test.tsx` and `__tests__/love-chat-reply-rows.test.tsx` fail if the control returns to a pending / user / empty / greeting-only row.
 
 ---
 

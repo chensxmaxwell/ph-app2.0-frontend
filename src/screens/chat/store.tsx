@@ -16,6 +16,7 @@ import {
 import { seedDirectory, seedThreads } from "../../backend/chat-seed";
 import { getCurrentUserId, subscribeSessionUser } from "../../backend/session";
 import { loadChat, saveChat } from "../../backend/store";
+import { regenerateTargetId } from "./regenerate";
 import {
   ChatBubble,
   ChatThread,
@@ -72,6 +73,8 @@ type ChatContextValue = {
   }) => void;
   humanLimitReached: (thread: ChatThread) => boolean;
   chatNotice: (threadId: string) => string | undefined;
+  /** True while a send / voice / regenerate request is waiting on Ark. */
+  replyPending: (threadId: string) => boolean;
 };
 
 
@@ -190,9 +193,40 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const [inCallThreadId, setInCallThreadId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [chatNotices, setChatNotices] = useState<Record<string, string>>({});
+  // Count of companion replies still in flight per thread. The ref mirrors the
+  // state so a tap can be refused in the same frame it was started.
+  const [pendingReplies, setPendingReplies] = useState<Record<string, number>>(
+    {}
+  );
+  const pendingRepliesRef = useRef<Record<string, number>>({});
 
   const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userIdRef = useRef<string | null>(null);
+
+  const resetPendingReplies = useCallback(() => {
+    pendingRepliesRef.current = {};
+    setPendingReplies({});
+  }, []);
+
+  const adjustPendingReply = useCallback((threadId: string, delta: 1 | -1) => {
+    const count = Math.max(
+      0,
+      (pendingRepliesRef.current[threadId] ?? 0) + delta
+    );
+    const next = { ...pendingRepliesRef.current };
+    if (count === 0) {
+      delete next[threadId];
+    } else {
+      next[threadId] = count;
+    }
+    pendingRepliesRef.current = next;
+    setPendingReplies(next);
+  }, []);
+
+  const isReplyPending = useCallback(
+    (threadId: string) => (pendingRepliesRef.current[threadId] ?? 0) > 0,
+    []
+  );
 
   useEffect(() => {
     const unsubscribe = subscribeSessionUser((user) => {
@@ -203,6 +237,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       }
       userIdRef.current = nextId;
       setHydrated(false);
+      resetPendingReplies();
       if (!nextId) {
         setThreads(seedThreads());
         setIsPremium(false);
@@ -240,7 +275,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         clearTimeout(persistTimer.current);
       }
     };
-  }, []);
+  }, [resetPendingReplies]);
 
   useEffect(() => {
     if (!hydrated || !userIdRef.current) {
@@ -386,20 +421,33 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       input: Parameters<typeof completeCompanionChat>[0],
       onSuccess: (text: string) => void
     ) => {
+      // A reply that lands after the account changed belongs to the old
+      // session: drop it instead of appending it to whoever is signed in now.
+      const requestUserId = userIdRef.current;
+      const stillCurrent = () => userIdRef.current === requestUserId;
       clearChatNotice(threadId);
+      adjustPendingReply(threadId, 1);
       completeCompanionChat(input)
         .then((text) => {
+          if (!stillCurrent()) {
+            return;
+          }
           clearChatNotice(threadId);
           onSuccess(text);
+          adjustPendingReply(threadId, -1);
         })
         .catch((error) => {
+          if (!stillCurrent()) {
+            return;
+          }
           setChatNotices((current) => ({
             ...current,
             [threadId]: companionChatErrorMessage(error),
           }));
+          adjustPendingReply(threadId, -1);
         });
     },
-    [clearChatNotice]
+    [adjustPendingReply, clearChatNotice]
   );
 
   const sendText = useCallback(
@@ -514,24 +562,29 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       if (!thread || (thread.kind !== "bot" && thread.request !== "accepted")) {
         return;
       }
-      const lastThem = [...thread.messages]
-        .reverse()
-        .find((item) => item.from === "them");
-      const lastMine = [...thread.messages]
+      // Same rule the thread row uses to show the control: only the final,
+      // finished companion reply can be regenerated, and never while another
+      // reply is in flight (a double tap, or a send still waiting on Ark).
+      const targetId = regenerateTargetId(
+        thread.messages,
+        isReplyPending(threadId)
+      );
+      if (!targetId) {
+        return;
+      }
+      const earlier = thread.messages.slice(0, -1);
+      const lastMine = [...earlier]
         .reverse()
         .find((item) => item.from === "me");
       if (!lastMine) {
         return;
       }
-      const history = lastThem
-        ? thread.messages.filter((item) => item.id !== lastThem.id)
-        : thread.messages;
       requestBotReply(
         threadId,
         {
           name: thread.name,
           userText: lastMine.text,
-          history: history.map((item) => ({
+          history: earlier.map((item) => ({
             from: item.from,
             text: item.text,
           })),
@@ -539,26 +592,27 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
           story: thread.description,
         },
         (text) => {
-          if (!lastThem) {
-            replyTo(threadId, text);
-            return;
-          }
           updateThread(threadId, (current) => ({
             ...current,
             preview: text,
             messages: current.messages.map((item) =>
-              item.id === lastThem.id ? { ...item, text } : item
+              item.id === targetId ? { ...item, text } : item
             ),
           }));
         }
       );
     },
-    [replyTo, requestBotReply, threads, updateThread]
+    [isReplyPending, requestBotReply, threads, updateThread]
   );
 
   const chatNotice = useCallback(
     (threadId: string) => chatNotices[threadId],
     [chatNotices]
+  );
+
+  const replyPending = useCallback(
+    (threadId: string) => (pendingReplies[threadId] ?? 0) > 0,
+    [pendingReplies]
   );
 
   const setRequest = useCallback(
@@ -810,6 +864,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       upsertCompanionThread,
       humanLimitReached,
       chatNotice,
+      replyPending,
     }),
     [
       cancelFriendRequest,
@@ -824,6 +879,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       inCallThreadId,
       isPremium,
       regenerate,
+      replyPending,
       sendFriendRequest,
       sendText,
       sendVoice,
