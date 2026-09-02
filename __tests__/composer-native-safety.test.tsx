@@ -67,14 +67,11 @@ const renderPreview = () => {
     tree = renderer.create(
       <AvatarPreview look={DEFAULT_LOOK} width={200} height={400} />,
       {
-        createNodeMock: (element) =>
-          element.props.collapsable === false
-            ? {
-                measureInWindow: (callback: MeasureCallback) => {
-                  pendingMeasure = callback;
-                },
-              }
-            : {},
+        createNodeMock: () => ({
+          measureInWindow: (callback: MeasureCallback) => {
+            pendingMeasure = callback;
+          },
+        }),
       }
     );
   });
