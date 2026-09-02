@@ -19,8 +19,7 @@ jest.mock("react-native-webview", () => ({
 }));
 
 jest.mock("../src/native/ph-native", () => ({
-  bundledAvatarViewerUrl: () =>
-    "file:///avatar-engine/viewer-page.html",
+  bundledAvatarViewerUrl: () => "file:///avatar-engine/viewer-page.html",
 }));
 
 const MESSAGE_SLOT_ID = 9001;
