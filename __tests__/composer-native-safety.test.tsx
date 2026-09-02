@@ -35,7 +35,7 @@ const slot = {
 };
 
 const mountedWebViews = (tree: ReactTestRenderer): ReactTestInstance[] =>
-  tree.root.findAll((node) => node.type === "MockWebView");
+  tree.root.findAll((node) => String(node.type) === "MockWebView");
 
 const trees: ReactTestRenderer[] = [];
 
