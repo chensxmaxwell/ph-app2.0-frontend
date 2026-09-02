@@ -7,11 +7,7 @@ import { SCREENS } from "@common/constant";
 import { useWizardChrome } from "./chrome";
 import { AvatarDraft, lookFromDraft, useAvatarWizard } from "./context";
 import { useSaveAndExit } from "./use-save-companion";
-import {
-  EYE_COLORS,
-  HAIR_COLORS,
-  SKIN_COLORS,
-} from "./engine/viewer-html";
+import { EYE_COLORS, HAIR_COLORS, SKIN_COLORS } from "./engine/viewer-html";
 import { FittedAvatarPreview } from "./engine/AvatarPreview";
 import { HairStyleIcon, toHairStyle } from "./hair-style-icon";
 import { s } from "./scale";
@@ -162,9 +158,16 @@ export const AvatarCustomizeScreen = () => {
                   <TouchableOpacity
                     key={style}
                     onPress={() => patchDraft({ hairStyle: style })}
-                    style={[styles.styleChip, selected && styles.styleChipSelected]}
+                    style={[
+                      styles.styleChip,
+                      selected && styles.styleChipSelected,
+                    ]}
                   >
-                    <HairStyleIcon style={style} color={hairColor} size={s(28)} />
+                    <HairStyleIcon
+                      style={style}
+                      color={hairColor}
+                      size={s(28)}
+                    />
                   </TouchableOpacity>
                 );
               })}

@@ -17,7 +17,10 @@ const viewerCopies = [
 ];
 
 const viewerHtml = () =>
-  readFileSync(join(__dirname, "../assets/avatar-engine/viewer-page.html"), "utf8");
+  readFileSync(
+    join(__dirname, "../assets/avatar-engine/viewer-page.html"),
+    "utf8"
+  );
 
 const customizeSource = readFileSync(
   join(__dirname, "../src/screens/avatar/customize.tsx"),
@@ -62,9 +65,9 @@ describe("捏人 camera framing", () => {
 
   it("does not treat the BoZo bind-pose pancake as standing height", () => {
     // Unskinned Outfit/Head verts * root (scale 0.01, rotX 90°) from bozo-male.glb
-    expect(
-      usableStandingHeight({ x: 0.009, y: 0.003, z: 0.018 })
-    ).toBe(FALLBACK_STANDING_HEIGHT);
+    expect(usableStandingHeight({ x: 0.009, y: 0.003, z: 0.018 })).toBe(
+      FALLBACK_STANDING_HEIGHT
+    );
     expect(usableStandingHeight({ x: 0.5, y: 1.82, z: 0.3 })).toBeCloseTo(1.82);
   });
 
@@ -96,7 +99,9 @@ describe("捏人 viewer HTML", () => {
 
   it("reframes after look changes and WebView resize", () => {
     const html = viewerHtml();
-    expect(html).toMatch(/frameCamera\(look\.viewMode === "bust" \? "bust" : "full"\)/);
+    expect(html).toMatch(
+      /frameCamera\(look\.viewMode === "bust" \? "bust" : "full"\)/
+    );
     expect(html).toMatch(/resize\(\);\s*frameCamera/);
   });
 
@@ -138,8 +143,6 @@ describe("捏人 customize steps", () => {
         new RegExp(`case "${category}":[\\s\\S]*?return "bust"`)
       );
     });
-    expect(customizeSource).toContain(
-      "viewMode={previewViewMode(category)}"
-    );
+    expect(customizeSource).toContain("viewMode={previewViewMode(category)}");
   });
 });
