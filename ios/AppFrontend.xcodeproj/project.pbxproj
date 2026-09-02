@@ -554,6 +554,10 @@
 					"$(inherited)",
 					"-ObjC",
 					"-lc++",
+					"-framework",
+					"Speech",
+					"-framework",
+					"AVFoundation",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "org.reactjs.native.pleasurehouse.--PLEASUREHOUSE2-rfc1034identifier-";
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = org.reactjs.native.pleasurehouse.2.2;
@@ -585,6 +589,10 @@
 					"$(inherited)",
 					"-ObjC",
 					"-lc++",
+					"-framework",
+					"Speech",
+					"-framework",
+					"AVFoundation",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "org.reactjs.native.pleasurehouse.--PLEASUREHOUSE2-rfc1034identifier-";
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = org.reactjs.native.pleasurehouse.2.2;
