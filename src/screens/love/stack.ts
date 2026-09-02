@@ -82,3 +82,23 @@ export const stackForLoveLayer = ({
   }
   return withChat;
 };
+
+export const stackForRestoredLoveLayer = ({
+  routes,
+  layer,
+  params,
+}: {
+  routes: LoveStackRoute[];
+  layer: LoveLayer | null;
+  params?: LoveLayerParams;
+}): LoveStackRoute[] =>
+  stackForLoveLayer({
+    routes,
+    layer,
+    params,
+    surface: routes.some((route) =>
+      isMatchingChatThread(route, params?.companionId)
+    )
+      ? "message"
+      : "love",
+  });
