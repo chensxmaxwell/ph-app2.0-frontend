@@ -6,13 +6,12 @@ import {
   useNavigation,
 } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
-import { SCREENS } from "@common/constant";
 import { lookFromCompanion, useCompanions } from "../../store/companions";
 import { useChat } from "../chat/store";
 import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
 import { faceSourceForId } from "../chat/faces";
-import { dismissLoveOverlays, getHomeStackNavigation, restoreLoveOverlays } from "./overlay";
+import { applyLoveLayer, getHomeStackNavigation, restoreLoveOverlays } from "./overlay";
 import {
   LovePersonParams,
   loveMessagesFromThread,
@@ -49,7 +48,12 @@ export const useOpenLove = () => {
     const nav =
       getHomeStackNavigation() ?? (navigation as NavigationProp<ParamListBase>);
 
-    if (minimized && !switching && (!requestedId || requestedId === companionId)) {
+    if (
+      minimized &&
+      !switching &&
+      !params?.syncing &&
+      (!requestedId || requestedId === companionId)
+    ) {
       restore();
       restoreLoveOverlays(nav, layer, person.companionId, person.name);
       return;
@@ -72,17 +76,11 @@ export const useOpenLove = () => {
       fromCreation: params?.fromCreation,
       syncing: params?.syncing,
     };
-    if (switching) {
-      dismissLoveOverlays(nav, {
-        name: SCREENS.LOVE_CHAT,
-        params: overlayParams,
-      });
-    } else {
-      nav.navigate(SCREENS.LOVE_CHAT as never, overlayParams as never);
-    }
-    if (params?.syncing) {
-      nav.navigate(SCREENS.LOVE_SYNC as never, overlayParams as never);
-    }
+    applyLoveLayer(nav, {
+      layer: params?.syncing ? "sync" : "chat",
+      params: overlayParams,
+      surface: params?.fromMessage && params.syncing ? "message" : "love",
+    });
   };
 };
 
