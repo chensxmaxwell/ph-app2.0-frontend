@@ -247,13 +247,16 @@ describe("Love session persist and restore", () => {
   };
 
   it("records the entry surface and keeps it while session layers change", () => {
-    const tree = renderer.create(
-      React.createElement(
-        LoveSessionProvider,
-        null,
-        React.createElement(SurfaceProbe)
-      )
-    );
+    let tree: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(
+        React.createElement(
+          LoveSessionProvider,
+          null,
+          React.createElement(SurfaceProbe)
+        )
+      );
+    });
     expect(tree.root.findByType(Text).props.children).toBe("love");
 
     act(() => {
@@ -265,6 +268,10 @@ describe("Love session persist and restore", () => {
       tree.root.findByType(Text).props.onLongPress();
     });
     expect(tree.root.findByType(Text).props.children).toBe("message");
+
+    act(() => {
+      tree.unmount();
+    });
   });
 
   it("hydrates LoveSessionProvider from boot before the first paint", async () => {
