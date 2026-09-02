@@ -16,6 +16,10 @@ const chadThread = {
   name: String(SCREENS.CHAT_THREAD),
   params: { threadId: "chad" },
 };
+const kevinSettings = {
+  name: String(SCREENS.CHAT_SETTINGS),
+  params: { threadId: "kevin" },
+};
 const loveChat = {
   name: String(SCREENS.LOVE_CHAT),
   params: { companionId: "kevin", name: "Kevin" },
@@ -142,6 +146,7 @@ describe("stackForRestoredLoveLayer", () => {
       routes: [navBar, kevinThread],
       layer: "sync",
       params: kevin,
+      surface: "message",
     });
     expect(names(routes)).toEqual([
       String(SCREENS.NAV_BAR),
@@ -157,17 +162,47 @@ describe("stackForRestoredLoveLayer", () => {
     );
   });
 
-  it("restores Love Sync onto Love chat when no matching thread remains", () => {
+  it("keeps an explicitly Love-origin restore on Love chat", () => {
     const routes = stackForRestoredLoveLayer({
-      routes: [navBar],
+      routes: [navBar, kevinThread],
       layer: "sync",
       params: kevin,
+      surface: "love",
     });
     expect(names(routes)).toEqual([
       String(SCREENS.NAV_BAR),
       String(SCREENS.LOVE_CHAT),
       String(SCREENS.LOVE_SYNC),
     ]);
+  });
+
+  it("drops routes above the original Message thread before restoring Sync", () => {
+    const routes = stackForRestoredLoveLayer({
+      routes: [navBar, kevinThread, kevinSettings],
+      layer: "sync",
+      params: kevin,
+      surface: "message",
+    });
+    expect(names(routes)).toEqual([
+      String(SCREENS.NAV_BAR),
+      String(SCREENS.CHAT_THREAD),
+      String(SCREENS.LOVE_SYNC),
+    ]);
+  });
+
+  it("recreates the original Message thread when its route is gone", () => {
+    const routes = stackForRestoredLoveLayer({
+      routes: [navBar],
+      layer: "sync",
+      params: kevin,
+      surface: "message",
+    });
+    expect(names(routes)).toEqual([
+      String(SCREENS.NAV_BAR),
+      String(SCREENS.CHAT_THREAD),
+      String(SCREENS.LOVE_SYNC),
+    ]);
+    expect(routes[1]).toEqual(kevinThread);
   });
 });
 
@@ -191,9 +226,13 @@ describe("Sync entry wiring", () => {
     expect(loveChatSource).not.toContain("SCREENS.LOVE_SYNC as never");
   });
 
-  it("restores on the current chat surface and clears Message sync on hang-up", () => {
+  it("restores on the recorded chat surface and clears Message sync on hang-up", () => {
     const overlaySource = readFileSync(
       join(__dirname, "../src/screens/love/overlay.ts"),
+      "utf8"
+    );
+    const pillSource = readFileSync(
+      join(__dirname, "../src/screens/love/pill.tsx"),
       "utf8"
     );
     const syncSource = readFileSync(
@@ -201,6 +240,8 @@ describe("Sync entry wiring", () => {
       "utf8"
     );
     expect(overlaySource).toContain("stackForRestoredLoveLayer");
+    expect(overlaySource).toContain("surface: LoveStackSurface");
+    expect(pillSource).toContain("chat, restore, surface");
     expect(syncSource).toContain("setSynced(partnerId, false)");
   });
 });

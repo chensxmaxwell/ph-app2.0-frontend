@@ -31,6 +31,7 @@ const kevinSession = (
   companionId: "kevin",
   layer: "chat",
   minimized: true,
+  surface: "message",
   chat: {
     companionId: "kevin",
     name: "Kevin",
@@ -85,6 +86,7 @@ describe("Love session persist and restore", () => {
     expect(restored.chat?.name).toBe("Kevin");
     expect(restored.syncStartedAt).toBe(1700000000000);
     expect(restored.minimized).toBe(true);
+    expect(restored.surface).toBe("message");
     expect(showsSessionLovePill(restored)).toBe(true);
   });
 
@@ -100,6 +102,7 @@ describe("Love session persist and restore", () => {
       companionId: "kevin",
       layer: "chat",
       minimized: true,
+      surface: "message",
       callStartedAt: 10,
       syncStartedAt: "nope",
       chat: {
@@ -116,6 +119,7 @@ describe("Love session persist and restore", () => {
       companionId: "kevin",
       layer: "chat",
       minimized: true,
+      surface: "message",
       callStartedAt: 10,
       syncStartedAt: null,
     });
@@ -123,6 +127,10 @@ describe("Love session persist and restore", () => {
       { kind: "bubble", id: "ok", from: "me", text: "hi" },
       { kind: "sync", id: "s1" },
     ]);
+  });
+
+  it("defaults sessions saved before surface tracking to Love", () => {
+    expect(parsePersistedLoveSession({ layer: "sync" })?.surface).toBe("love");
   });
 
   it("survives kill and relaunch for the same on-device account", async () => {
