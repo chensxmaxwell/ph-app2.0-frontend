@@ -34,7 +34,11 @@ export const AvatarAppearanceScreen = () => {
           This changes the 3D outfit only — not chat persona, hair, skin, or
           body.
         </StepNote>
-        <FittedAvatarPreview look={lookFromDraft(draft)} aspect={226 / 489} />
+        <FittedAvatarPreview
+          look={lookFromDraft(draft)}
+          aspect={226 / 489}
+          viewMode="full"
+        />
         <Text style={styles.outfitLabel}>Outfit</Text>
         <Text style={styles.outfitHint}>
           Changes clothes only. Hair, skin, and body stay as you set them.
