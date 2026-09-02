@@ -8,8 +8,8 @@ const project = fs.readFileSync(
 );
 
 describe("next TestFlight release", () => {
-  it("identifies the kink-heart persist build as 1.2 (7)", () => {
+  it("identifies the kink-heart persist build as 1.2 (8)", () => {
     expect(project.match(/MARKETING_VERSION = 1\.2;/g)).toHaveLength(2);
-    expect(project.match(/CURRENT_PROJECT_VERSION = 7;/g)).toHaveLength(2);
+    expect(project.match(/CURRENT_PROJECT_VERSION = 8;/g)).toHaveLength(2);
   });
 });
