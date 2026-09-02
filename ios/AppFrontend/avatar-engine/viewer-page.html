@@ -47,7 +47,10 @@
   var headRests = [];
   var armBones = [];
   var armRests = [];
-  var modelHeight = 1.75;
+  var masterBones = {};
+  var FALLBACK_HEIGHT = 1.75;
+  var MIN_PLAUSIBLE_HEIGHT = 1.2;
+  var modelHeight = FALLBACK_HEIGHT;
   var pendingLook = null;
   var ready = false;
   var clock = 0;
@@ -138,17 +141,19 @@
     return isNaN(parsed) ? -1 : parsed;
   }
 
+  // Skin parts (Body_<Part> meshes) that each outfit leaves uncovered. Derived
+  // from the bones each garment is skinned to in bozo-male.glb:
+  //   0 Shirt (short sleeve, ends at upperarm_twist_02) + Jeans + SportsShoes
+  //   1 CasualJacket (sleeve reaches hand_l/r) + CargoPants + WorkBoots
+  //   2 Hoodie (cuff reaches hand + thumb_01) + BaggyPants + StreetShoes
+  //   3 TankTop (clavicle/upperarm root only) + DressPants + ComfyShoes
+  // Hands must be listed for every outfit or the character has no hands.
   var SKIN_BY_OUTFIT = {
-    0: { Neck: 1 },
-    1: { Neck: 1 },
-    2: { Neck: 1 },
-    3: { Neck: 1 }
+    0: { Hand: 1, Wrist: 1, LowerArm: 1, UpperArm: 1, Neck: 1 },
+    1: { Hand: 1, Neck: 1 },
+    2: { Hand: 1, Neck: 1 },
+    3: { Hand: 1, Wrist: 1, LowerArm: 1, UpperArm: 1, Shoulder: 1, Neck: 1 }
   };
-  var _bodyBox = new THREE.Box3();
-  var _bodySize = new THREE.Vector3();
-  var _bodyCenter = new THREE.Vector3();
-  var _torsoCenter = new THREE.Vector3();
-  var _unionSize = new THREE.Vector3();
 
   function bodyPart(name) {
     if (!name || name.indexOf("Body_") !== 0) return "";
@@ -160,116 +165,178 @@
     return !!allowed[bodyPart(name)];
   }
 
-  function meshWorldBox(obj, outBox) {
-    if (obj.geometry) {
-      if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
-      if (obj.geometry.boundingBox) {
-        outBox.copy(obj.geometry.boundingBox);
-        outBox.applyMatrix4(obj.matrixWorld);
-        return outBox;
-      }
-    }
-    outBox.setFromObject(obj);
-    return outBox;
+  function isFigureMesh(name) {
+    return (
+      name.indexOf("Body_") === 0 ||
+      name.indexOf("Head_") === 0 ||
+      name.indexOf("Eyes_") === 0 ||
+      name.indexOf("Outfit_") === 0 ||
+      name.indexOf("Hair_") === 0
+    );
   }
 
-  function isLikelyHandByBounds(box, torsoCenter, bodyHeight) {
-    box.getSize(_bodySize);
-    box.getCenter(_bodyCenter);
-    var maxDim = Math.max(_bodySize.x, _bodySize.y, _bodySize.z);
-    var dx = _bodyCenter.x - torsoCenter.x;
-    var dz = _bodyCenter.z - torsoCenter.z;
-    var away = Math.sqrt(dx * dx + dz * dz);
-    var small = maxDim < bodyHeight * 0.22;
-    var offTorso = away > bodyHeight * 0.14;
-    return small && offTorso;
+  var _sample = new THREE.Vector3();
+
+  // World-space point of vertex `index`. Skinned vertices must go through the
+  // skeleton: bozo-male.glb stores them in armature space and the armature
+  // node carries a 90deg + 0.01 transform, so position * matrixWorld lays the
+  // figure on its side at centimetre scale (Y extent ~0.003).
+  function sampleMeshPoint(obj, index, target) {
+    if (obj.isSkinnedMesh && typeof obj.boneTransform === "function") {
+      obj.boneTransform(index, target);
+      return obj.localToWorld(target);
+    }
+    target.fromBufferAttribute(obj.geometry.attributes.position, index);
+    return obj.localToWorld(target);
+  }
+
+  function measureFigureBox(box, filter, includeHidden) {
+    box.makeEmpty();
+    if (!modelRoot) return box;
+    modelRoot.updateMatrixWorld(true);
+    modelRoot.traverse(function (obj) {
+      if (!obj.isMesh || !obj.geometry || !obj.geometry.attributes.position) return;
+      if (!obj.visible && !includeHidden) return;
+      var name = obj.name || "";
+      if (!isFigureMesh(name)) return;
+      if (filter && !filter(name)) return;
+      var pos = obj.geometry.attributes.position;
+      var stride = Math.max(1, Math.floor(pos.count / 400));
+      var i;
+      for (i = 0; i < pos.count; i += stride) {
+        box.expandByPoint(sampleMeshPoint(obj, i, _sample));
+      }
+    });
+    return box;
+  }
+
+  function placeFigure() {
+    // Measure in the rest pose so grounding/centering does not drift per outfit.
+    resetArmBones();
+    var box = measureFigureBox(new THREE.Box3());
+    if (box.isEmpty()) {
+      box.setFromObject(modelRoot);
+    }
+    var size = box.getSize(new THREE.Vector3());
+    var center = box.getCenter(new THREE.Vector3());
+    modelHeight = figureHeight(size.y);
+    if (modelHeight === size.y) {
+      modelRoot.position.x -= center.x;
+      modelRoot.position.z -= center.z;
+      modelRoot.position.y -= box.min.y;
+    }
+    modelRestY = modelRoot.position.y;
+  }
+
+  // A measured height below MIN_PLAUSIBLE_HEIGHT means the box did not come
+  // from the skinned figure (e.g. raw positions); frame a nominal adult instead
+  // of zooming the camera onto the shins.
+  function figureHeight(measuredY) {
+    if (typeof measuredY === "number" && measuredY >= MIN_PLAUSIBLE_HEIGHT) return measuredY;
+    return FALLBACK_HEIGHT;
+  }
+
+  // GLTFLoader renames duplicate nodes (hand_l, hand_l_1, hand_l_2...); the
+  // glTF name survives in userData.name.
+  function rigName(obj) {
+    return (obj && ((obj.userData && obj.userData.name) || obj.name)) || "";
+  }
+
+  // The GLB carries one armature per imported kit piece (23 copies of the same
+  // bone names). Three of the hair rigs (Hair_0_0_0, Hair_1_1_0, Hair_3_1_0)
+  // were exported with a displaced pelvis, so their meshes rendered 1.4m off
+  // the body. Drive every mesh from one master skeleton, matched by bone name;
+  // hair-only bones (HairFront, Hair_Back...) are re-attached under the master
+  // head so they follow it.
+  function retargetSkeletons(root) {
+    var armatures = [];
+    root.traverse(function (obj) {
+      if (obj.isBone && obj.parent && !obj.parent.isBone) armatures.push(obj);
+    });
+    var best = null;
+    armatures.forEach(function (arm) {
+      var count = 0;
+      arm.traverse(function (b) { if (b.isBone) count += 1; });
+      if (!best || count > best.count) best = { bone: arm, count: count };
+    });
+    masterBones = {};
+    if (!best) return;
+    best.bone.traverse(function (b) {
+      var key = rigName(b);
+      if (b.isBone && !masterBones[key]) masterBones[key] = b;
+    });
+    root.updateMatrixWorld(true);
+    var meshes = [];
+    root.traverse(function (obj) {
+      if (obj.isSkinnedMesh && obj.skeleton) meshes.push(obj);
+    });
+    meshes.forEach(function (mesh) {
+      var bones = mesh.skeleton.bones.map(function (bone) {
+        var master = masterBones[rigName(bone)];
+        if (master) return master;
+        var parent = bone.parent;
+        var masterParent = parent && parent.isBone ? masterBones[rigName(parent)] : null;
+        if (masterParent && parent !== masterParent) {
+          masterParent.attach(bone);
+        }
+        return bone;
+      });
+      mesh.bind(new THREE.Skeleton(bones, mesh.skeleton.boneInverses), mesh.bindMatrix);
+    });
+    root.updateMatrixWorld(true);
+  }
+
+  // Which figure meshes a look draws. Hair_<i>_* / Outfit_<i>_* follow the
+  // selected indices; Head_* and Eyes_* are always on (Eyes_0 is the eyeball
+  // mesh with the MAT_Iris shader - hiding it leaves empty sockets); Body_*
+  // skin parts show only where the outfit leaves skin uncovered, or when the
+  // Body sliders reveal the body through faded clothes.
+  function figureMeshVisible(name, next) {
+    if (name.indexOf("Icosphere") === 0) return false;
+    var hairIdx = prefixIndex(name, "Hair_");
+    if (hairIdx >= 0) return hairIdx === (next.hairStyle | 0);
+    var outfitIdx = prefixIndex(name, "Outfit_");
+    if (outfitIdx >= 0) return outfitIdx === (next.appearanceIndex | 0);
+    if (name.indexOf("Head_") === 0 || name.indexOf("Eyes_") === 0) return true;
+    if (name.indexOf("Body_") === 0) {
+      return !!next.revealBody || nameHasExposedSkin(name, next.appearanceIndex | 0);
+    }
+    return true;
+  }
+
+  function applyOutfitFade(obj, faded) {
+    materialsOf(obj).forEach(function (mat) {
+      if (!mat || typeof mat !== "object") return;
+      if (!mat._phOrig) {
+        mat._phOrig = {
+          transparent: !!mat.transparent,
+          opacity: typeof mat.opacity === "number" ? mat.opacity : 1,
+          depthWrite: mat.depthWrite !== false
+        };
+      }
+      if (faded) {
+        mat.transparent = true;
+        mat.opacity = 0.22;
+        mat.depthWrite = false;
+      } else {
+        mat.transparent = mat._phOrig.transparent;
+        mat.opacity = mat._phOrig.opacity;
+        mat.depthWrite = mat._phOrig.depthWrite;
+      }
+      mat.needsUpdate = true;
+    });
   }
 
   function applyVisibility(next) {
     if (!modelRoot) return;
-    var hair = next.hairStyle | 0;
-    var outfit = next.appearanceIndex | 0;
-    var bodyMeshes = [];
-    modelRoot.updateMatrixWorld(true);
     modelRoot.traverse(function (obj) {
       if (!obj.isMesh) return;
       var name = obj.name || "";
-      if (name.indexOf("Icosphere") === 0) {
-        obj.visible = false;
-        return;
+      obj.visible = figureMeshVisible(name, next);
+      if (prefixIndex(name, "Outfit_") >= 0) {
+        applyOutfitFade(obj, !!next.revealBody && obj.visible);
       }
-      var hairIdx = prefixIndex(name, "Hair_");
-      if (hairIdx >= 0) {
-        obj.visible = hairIdx === hair;
-        obj.scale.set(1, 1, 1);
-        return;
-      }
-      var outfitIdx = prefixIndex(name, "Outfit_");
-      if (outfitIdx >= 0) {
-        obj.visible = outfitIdx === outfit;
-        obj.scale.set(1, 1, 1);
-        materialsOf(obj).forEach(function (mat) {
-          if (!mat || typeof mat !== "object") return;
-          if (!mat._phOrig) {
-            mat._phOrig = {
-              transparent: !!mat.transparent,
-              opacity: typeof mat.opacity === "number" ? mat.opacity : 1,
-              depthWrite: mat.depthWrite !== false
-            };
-          }
-          if (next.revealBody && obj.visible) {
-            mat.transparent = true;
-            mat.opacity = 0.22;
-            mat.depthWrite = false;
-          } else {
-            mat.transparent = mat._phOrig.transparent;
-            mat.opacity = mat._phOrig.opacity;
-            mat.depthWrite = mat._phOrig.depthWrite;
-          }
-          mat.needsUpdate = true;
-        });
-        return;
-      }
-      if (name.indexOf("Head_") === 0) {
-        obj.visible = true;
-        return;
-      }
-      if (name.indexOf("Eyes_") === 0) {
-        obj.visible = false;
-        return;
-      }
-      if (name.indexOf("Body_") === 0) {
-        bodyMeshes.push(obj);
-        return;
-      }
-      obj.visible = true;
     });
-
-    var union = new THREE.Box3();
-    bodyMeshes.forEach(function (obj) {
-      meshWorldBox(obj, _bodyBox);
-      union.union(_bodyBox);
-    });
-    var bodyHeight = 1.7;
-    if (!union.isEmpty()) {
-      union.getCenter(_torsoCenter);
-      union.getSize(_unionSize);
-      bodyHeight = Math.max(0.8, _unionSize.y);
-    }
-
-    bodyMeshes.forEach(function (obj) {
-      var name = obj.name || "";
-      if (next.revealBody) {
-        obj.visible = true;
-        return;
-      }
-      if (nameHasExposedSkin(name, outfit)) {
-        obj.visible = true;
-        return;
-      }
-      obj.visible = false;
-    });
-    applyOutfitPose(outfit);
   }
 
   function tintLook(next) {
@@ -413,6 +480,12 @@
     mat.envMapIntensity = 0.12;
     mat.morphTargets = true;
     mat.skinning = true;
+    // Head_0 carries a closed-eye cap that duplicates the eyeball's front
+    // surface; pull the eyeball forward in depth so the cap cannot z-fight
+    // skin speckles across the iris.
+    mat.polygonOffset = true;
+    mat.polygonOffsetFactor = -2;
+    mat.polygonOffsetUnits = -4;
     if (envMap) mat.envMap = envMap;
     mat.userData.irisColor = new THREE.Color(0x2e4d7a);
     mat.userData.irisSize = 1.0;
@@ -431,7 +504,7 @@
           "vec2 p = (vUv - c) / vec2(0.061, 0.061);",
           "float d = length(p);",
           "float irisR = 0.58 * irisSize;",
-          "float pupilR = 0.30 * irisSize;",
+          "float pupilR = 0.26 * irisSize;",
           "float irisM = 1.0 - smoothstep(irisR, irisR + 0.06, d);",
           "float pupilM = 1.0 - smoothstep(pupilR, pupilR + 0.035, d);",
           "vec3 scleraCol = vec3(0.98, 0.99, 1.0);",
@@ -472,18 +545,34 @@
   }
 
   var _poseParentQ = new THREE.Quaternion();
-  var _poseLocal = new THREE.Quaternion();
   var _poseWorld = new THREE.Quaternion();
   var _poseDelta = new THREE.Quaternion();
-  var _axisX = new THREE.Vector3(1, 0, 0);
-  var _axisY = new THREE.Vector3(0, 1, 0);
   var _axisZ = new THREE.Vector3(0, 0, 1);
+  var _ikS = new THREE.Vector3();
+  var _ikW = new THREE.Vector3();
+  var _ikE = new THREE.Vector3();
+  var _ikD = new THREE.Vector3();
+  var _ikP = new THREE.Vector3();
+  var _aimA = new THREE.Vector3();
+  var _aimB = new THREE.Vector3();
+  var _aimCur = new THREE.Vector3();
+  var _aimTgt = new THREE.Vector3();
 
-  function isRightBone(name) {
-    var n = (name || "").toLowerCase();
-    if (n.indexOf("_r") >= 0) return true;
-    if (n.indexOf("right") >= 0) return true;
-    return false;
+  // clavicle / upperarm / lowerarm / hand (not twist helpers, not fingers).
+  function isPoseArmBone(name) {
+    var bn = (name || "").toLowerCase();
+    if (bn.indexOf("twist") >= 0) return false;
+    if (bn.indexOf("upperarm") >= 0 || bn.indexOf("lowerarm") >= 0) return true;
+    if (bn.indexOf("clavicle") >= 0 || bn.indexOf("shoulder") >= 0) return true;
+    if (bn.indexOf("hand") < 0) return false;
+    return (
+      bn.indexOf("thumb") < 0 &&
+      bn.indexOf("index") < 0 &&
+      bn.indexOf("middle") < 0 &&
+      bn.indexOf("ring") < 0 &&
+      bn.indexOf("pinky") < 0 &&
+      bn.indexOf("metacarpal") < 0
+    );
   }
 
   function resetArmBones() {
@@ -494,66 +583,129 @@
     }
   }
 
-  function rotateBoneWorld(bone, axis, angle) {
-    if (!bone || !angle) return;
-    bone.updateMatrixWorld(true);
+  // Multiply the bone's world orientation by `delta` (a world-space rotation).
+  function rotateBoneWorldQ(bone, delta) {
+    if (!bone) return;
     if (bone.parent) {
-      bone.parent.updateMatrixWorld(true);
       bone.parent.getWorldQuaternion(_poseParentQ);
     } else {
       _poseParentQ.identity();
     }
-    _poseLocal.copy(bone.quaternion);
-    _poseWorld.copy(_poseParentQ).multiply(_poseLocal);
-    _poseDelta.setFromAxisAngle(axis, angle);
-    _poseDelta.multiply(_poseWorld);
+    _poseWorld.copy(_poseParentQ).multiply(bone.quaternion);
+    _poseWorld.premultiply(delta);
     _poseParentQ.invert();
-    bone.quaternion.copy(_poseParentQ).multiply(_poseDelta);
+    bone.quaternion.copy(_poseParentQ).multiply(_poseWorld);
+    bone.updateMatrixWorld(true);
   }
 
-  function poseBonesNamed(token, ops) {
-    var i, k;
-    for (i = 0; i < armBones.length; i++) {
-      var bone = armBones[i];
-      var n = (bone.name || "").toLowerCase();
-      if (n.indexOf(token) < 0) continue;
-      var right = isRightBone(bone.name);
-      for (k = 0; k < ops.length; k++) {
-        var ang = ops[k][1];
-        if (right && ops[k][2]) ang = -ang;
-        rotateBoneWorld(bone, ops[k][0], ang);
-      }
+  function rotateBoneWorld(bone, axis, angle) {
+    if (!bone || !angle) return;
+    _poseDelta.setFromAxisAngle(axis, angle);
+    rotateBoneWorldQ(bone, _poseDelta);
+  }
+
+  // Turn `bone` so the segment bone -> child points along `dir` (world space).
+  function aimBone(bone, child, dir) {
+    if (!bone || !child) return;
+    bone.getWorldPosition(_aimA);
+    child.getWorldPosition(_aimB);
+    _aimCur.subVectors(_aimB, _aimA);
+    if (_aimCur.lengthSq() < 1e-10) return;
+    _aimCur.normalize();
+    _aimTgt.set(dir[0], dir[1], dir[2]).normalize();
+    _poseDelta.setFromUnitVectors(_aimCur, _aimTgt);
+    rotateBoneWorldQ(bone, _poseDelta);
+  }
+
+  // Two-bone IK: elbow position for shoulder S, wrist target W, segment
+  // lengths L1/L2, with the elbow pushed toward `pole`.
+  function solveElbow(S, W, L1, L2, pole, out) {
+    _ikD.subVectors(W, S);
+    var dist = _ikD.length();
+    var maxReach = L1 + L2 - 0.005;
+    var minReach = Math.abs(L1 - L2) + 0.005;
+    dist = Math.max(minReach, Math.min(maxReach, dist));
+    _ikD.normalize();
+    var a = (L1 * L1 - L2 * L2 + dist * dist) / (2 * dist);
+    var h = Math.sqrt(Math.max(0, L1 * L1 - a * a));
+    _ikP.set(pole[0], pole[1], pole[2]);
+    _ikP.addScaledVector(_ikD, -_ikP.dot(_ikD));
+    if (_ikP.lengthSq() < 1e-8) {
+      _ikP.set(0, 0, -1);
+      _ikP.addScaledVector(_ikD, -_ikP.dot(_ikD));
+    }
+    _ikP.normalize();
+    out.copy(S).addScaledVector(_ikD, a).addScaledVector(_ikP, h);
+    return out;
+  }
+
+  function sideBone(base, side) {
+    return masterBones[base + "_" + side] || null;
+  }
+
+  // Pose one arm. `t` is authored for the LEFT side (+X = the character's
+  // left) as offsets from the shoulder joint; the right side mirrors X.
+  function poseArm(side, t) {
+    var upper = sideBone("upperarm", side);
+    var lower = sideBone("lowerarm", side);
+    var hand = sideBone("hand", side);
+    var finger = sideBone("middle_01", side) || sideBone("middle_metacarpal", side);
+    if (!upper || !lower || !hand) return;
+    var m = side === "r" ? -1 : 1;
+    if (t.clavicleLift && sideBone("clavicle", side)) {
+      rotateBoneWorld(sideBone("clavicle", side), _axisZ, m * t.clavicleLift);
+      upper.updateMatrixWorld(true);
+    }
+    upper.getWorldPosition(_ikS);
+    lower.getWorldPosition(_ikE);
+    var L1 = _ikE.distanceTo(_ikS);
+    hand.getWorldPosition(_ikW);
+    var L2 = _ikW.distanceTo(_ikE);
+    _ikW.set(_ikS.x + m * t.wrist[0], _ikS.y + t.wrist[1], _ikS.z + t.wrist[2]);
+    solveElbow(_ikS, _ikW, L1, L2, [m * t.pole[0], t.pole[1], t.pole[2]], _ikE);
+    aimBone(upper, lower, [_ikE.x - _ikS.x, _ikE.y - _ikS.y, _ikE.z - _ikS.z]);
+    lower.getWorldPosition(_ikE);
+    aimBone(lower, hand, [_ikW.x - _ikE.x, _ikW.y - _ikE.y, _ikW.z - _ikE.z]);
+    if (finger && t.hand) {
+      aimBone(hand, finger, [m * t.hand[0], t.hand[1], t.hand[2]]);
     }
   }
+
+  // Wrist offsets are metres from the shoulder joint on a 1.8m figure:
+  // +x outward, +y up, +z toward the camera. Rest is an A-pose with the
+  // wrist at about (+0.29, -0.37, +0.09).
+  var ARM_RELAXED = {
+    wrist: [0.10, -0.42, 0.09],
+    pole: [0.6, 0, -0.8],
+    hand: [0.05, -0.95, 0.3]
+  };
+  var OUTFIT_POSES = [
+    // 0 Shirt + jeans: relaxed, arms hanging beside the thighs.
+    { l: ARM_RELAXED, r: ARM_RELAXED },
+    // 1 Jacket: arms folded across the chest, right forearm over the left.
+    {
+      l: { wrist: [-0.11, -0.24, 0.23], pole: [0.55, -0.8, 0.25], hand: [-0.72, 0.22, -0.25] },
+      r: { wrist: [-0.10, -0.16, 0.29], pole: [0.55, -0.8, 0.25], hand: [-0.72, 0.18, -0.30] }
+    },
+    // 2 Hoodie: hands on hips, elbows out.
+    {
+      l: { wrist: [0.085, -0.35, 0.10], pole: [1, 0.15, -0.35], hand: [-0.3, -0.6, 0.74] },
+      r: { wrist: [0.085, -0.35, 0.10], pole: [1, 0.15, -0.35], hand: [-0.3, -0.6, 0.74] }
+    },
+    // 3 Tank top: left arm relaxed, right hand raised in a wave.
+    {
+      l: { wrist: [0.11, -0.41, 0.07], pole: [0.6, 0, -0.8], hand: [0.05, -0.95, 0.3] },
+      r: { wrist: [0.25, 0.12, 0.13], pole: [0.9, -0.45, 0], hand: [-0.1, 0.95, 0.25], clavicleLift: 0.1 }
+    }
+  ];
 
   function applyOutfitPose(outfitIndex) {
     if (!armBones.length) return;
     resetArmBones();
     if (modelRoot) modelRoot.updateMatrixWorld(true);
-    var idx = outfitIndex | 0;
-    if (idx === 0) {
-      poseBonesNamed("upperarm", [[_axisZ, -0.78, true], [_axisX, 0.08, false]]);
-      poseBonesNamed("lowerarm", [[_axisX, 0.22, false], [_axisZ, -0.08, true]]);
-      poseBonesNamed("hand", [[_axisX, 0.12, false]]);
-    } else if (idx === 1) {
-      poseBonesNamed("clavicle", [[_axisY, 0.18, true], [_axisX, 0.12, false]]);
-      poseBonesNamed("shoulder", [[_axisY, 0.18, true], [_axisX, 0.12, false]]);
-      poseBonesNamed("upperarm", [[_axisY, 0.62, true], [_axisX, 0.72, false], [_axisZ, -0.18, true]]);
-      poseBonesNamed("lowerarm", [[_axisX, 1.15, false], [_axisY, 0.28, true]]);
-      poseBonesNamed("hand", [[_axisY, 0.35, true], [_axisX, 0.25, false]]);
-    } else if (idx === 2) {
-      poseBonesNamed("clavicle", [[_axisY, -0.08, true], [_axisZ, 0.12, true]]);
-      poseBonesNamed("shoulder", [[_axisY, -0.08, true], [_axisZ, 0.12, true]]);
-      poseBonesNamed("upperarm", [[_axisZ, -0.55, true], [_axisX, -0.35, false], [_axisY, -0.22, true]]);
-      poseBonesNamed("lowerarm", [[_axisX, 1.15, false], [_axisY, -0.12, true]]);
-      poseBonesNamed("hand", [[_axisX, 0.45, false], [_axisZ, 0.35, true]]);
-    } else if (idx === 3) {
-      poseBonesNamed("clavicle", [[_axisY, 0.22, true], [_axisX, 0.1, false]]);
-      poseBonesNamed("shoulder", [[_axisY, 0.22, true], [_axisX, 0.1, false]]);
-      poseBonesNamed("upperarm", [[_axisY, 0.72, true], [_axisX, 0.55, false], [_axisZ, 0.12, true]]);
-      poseBonesNamed("lowerarm", [[_axisX, 1.28, false], [_axisY, 0.42, true], [_axisZ, 0.18, true]]);
-      poseBonesNamed("hand", [[_axisY, 0.45, true], [_axisX, 0.2, false]]);
-    }
+    var pose = OUTFIT_POSES[outfitIndex | 0] || OUTFIT_POSES[0];
+    poseArm("l", pose.l);
+    poseArm("r", pose.r || pose.l);
     if (modelRoot) modelRoot.updateMatrixWorld(true);
   }
 
@@ -669,33 +821,20 @@
       function (gltf) {
         try {
           modelRoot = gltf.scene;
-          modelRoot.traverse(function (obj) {
-            if (obj.isBone) {
-              var bn = (obj.name || "").toLowerCase();
-              if (obj.name === "head") {
-                headBones.push(obj);
-                headRests.push({
-                  x: obj.rotation.x,
-                  y: obj.rotation.y,
-                  z: obj.rotation.z
-                });
-              }
-              if (bn.indexOf("twist") < 0) {
-                var isArm =
-                  bn.indexOf("upperarm") >= 0 ||
-                  bn.indexOf("lowerarm") >= 0 ||
-                  bn.indexOf("clavicle") >= 0 ||
-                  bn.indexOf("shoulder") >= 0 ||
-                  (bn.indexOf("hand") >= 0 &&
-                    bn.indexOf("thumb") < 0 &&
-                    bn.indexOf("index") < 0 &&
-                    bn.indexOf("middle") < 0 &&
-                    bn.indexOf("ring") < 0 &&
-                    bn.indexOf("pinky") < 0 &&
-                    bn.indexOf("metacarpal") < 0);
-                if (isArm) armBones.push(obj);
-              }
+          retargetSkeletons(modelRoot);
+          Object.keys(masterBones).forEach(function (boneName) {
+            var bone = masterBones[boneName];
+            if (boneName === "head") {
+              headBones.push(bone);
+              headRests.push({
+                x: bone.rotation.x,
+                y: bone.rotation.y,
+                z: bone.rotation.z
+              });
             }
+            if (isPoseArmBone(boneName)) armBones.push(bone);
+          });
+          modelRoot.traverse(function (obj) {
             if (!obj.isMesh) return;
             obj.frustumCulled = !obj.isSkinnedMesh;
             var name = obj.name || "";
@@ -778,35 +917,8 @@
             };
           });
           applyVisibility(look);
-          var box = new THREE.Box3();
-          var sample = new THREE.Vector3();
-          modelRoot.updateMatrixWorld(true);
-          modelRoot.traverse(function (obj) {
-            if (!obj.isMesh || !obj.visible || !obj.geometry || !obj.geometry.attributes.position) return;
-            var n = obj.name || "";
-            if (n.indexOf("Body_") !== 0 && n.indexOf("Head_") !== 0 && n.indexOf("Eyes_") !== 0 && n.indexOf("Outfit_") !== 0) {
-              return;
-            }
-            var pos = obj.geometry.attributes.position;
-            var stride = Math.max(1, Math.floor(pos.count / 400));
-            var i;
-            for (i = 0; i < pos.count; i += stride) {
-              sample.fromBufferAttribute(pos, i);
-              sample.applyMatrix4(obj.matrixWorld);
-              box.expandByPoint(sample);
-            }
-          });
-          if (box.isEmpty()) {
-            box.setFromObject(modelRoot);
-          }
-          var size = box.getSize(new THREE.Vector3());
-          var center = box.getCenter(new THREE.Vector3());
-          modelRoot.position.x -= center.x;
-          modelRoot.position.z -= center.z;
-          modelRoot.position.y -= box.min.y;
-          modelRestY = modelRoot.position.y;
-          modelHeight = Math.max(0.8, size.y);
           scene.add(modelRoot);
+          placeFigure();
           ready = true;
           setStatus("");
           try {
@@ -827,6 +939,84 @@
     );
     }
   }
+
+  // Read-only probe for scripts/check-avatar-viewer.js and tests. Reports the
+  // rig state and the world-space boxes of the visible figure meshes.
+  function boxOf(box) {
+    if (!box || box.isEmpty()) return null;
+    return {
+      min: [box.min.x, box.min.y, box.min.z],
+      max: [box.max.x, box.max.y, box.max.z]
+    };
+  }
+
+  function boxToFrame(box) {
+    if (!box || !camera) return null;
+    var v = new THREE.Vector3();
+    var out = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    var i;
+    for (i = 0; i < 8; i++) {
+      v.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z);
+      v.project(camera);
+      out.minX = Math.min(out.minX, v.x);
+      out.maxX = Math.max(out.maxX, v.x);
+      out.minY = Math.min(out.minY, v.y);
+      out.maxY = Math.max(out.maxY, v.y);
+    }
+    return out;
+  }
+
+  window.phViewerState = function () {
+    var meshes = {};
+    var visible = [];
+    if (modelRoot) {
+      modelRoot.updateMatrixWorld(true);
+      modelRoot.traverse(function (obj) {
+        if (!obj.isMesh || !isFigureMesh(obj.name || "")) return;
+        var box = measureFigureBox(new THREE.Box3(), function (n) { return n === obj.name; }, true);
+        meshes[obj.name] = {
+          visible: !!obj.visible,
+          skinned: !!obj.isSkinnedMesh,
+          box: boxOf(box),
+          frame: obj.visible ? boxToFrame(box) : null
+        };
+        if (obj.visible) visible.push(obj.name);
+      });
+    }
+    var figure = measureFigureBox(new THREE.Box3());
+    return {
+      ready: ready,
+      look: look,
+      modelHeight: modelHeight,
+      masterBoneCount: Object.keys(masterBones).length,
+      armBoneCount: armBones.length,
+      armBones: armBones.map(function (b) { return rigName(b); }),
+      figure: boxOf(figure),
+      figureFrame: boxToFrame(figure),
+      camera: camera ? { fov: camera.fov, position: [camera.position.x, camera.position.y, camera.position.z] } : null,
+      visible: visible,
+      meshes: meshes
+    };
+  };
+
+  // Pure rig logic, exposed so __tests__/avatar-viewer-rig.test.ts can run
+  // this exact script under Node with the bundled three.min.js.
+  window.phViewerRig = {
+    SKIN_BY_OUTFIT: SKIN_BY_OUTFIT,
+    OUTFIT_POSES: OUTFIT_POSES,
+    MIN_PLAUSIBLE_HEIGHT: MIN_PLAUSIBLE_HEIGHT,
+    FALLBACK_HEIGHT: FALLBACK_HEIGHT,
+    figureMeshVisible: figureMeshVisible,
+    nameHasExposedSkin: nameHasExposedSkin,
+    isFigureMesh: isFigureMesh,
+    isPoseArmBone: isPoseArmBone,
+    figureHeight: figureHeight,
+    sampleMeshPoint: sampleMeshPoint,
+    rigName: rigName,
+    retargetSkeletons: retargetSkeletons,
+    masterBoneNames: function () { return Object.keys(masterBones); },
+    solveElbow: solveElbow
+  };
 
   window.applyLook = applyLook;
 })();
