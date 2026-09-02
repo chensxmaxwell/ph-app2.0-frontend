@@ -2,7 +2,10 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "@jest/globals";
 import { SCREENS } from "../src/common/constant";
-import { stackForLoveLayer } from "../src/screens/love/stack";
+import {
+  stackForLoveLayer,
+  stackForRestoredLoveLayer,
+} from "../src/screens/love/stack";
 
 const navBar = { name: String(SCREENS.NAV_BAR) };
 const kevinThread = {
@@ -133,6 +136,41 @@ describe("stackForLoveLayer", () => {
   });
 });
 
+describe("stackForRestoredLoveLayer", () => {
+  it("restores Message Sync above the same thread so hang-up returns there", () => {
+    const routes = stackForRestoredLoveLayer({
+      routes: [navBar, kevinThread],
+      layer: "sync",
+      params: kevin,
+    });
+    expect(names(routes)).toEqual([
+      String(SCREENS.NAV_BAR),
+      String(SCREENS.CHAT_THREAD),
+      String(SCREENS.LOVE_SYNC),
+    ]);
+    expect(names(routes.slice(0, -1))).toEqual([
+      String(SCREENS.NAV_BAR),
+      String(SCREENS.CHAT_THREAD),
+    ]);
+    expect(routes).not.toContainEqual(
+      expect.objectContaining({ name: String(SCREENS.LOVE_CHAT) })
+    );
+  });
+
+  it("restores Love Sync onto Love chat when no matching thread remains", () => {
+    const routes = stackForRestoredLoveLayer({
+      routes: [navBar],
+      layer: "sync",
+      params: kevin,
+    });
+    expect(names(routes)).toEqual([
+      String(SCREENS.NAV_BAR),
+      String(SCREENS.LOVE_CHAT),
+      String(SCREENS.LOVE_SYNC),
+    ]);
+  });
+});
+
 describe("Sync entry wiring", () => {
   it("opens Message Sync with fromMessage so Love chat is not pushed", () => {
     const threadSource = readFileSync(
@@ -151,5 +189,18 @@ describe("Sync entry wiring", () => {
     expect(loveChatSource).toContain('surface: "love"');
     expect(loveChatSource).toContain("applyLoveLayer");
     expect(loveChatSource).not.toContain("SCREENS.LOVE_SYNC as never");
+  });
+
+  it("restores on the current chat surface and clears Message sync on hang-up", () => {
+    const overlaySource = readFileSync(
+      join(__dirname, "../src/screens/love/overlay.ts"),
+      "utf8"
+    );
+    const syncSource = readFileSync(
+      join(__dirname, "../src/screens/love/sync.tsx"),
+      "utf8"
+    );
+    expect(overlaySource).toContain("stackForRestoredLoveLayer");
+    expect(syncSource).toContain("setSynced(partnerId, false)");
   });
 });
