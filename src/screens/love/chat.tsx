@@ -340,7 +340,7 @@ export const LoveChatScreen = () => {
   };
 
   const send = () => {
-    const text = draft.trim();
+    const text = sanitizeComposerText(draft).trim();
     if (!text) {
       return;
     }
@@ -577,7 +577,8 @@ export const LoveChatScreen = () => {
               <TextInput
                 value={draft}
                 onChangeText={(value) => {
-                  setDraft(sanitizeComposerText(value));
+                  // Preserve iOS dictation and IME marked text until submission.
+                  setDraft(value);
                   setDrawerOpen(false);
                 }}
                 style={styles.input}
