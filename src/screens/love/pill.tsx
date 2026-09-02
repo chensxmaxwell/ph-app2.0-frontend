@@ -25,7 +25,7 @@ export const useOpenLove = () => {
   const navigation = useNavigation();
   const { activeCompanion, companions, setActiveCompanionId } = useCompanions();
   const { threads } = useChat();
-  const { start, restore, minimized, companionId, layer, chat } =
+  const { start, restore, minimized, companionId, layer, chat, surface } =
     useLoveSession();
 
   return (params?: LoveChatParams) => {
@@ -47,6 +47,8 @@ export const useOpenLove = () => {
     );
     const nav =
       getHomeStackNavigation() ?? (navigation as NavigationProp<ParamListBase>);
+    const nextSurface =
+      params?.fromMessage && params.syncing ? "message" : "love";
 
     if (
       minimized &&
@@ -55,12 +57,19 @@ export const useOpenLove = () => {
       (!requestedId || requestedId === companionId)
     ) {
       restore();
-      restoreLoveOverlays(nav, layer, person.companionId, person.name);
+      restoreLoveOverlays(
+        nav,
+        layer,
+        surface,
+        person.companionId,
+        person.name
+      );
       return;
     }
 
     start({
       layer: params?.syncing ? "sync" : "chat",
+      surface: nextSurface,
       companionId: person.companionId,
       name: person.name,
       personality: person.personality,
@@ -79,7 +88,7 @@ export const useOpenLove = () => {
     applyLoveLayer(nav, {
       layer: params?.syncing ? "sync" : "chat",
       params: overlayParams,
-      surface: params?.fromMessage && params.syncing ? "message" : "love",
+      surface: nextSurface,
     });
   };
 };
@@ -116,7 +125,8 @@ export const LovePill = ({ onPress, style }: LovePillProps) => {
 
 export const SessionLovePill = ({ style }: { style?: ViewStyle }) => {
   const navigation = useNavigation();
-  const { minimized, layer, companionId, chat, restore } = useLoveSession();
+  const { minimized, layer, companionId, chat, restore, surface } =
+    useLoveSession();
 
   if (!minimized) {
     return null;
@@ -131,6 +141,7 @@ export const SessionLovePill = ({ style }: { style?: ViewStyle }) => {
         restoreLoveOverlays(
           homeNav ?? (navigation as NavigationProp<ParamListBase>),
           layer,
+          surface,
           companionId,
           chat?.name
         );

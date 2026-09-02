@@ -241,7 +241,9 @@ describe("Sync entry wiring", () => {
     );
     expect(overlaySource).toContain("stackForRestoredLoveLayer");
     expect(overlaySource).toContain("surface: LoveStackSurface");
-    expect(pillSource).toContain("chat, restore, surface");
+    expect(pillSource).toContain(
+      "layer,\n          surface,\n          companionId"
+    );
     expect(syncSource).toContain("setSynced(partnerId, false)");
   });
 });

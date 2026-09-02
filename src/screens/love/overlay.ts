@@ -73,6 +73,7 @@ export const dismissLoveOverlays = (
 export const restoreLoveOverlays = (
   navigation: NavigationProp<ParamListBase>,
   layer: LoveLayer | null,
+  surface: LoveStackSurface,
   companionId?: string,
   name?: string
 ) => {
@@ -81,6 +82,7 @@ export const restoreLoveOverlays = (
       routes: state.routes,
       layer,
       params: { companionId, name },
+      surface,
     });
     return CommonActions.reset({
       index: Math.max(0, routes.length - 1),

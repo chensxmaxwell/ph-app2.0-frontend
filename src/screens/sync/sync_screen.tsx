@@ -58,6 +58,7 @@ const SyncScreen = () => {
   const minimizeSync = () => {
     startSession({
       layer: "sync",
+      surface: "love",
       companionId: partnerId,
       name: partnerName,
       syncing: true,

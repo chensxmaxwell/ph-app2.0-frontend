@@ -21,9 +21,11 @@ import {
   saveLoveSessionForUser,
 } from "./session-persist";
 import { LoveChatItem, LoveChatState, LoveLayer } from "./types";
+import type { LoveStackSurface } from "./stack";
 
 type StartOptions = {
   layer: LoveLayer;
+  surface?: LoveStackSurface;
   companionId?: string;
   name?: string;
   personality?: string;
@@ -41,6 +43,7 @@ type LoveSessionValue = {
   companionId?: string;
   layer: LoveLayer | null;
   minimized: boolean;
+  surface: LoveStackSurface;
   chat: LoveChatState | null;
   callStartedAt: number | null;
   syncStartedAt: number | null;
@@ -137,6 +140,7 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
   );
   const [layer, setLayer] = useState<LoveLayer | null>(boot.live.layer);
   const [minimized, setMinimized] = useState(boot.live.minimized);
+  const [surface, setSurface] = useState<LoveStackSurface>(boot.live.surface);
   const [chat, setChat] = useState<LoveChatState | null>(boot.live.chat);
   const [callStartedAt, setCallStartedAt] = useState<number | null>(
     boot.live.callStartedAt
@@ -159,6 +163,7 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
     setCompanionId(next.companionId);
     setLayer(next.layer);
     setMinimized(next.minimized);
+    setSurface(next.surface);
     setChat(next.chat);
     setCallStartedAt(next.callStartedAt);
     setSyncStartedAt(next.syncStartedAt);
@@ -209,6 +214,7 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
       companionId,
       layer,
       minimized,
+      surface,
       chat,
       callStartedAt,
       syncStartedAt,
@@ -220,12 +226,16 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
     hydrated,
     layer,
     minimized,
+    surface,
     syncStartedAt,
     userId,
   ]);
 
   const start = useCallback((options: StartOptions) => {
     setMinimized(false);
+    if (options.surface) {
+      setSurface(options.surface);
+    }
     if (options.companionId) {
       setCompanionId(options.companionId);
     }
@@ -355,6 +365,7 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
     setCompanionId(undefined);
     setLayer(null);
     setMinimized(false);
+    setSurface("love");
     setChat(null);
     setCallStartedAt(null);
     setSyncStartedAt(null);
@@ -369,6 +380,7 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
       companionId,
       layer,
       minimized,
+      surface,
       chat,
       callStartedAt,
       syncStartedAt,
@@ -393,6 +405,7 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
       patchChat,
       restore,
       start,
+      surface,
       syncStartedAt,
     ]
   );

@@ -87,18 +87,41 @@ export const stackForRestoredLoveLayer = ({
   routes,
   layer,
   params,
+  surface,
 }: {
   routes: LoveStackRoute[];
   layer: LoveLayer | null;
   params?: LoveLayerParams;
-}): LoveStackRoute[] =>
-  stackForLoveLayer({
-    routes,
+  surface: LoveStackSurface;
+}): LoveStackRoute[] => {
+  if (surface === "love") {
+    return stackForLoveLayer({ routes, layer, params, surface });
+  }
+
+  const companionId = params?.companionId;
+  const kept = routes.filter(
+    (route) => !LOVE_OVERLAY_SCREENS.has(nameOf(route.name))
+  );
+  const matchingThreadIndex = kept.findIndex((route) =>
+    isMatchingChatThread(route, companionId)
+  );
+  const throughThread =
+    matchingThreadIndex >= 0
+      ? kept.slice(0, matchingThreadIndex + 1)
+      : companionId
+      ? [
+          ...ensureRoot(kept),
+          {
+            name: nameOf(SCREENS.CHAT_THREAD),
+            params: { threadId: companionId },
+          },
+        ]
+      : ensureRoot(kept);
+
+  return stackForLoveLayer({
+    routes: throughThread,
     layer,
     params,
-    surface: routes.some((route) =>
-      isMatchingChatThread(route, params?.companionId)
-    )
-      ? "message"
-      : "love",
+    surface,
   });
+};
