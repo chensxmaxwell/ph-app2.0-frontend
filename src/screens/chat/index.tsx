@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
+  Animated,
   Image,
   Pressable,
   ScrollView,
@@ -8,6 +9,10 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import {
+  GestureHandlerRootView,
+  Swipeable,
+} from "react-native-gesture-handler";
 import {
   NavigationProp,
   ParamListBase,
@@ -22,17 +27,33 @@ import SearchIcon from "@images/message/search.svg";
 import PlusIcon from "@images/message/plus.svg";
 import PencilIcon from "@images/message/pencil.svg";
 import PersonPlus from "@images/message/person-plus.svg";
+import { DESTRUCTIVE_RED, Dialog } from "./dialog";
 import { useChat } from "./store";
 import { ChatThread } from "./types";
 import { faceSourceForId } from "./faces";
 
 const faceFor = (thread: ChatThread) => faceSourceForId(thread.id, thread.kind);
 
+// Swipe a row left (WeChat layout): gray "mark unread", then red "delete
+// friend". Delete always double-checks through the Dialog below. Maxwell named
+// these 「消息未读」 / 「删除好友」; the labels stay English like the rest of the
+// Message screen — swap the two strings here if he wants them in Chinese.
+const SWIPE_LABELS = {
+  unread: "Mark unread",
+  deleteFriend: "Delete friend",
+} as const;
+const UNREAD_ACTION_GRAY = "#8e8e93";
+const ACTION_WIDTH = s(80);
+const ACTIONS_WIDTH = ACTION_WIDTH * 2;
+
 export const Chat = () => {
   const navigation = useNavigation();
   const parent = navigation.getParent() as NavigationProp<ParamListBase>;
-  const { threads } = useChat();
+  const { threads, setUnread, deleteThread } = useChat();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<ChatThread | null>(null);
+  const swipeRows = useRef(new Map<string, Swipeable>());
+  const openRowId = useRef<string | null>(null);
 
   const rows = useMemo(() => {
     const visible = threads.filter((thread) => thread.request !== "refused");
@@ -51,9 +72,79 @@ export const Chat = () => {
     parent.navigate(SCREENS.CHAT_SEARCH);
   };
 
+  // Only one row shows its actions at a time, like WeChat.
+  const closeOtherRows = (threadId: string) => {
+    const open = openRowId.current;
+    if (open && open !== threadId) {
+      swipeRows.current.get(open)?.close();
+    }
+  };
+
+  const markUnread = (thread: ChatThread, row: Swipeable) => {
+    // Already unread stays unread; there is no separate "mark read" action,
+    // opening the thread is what reads it.
+    setUnread(thread.id, true);
+    row.close();
+  };
+
+  const askDeleteFriend = (thread: ChatThread, row: Swipeable) => {
+    row.close();
+    setPendingDelete(thread);
+  };
+
+  const confirmDeleteFriend = () => {
+    if (!pendingDelete) {
+      return;
+    }
+    swipeRows.current.delete(pendingDelete.id);
+    deleteThread(pendingDelete.id);
+    setPendingDelete(null);
+  };
+
+  // `drag` is the row's translation (0 → -ACTIONS_WIDTH). Sliding the buttons
+  // with it keeps them glued to the row's trailing edge, so the translucent
+  // card never shows them through itself mid-swipe.
+  const renderRowActions = (
+    thread: ChatThread,
+    drag: Animated.AnimatedInterpolation<number>,
+    row: Swipeable
+  ) => (
+    <Animated.View
+      style={[
+        styles.rowActions,
+        { transform: [{ translateX: Animated.add(drag, ACTIONS_WIDTH) }] },
+      ]}
+    >
+      <TouchableOpacity
+        testID={`message-row-unread-${thread.id}`}
+        accessibilityRole="button"
+        accessibilityLabel={SWIPE_LABELS.unread}
+        style={[styles.rowAction, styles.rowActionUnread]}
+        onPress={() => markUnread(thread, row)}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.rowActionText} numberOfLines={2}>
+          {SWIPE_LABELS.unread}
+        </Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        testID={`message-row-delete-${thread.id}`}
+        accessibilityRole="button"
+        accessibilityLabel={SWIPE_LABELS.deleteFriend}
+        style={[styles.rowAction, styles.rowActionDelete]}
+        onPress={() => askDeleteFriend(thread, row)}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.rowActionText} numberOfLines={2}>
+          {SWIPE_LABELS.deleteFriend}
+        </Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+
   return (
     <ScreenWrapper withNavBar disableScrolling>
-      <View style={styles.root}>
+      <GestureHandlerRootView style={styles.root}>
         <Text style={styles.title}>Message</Text>
         <View style={styles.searchRow}>
           <TouchableOpacity
@@ -117,31 +208,83 @@ export const Chat = () => {
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
         >
+          {rows.length === 0 ? (
+            <Text style={styles.empty} testID="message-empty">
+              No friends yet. Tap + to create one or add friends.
+            </Text>
+          ) : null}
           {rows.map((thread) => (
-            <TouchableOpacity
+            <Swipeable
               key={thread.id}
-              style={styles.row}
-              onPress={() => openThread(thread.id)}
-              activeOpacity={0.85}
+              ref={(row) => {
+                if (row) {
+                  swipeRows.current.set(thread.id, row);
+                } else {
+                  swipeRows.current.delete(thread.id);
+                }
+              }}
+              containerStyle={styles.swipeRow}
+              overshootRight={false}
+              rightThreshold={s(56)}
+              onSwipeableOpenStartDrag={() => closeOtherRows(thread.id)}
+              onSwipeableWillOpen={() => {
+                closeOtherRows(thread.id);
+                openRowId.current = thread.id;
+              }}
+              onSwipeableWillClose={() => {
+                if (openRowId.current === thread.id) {
+                  openRowId.current = null;
+                }
+              }}
+              renderRightActions={(_progress, drag, row) =>
+                renderRowActions(thread, drag, row)
+              }
             >
-              <Image source={faceFor(thread)} style={styles.rowFace} />
-              <View style={styles.rowCopy}>
-                <View style={styles.rowTop}>
-                  <Text style={styles.rowName} numberOfLines={1}>
-                    {thread.request === "incoming"
-                      ? "Friend request"
-                      : thread.name}
-                  </Text>
-                  <Text style={styles.rowTime}>{thread.time}</Text>
+              <TouchableOpacity
+                testID={`message-row-${thread.id}`}
+                style={styles.row}
+                onPress={() => openThread(thread.id)}
+                activeOpacity={0.85}
+              >
+                <View style={styles.rowFaceWrap}>
+                  <Image source={faceFor(thread)} style={styles.rowFace} />
+                  {thread.unread ? (
+                    <View
+                      testID={`message-row-unread-dot-${thread.id}`}
+                      style={styles.unreadDot}
+                    />
+                  ) : null}
                 </View>
-                <Text style={styles.rowPreview} numberOfLines={1}>
-                  {thread.preview}
-                </Text>
-              </View>
-            </TouchableOpacity>
+                <View style={styles.rowCopy}>
+                  <View style={styles.rowTop}>
+                    <Text style={styles.rowName} numberOfLines={1}>
+                      {thread.request === "incoming"
+                        ? "Friend request"
+                        : thread.name}
+                    </Text>
+                    <Text style={styles.rowTime}>{thread.time}</Text>
+                  </View>
+                  <Text style={styles.rowPreview} numberOfLines={1}>
+                    {thread.preview}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </Swipeable>
           ))}
         </ScrollView>
-      </View>
+        {pendingDelete ? (
+          <Dialog
+            testID="message-delete-confirm"
+            title={`Delete ${pendingDelete.name}?`}
+            body={`${pendingDelete.name} and this chat will be removed from Message.`}
+            primary={SWIPE_LABELS.deleteFriend}
+            secondary="Cancel"
+            destructive
+            onPrimary={confirmDeleteFriend}
+            onSecondary={() => setPendingDelete(null)}
+          />
+        ) : null}
+      </GestureHandlerRootView>
     </ScreenWrapper>
   );
 };
@@ -223,6 +366,39 @@ const styles = StyleSheet.create({
     gap: s(12),
     paddingBottom: s(24),
   },
+  empty: {
+    marginTop: s(24),
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 13,
+    textAlign: "center",
+  },
+  swipeRow: {
+    borderRadius: s(16),
+    overflow: "hidden",
+  },
+  rowActions: {
+    width: ACTIONS_WIDTH,
+    flexDirection: "row",
+  },
+  rowAction: {
+    width: ACTION_WIDTH,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: s(6),
+  },
+  rowActionUnread: {
+    backgroundColor: UNREAD_ACTION_GRAY,
+  },
+  rowActionDelete: {
+    backgroundColor: DESTRUCTIVE_RED,
+  },
+  rowActionText: {
+    color: colors.white,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 13,
+    textAlign: "center",
+  },
   row: {
     minHeight: s(76),
     borderRadius: s(16),
@@ -232,10 +408,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: s(14),
     paddingVertical: s(12),
   },
+  rowFaceWrap: {
+    width: s(52),
+    height: s(52),
+  },
   rowFace: {
     width: s(52),
     height: s(52),
     borderRadius: s(26),
+  },
+  unreadDot: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    width: s(12),
+    height: s(12),
+    borderRadius: s(6),
+    backgroundColor: DESTRUCTIVE_RED,
   },
   rowCopy: {
     flex: 1,
