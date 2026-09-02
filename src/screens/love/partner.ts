@@ -7,6 +7,7 @@ export type LovePersonParams = {
   name?: string;
   fromCreation?: boolean;
   syncing?: boolean;
+  fromMessage?: boolean;
 };
 
 export type LovePerson = {
