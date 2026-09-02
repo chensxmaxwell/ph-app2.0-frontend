@@ -12,6 +12,7 @@ import { useNavigation } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import ChevronDown from "@images/avatar/chevron-down.svg";
+import { formatBirthdayInput } from "./birthday";
 import { useWizardChrome } from "./chrome";
 import { GENDER_OPTIONS, GenderOption, useAvatarWizard } from "./context";
 import { s } from "./scale";
@@ -110,7 +111,9 @@ export const AvatarIdentityScreen = () => {
           <PillField>
             <TextInput
               value={draft.birthday}
-              onChangeText={(birthday) => patchDraft({ birthday })}
+              onChangeText={(birthday) =>
+                patchDraft({ birthday: formatBirthdayInput(birthday) })
+              }
               placeholder="mm/dd/yyyy"
               placeholderTextColor={colors.grayLighter}
               style={styles.input}
@@ -134,12 +137,15 @@ export const AvatarIdentityScreen = () => {
                 <Text
                   style={[
                     styles.input,
+                    styles.genderInput,
                     draft.gender ? styles.genderValue : styles.genderPlaceholder,
                   ]}
                 >
                   {draft.gender || "Select"}
                 </Text>
-                <ChevronDown width={s(35)} height={s(35)} />
+                <View style={styles.genderChevron}>
+                  <ChevronDown width={s(35)} height={s(35)} />
+                </View>
               </View>
             </PillField>
           </TouchableOpacity>
@@ -216,6 +222,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    width: "100%",
+  },
+  genderInput: {
+    flex: 1,
+    width: "auto",
+  },
+  genderChevron: {
+    flexShrink: 0,
+    width: s(35),
+    height: s(35),
+    marginLeft: s(8),
   },
   genderValue: {
     color: colors.white,
