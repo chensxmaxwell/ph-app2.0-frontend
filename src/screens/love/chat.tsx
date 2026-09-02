@@ -50,6 +50,7 @@ import {
 import { useLoveSession } from "./session";
 import { LoveChatItem, LoveMode } from "./types";
 import { ttsSpeak, ttsStop } from "../../services/tts";
+import { sanitizeComposerText } from "../../services/dictation-text";
 
 const USER_FACE = require("../../../assets/images/love/face.png");
 
@@ -576,7 +577,7 @@ export const LoveChatScreen = () => {
               <TextInput
                 value={draft}
                 onChangeText={(value) => {
-                  setDraft(value);
+                  setDraft(sanitizeComposerText(value));
                   setDrawerOpen(false);
                 }}
                 style={styles.input}
