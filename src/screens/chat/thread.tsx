@@ -32,8 +32,10 @@ import { useOpenLove } from "../love/pill";
 import { ChatGradient } from "./background";
 import { Dialog } from "./dialog";
 import { useChat } from "./store";
+import { formatChatThreadTime, showsTimeSeparator } from "./time";
 import { ChatBubble, ChatThread } from "./types";
 import { faceSourceForId } from "./faces";
+import { useNow } from "./use-now";
 import { enterTalkMode, leaveTalkMode } from "./talk-mode";
 import { sanitizeComposerText } from "../../services/dictation-text";
 import { startVoiceInput, stopVoiceInput } from "../../services/voice-input";
@@ -68,6 +70,8 @@ export const ChatThreadScreen = () => {
   } = useChat();
   const thread = getThread(route.params.threadId);
   const openLove = useOpenLove();
+  // Ticks so a fresh separator's "now" ages to "3 min ago" in place.
+  const now = useNow();
   const threadId = thread?.id;
   const threadUnread = !!thread?.unread;
 
@@ -169,42 +173,55 @@ export const ChatThreadScreen = () => {
     setListen(thread.id, !thread.listen);
   };
 
-  const renderBubble = (item: ChatBubble) => {
+  // WeChat puts a time line above a bubble (first one, then after every gap of
+  // five minutes or more) rather than a time on each bubble.
+  const renderBubble = (item: ChatBubble, index: number) => {
     const isMe = item.from === "me";
+    const separator = showsTimeSeparator(thread.messages[index - 1], item)
+      ? formatChatThreadTime(item.sentAt, now)
+      : null;
     return (
-      <Pressable
-        key={item.id}
-        onLongPress={() => {
-          if (isMe && lastMine?.id === item.id) {
-            setDraft(item.text);
-            setEditingId(item.id);
-            setTalkMode(false);
-            setDrawerOpen(false);
-          }
-        }}
-        style={[styles.bubbleWrap, isMe && styles.bubbleWrapMe]}
-      >
-        {item.voice && isMe ? (
-          <ListenIcon width={s(35)} height={s(35)} />
+      <React.Fragment key={item.id}>
+        {separator ? (
+          <Text testID={`message-time-${item.id}`} style={styles.timeLine}>
+            {separator}
+          </Text>
         ) : null}
-        <View
-          style={[
-            styles.bubble,
-            item.synced ? styles.bubbleSynced : null,
-          ]}
+        <Pressable
+          onLongPress={() => {
+            if (isMe && lastMine?.id === item.id) {
+              setDraft(item.text);
+              setEditingId(item.id);
+              setTalkMode(false);
+              setDrawerOpen(false);
+            }
+          }}
+          style={[styles.bubbleWrap, isMe && styles.bubbleWrapMe]}
         >
-          <Text style={styles.bubbleText}>{item.text}</Text>
-          {item.edited ? <Text style={styles.edited}>Edited</Text> : null}
-        </View>
-        {!isMe && thread.listen ? (
-          <TouchableOpacity
-            onPress={() => speakMessage(thread.id, item)}
-            style={speakingId === item.id ? styles.listenHitOn : styles.listenHit}
-          >
+          {item.voice && isMe ? (
             <ListenIcon width={s(35)} height={s(35)} />
-          </TouchableOpacity>
-        ) : null}
-      </Pressable>
+          ) : null}
+          <View
+            style={[
+              styles.bubble,
+              item.synced ? styles.bubbleSynced : null,
+            ]}
+          >
+            <Text style={styles.bubbleText}>{item.text}</Text>
+            {item.edited ? <Text style={styles.edited}>Edited</Text> : null}
+          </View>
+          {!isMe && thread.listen ? (
+            <TouchableOpacity
+              onPress={() => speakMessage(thread.id, item)}
+              style={
+                speakingId === item.id ? styles.listenHitOn : styles.listenHit
+              }
+            >
+              <ListenIcon width={s(35)} height={s(35)} />
+            </TouchableOpacity>
+          ) : null}
+        </Pressable>
+      </React.Fragment>
     );
   };
 
@@ -730,6 +747,13 @@ const styles = StyleSheet.create({
     color: colors.grayLighter,
     fontFamily: "Quicksand-Bold",
     fontSize: 13,
+    textAlign: "center",
+  },
+  timeLine: {
+    alignSelf: "center",
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 11,
     textAlign: "center",
   },
   regen: {

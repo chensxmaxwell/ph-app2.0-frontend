@@ -6,6 +6,10 @@ export type ChatBubble = {
   id: string;
   from: "them" | "me";
   text: string;
+  // Epoch milliseconds (Date.now()) when the bubble was sent. The display
+  // string ("now", "3 min ago", "2:14 PM", "Yesterday"...) is derived from
+  // this at render time and never stored.
+  sentAt: number;
   voice?: boolean;
   edited?: boolean;
   synced?: boolean;
@@ -17,7 +21,9 @@ export type ChatThread = {
   kind: ChatKind;
   email?: string;
   preview: string;
-  time: string;
+  // Epoch milliseconds of the last message or request event; this is what the
+  // Message list row's time label is formatted from.
+  lastActivityAt: number;
   pinned: boolean;
   listen: boolean;
   synced: boolean;
