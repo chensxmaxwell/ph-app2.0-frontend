@@ -8,8 +8,8 @@ const project = fs.readFileSync(
 );
 
 describe("next TestFlight release", () => {
-  it("identifies the send-crash build as 1.2 (6)", () => {
+  it("identifies the @env send-kill fix build as 1.2 (7)", () => {
     expect(project.match(/MARKETING_VERSION = 1\.2;/g)).toHaveLength(2);
-    expect(project.match(/CURRENT_PROJECT_VERSION = 6;/g)).toHaveLength(2);
+    expect(project.match(/CURRENT_PROJECT_VERSION = 7;/g)).toHaveLength(2);
   });
 });
