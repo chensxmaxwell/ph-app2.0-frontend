@@ -7,11 +7,7 @@ import { SCREENS } from "@common/constant";
 import { useWizardChrome } from "./chrome";
 import { AvatarDraft, lookFromDraft, useAvatarWizard } from "./context";
 import { useSaveAndExit } from "./use-save-companion";
-import {
-  EYE_COLORS,
-  HAIR_COLORS,
-  SKIN_COLORS,
-} from "./engine/viewer-html";
+import { EYE_COLORS, HAIR_COLORS, SKIN_COLORS } from "./engine/viewer-html";
 import { FittedAvatarPreview } from "./engine/AvatarPreview";
 import { HairStyleIcon, toHairStyle } from "./hair-style-icon";
 import { s } from "./scale";
@@ -34,6 +30,23 @@ type SliderKey = keyof Pick<
 >;
 
 type SliderConfig = { key: SliderKey; label: string };
+
+const previewViewMode = (category: Category): "full" | "bust" => {
+  switch (category) {
+    case "Body":
+      return "full";
+    case "Hair":
+    case "Face":
+    case "Skin":
+    case "Eyes":
+    case "Age":
+      return "bust";
+    default: {
+      const exhaustive: never = category;
+      return exhaustive;
+    }
+  }
+};
 
 const slidersForCategory = (category: Category): SliderConfig[] => {
   switch (category) {
@@ -145,9 +158,16 @@ export const AvatarCustomizeScreen = () => {
                   <TouchableOpacity
                     key={style}
                     onPress={() => patchDraft({ hairStyle: style })}
-                    style={[styles.styleChip, selected && styles.styleChipSelected]}
+                    style={[
+                      styles.styleChip,
+                      selected && styles.styleChipSelected,
+                    ]}
                   >
-                    <HairStyleIcon style={style} color={hairColor} size={s(28)} />
+                    <HairStyleIcon
+                      style={style}
+                      color={hairColor}
+                      size={s(28)}
+                    />
                   </TouchableOpacity>
                 );
               })}
@@ -250,7 +270,7 @@ export const AvatarCustomizeScreen = () => {
         </StepNote>
         <FittedAvatarPreview
           look={lookFromDraft(draft)}
-          viewMode="full"
+          viewMode={previewViewMode(category)}
           revealBody={category === "Body"}
         />
         <View style={styles.panel}>{renderPanel()}</View>
