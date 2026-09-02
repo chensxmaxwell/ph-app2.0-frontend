@@ -228,6 +228,45 @@ describe("Love session persist and restore", () => {
     return React.createElement(Text, { onPress: end }, label);
   };
 
+  const SurfaceProbe = () => {
+    const { start, surface } = useLoveSession();
+    return React.createElement(
+      Text,
+      {
+        onPress: () =>
+          start({
+            layer: "sync",
+            companionId: "kevin",
+            surface: "message",
+          }),
+        onLongPress: () =>
+          start({ layer: "chat", companionId: "kevin" }),
+      },
+      surface ?? "missing"
+    );
+  };
+
+  it("records the entry surface and keeps it while session layers change", () => {
+    const tree = renderer.create(
+      React.createElement(
+        LoveSessionProvider,
+        null,
+        React.createElement(SurfaceProbe)
+      )
+    );
+    expect(tree.root.findByType(Text).props.children).toBe("love");
+
+    act(() => {
+      tree.root.findByType(Text).props.onPress();
+    });
+    expect(tree.root.findByType(Text).props.children).toBe("message");
+
+    act(() => {
+      tree.root.findByType(Text).props.onLongPress();
+    });
+    expect(tree.root.findByType(Text).props.children).toBe("message");
+  });
+
   it("hydrates LoveSessionProvider from boot before the first paint", async () => {
     await saveLoveSessionForUser("demo", kevinSession());
     await writeSessionUser({
