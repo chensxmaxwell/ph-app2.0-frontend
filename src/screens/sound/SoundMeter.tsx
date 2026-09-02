@@ -17,6 +17,7 @@ import Stop from "@images/stop.svg";
 import Resume from "@images/resume.svg";
 import { SCREENS } from "@common/constant";
 import WaveformAdjustable from "./Wave";
+import { dbToSensitivityPct } from "./db-sensitivity";
 import AudioRecorderPlayer from "react-native-audio-recorder-player";
 import { useHomeScreen } from "../../hooks/HomeScreenContext";
 import {
@@ -85,9 +86,9 @@ const SoundMeter = () => {
         if (raw > 0) {
           db = 20 * Math.log10(Math.max(raw, 1) / 120);
         }
-        const level = Math.max(0, Math.min(100, Math.round((db + 50) * 2)));
-        setdBLevel(Math.round(db));
-        setIntensity(level);
+        const roundedDb = Math.round(db);
+        setdBLevel(roundedDb);
+        setIntensity(dbToSensitivityPct(roundedDb));
       });
     } catch {
       setMicError(MIC_ERROR_MESSAGES.unavailable);
@@ -170,7 +171,7 @@ const SoundMeter = () => {
         {micError ? <Text style={styles.micError}>{micError}</Text> : null}
       </View>
 
-      <WaveformAdjustable />
+      <WaveformAdjustable sensitivityPct={stop ? 0 : intensity} />
     </View>
   );
 };
