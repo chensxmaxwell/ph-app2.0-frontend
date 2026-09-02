@@ -385,6 +385,40 @@ export const upsertSavedKink = async (userId: string, kink: SavedKink) => {
   return next;
 };
 
+// Kink hub hearts: the ids of favorited cards (built-in titles such as
+// "Hardcore" plus saved-kink ids). Stored separately from `SavedKink` rows
+// because the built-in cards are not persisted rows themselves.
+export const parseKinkFavorites = (raw: unknown): string[] | null => {
+  if (!Array.isArray(raw)) {
+    return null;
+  }
+  const ids: string[] = [];
+  for (const item of raw) {
+    if (typeof item === "string" && item.length > 0 && !ids.includes(item)) {
+      ids.push(item);
+    }
+  }
+  return ids;
+};
+
+export const loadKinkFavorites = async (
+  userId: string,
+  fallback: string[] = []
+): Promise<string[]> => {
+  const raw = await readUserStore<unknown>(
+    STORE_KEYS.kinkFavorites,
+    userId,
+    null
+  );
+  return parseKinkFavorites(raw) ?? fallback;
+};
+
+export const saveKinkFavorites = async (userId: string, ids: string[]) =>
+  writeUserStore(STORE_KEYS.kinkFavorites, userId, ids);
+
+export const toggleKinkFavorite = (ids: string[], id: string): string[] =>
+  ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id];
+
 export const resetPasswordForEmail = async (
   email: string,
   newPassword: string

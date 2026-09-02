@@ -17,6 +17,8 @@ import { BUILTIN_PATTERNS, wavePattern } from '../../../../store/patterns';
 import { subscribeSessionUser } from '../../../../backend/session';
 import { loadSavedKinks, SavedKink } from '../../../../backend/store';
 
+import { useKinkFavorites } from './favorites';
+
 const renderNewKink: React.FC = () => {
   return (
     <View style={{
@@ -35,9 +37,7 @@ const renderNewKink: React.FC = () => {
 export const useKink = () => {
   const navigation = useNavigation<NavigationType>();
   const [saved, setSaved] = useState<SavedKink[]>([]);
-  const [favorites, setFavorites] = useState<Record<string, boolean>>({
-    Hardcore: true,
-  });
+  const { isFavorite, toggleFavorite } = useKinkFavorites();
 
   useEffect(() => {
     return subscribeSessionUser((user) => {
@@ -49,16 +49,9 @@ export const useKink = () => {
     });
   }, []);
 
-  const toggleFavorite = (id: string) => {
-    setFavorites((current) => ({
-      ...current,
-      [id]: !(current[id] ?? false),
-    }));
-  };
-
   const withFavorite = (id: string, card: CardType): CardType => ({
     ...card,
-    favorite: favorites[id] ?? card.favorite ?? false,
+    favorite: isFavorite(id),
     onFavoritePress: () => toggleFavorite(id),
   });
 
