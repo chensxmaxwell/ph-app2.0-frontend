@@ -52,7 +52,7 @@ export const AvatarPersonalityScreen = () => {
         if (!canContinue) {
           return;
         }
-        navigation.navigate(SCREENS.AVATAR_STORY);
+        navigation.navigate(SCREENS.AVATAR_INTIMATE);
       }}
     >
       {modal}

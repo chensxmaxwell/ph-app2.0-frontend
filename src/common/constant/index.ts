@@ -128,7 +128,6 @@ const SCREENS = {
   AVATAR_APPEARANCE: "AvatarAppearance" as never,
   AVATAR_CUSTOMIZE: "AvatarCustomize" as never,
   AVATAR_PERSONALITY: "AvatarPersonality" as never,
-  AVATAR_STORY: "AvatarStory" as never,
   AVATAR_INTIMATE: "AvatarIntimate" as never,
   AVATAR_CANDLE: "AvatarCandle" as never,
   AVATAR_WAITING: "AvatarWaiting" as never,
