@@ -36,13 +36,17 @@ export const AlarmRunner = () => {
 
       const alarms = await loadAlarms();
       const hit = alarms.find((alarm) => {
-        const stamp = `${alarm.id}-${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
+        const stamp = `${
+          alarm.id
+        }-${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
         return alarmMatchesNow(alarm, now) && !fired.current.has(stamp);
       });
       if (!hit) {
         return;
       }
-      const stamp = `${hit.id}-${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
+      const stamp = `${
+        hit.id
+      }-${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
       fired.current.add(stamp);
       playing = true;
       pattern = hit.pattern.length ? hit.pattern : [40, 70, 100, 70];
