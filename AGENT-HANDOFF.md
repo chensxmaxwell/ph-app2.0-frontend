@@ -150,10 +150,11 @@ Love is **not** a tab. Open via companion avatars on Home, avatar wizard finish,
 
 | File | What |
 |---|---|
-| `src/screens/chat/store.tsx` | Threads, send, listen, call flag, persist `ph.chat.v1` |
-| `src/screens/chat/types.ts` | Thread/bubble types |
-| `src/screens/chat/index.tsx` | Inbox |
-| `src/screens/chat/thread.tsx` | Thread + drawer |
+| `src/screens/chat/store.tsx` | Threads, send, listen, call flag, `setUnread`, `deleteThread`, persist `ph.chat.v2` (`threads`, `isPremium`, `deletedThreadIds`) |
+| `src/screens/chat/types.ts` | Thread/bubble types (`unread?` is the only read/unread state) |
+| `src/screens/chat/index.tsx` | Inbox. Swipe a row **left** (WeChat layout) → gray **Mark unread**, red **Delete friend**. Delete always double-checks via `Dialog`; confirm removes the thread only (Home 3D companion record untouched). Labels live in `SWIPE_LABELS` (Maxwell's words: 消息未读 / 删除好友) |
+| `src/screens/chat/thread.tsx` | Thread + drawer. Mounting it clears `unread` — opening a chat is the only "mark read" |
+| `src/screens/chat/dialog.tsx` | Shared in-screen confirm (thread Leave / Listen-blocked, inbox Delete friend) |
 | `src/screens/chat/call.tsx` | Voice call. Minimize keeps `inCall`; hangup clears it |
 | `src/screens/chat/search.tsx` `contact.tsx` `settings.tsx` | Search, contact, settings. **No create form here**: Message `+` → Create new opens the avatar wizard (`openCreateCompanion` in `src/screens/avatar/open.ts`) |
 
@@ -253,6 +254,7 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 13. **Check stacked PR branches actually contain the fixes you think they do.** `cursor/persist-kink-favorites-b118` (#19) was cut from an older #6 commit and never had `e9cb6f1` (TtsHost WKWebView removal), #12 (avatar WKWebView only for a focused slot) or #17. `git merge-base --is-ancestor <fix-sha> HEAD` before building a TestFlight from a stack tip.
 14. **Never `require()` a stock portrait where a person is shown.** `assets/images/avatar-ring.png`, `assets/images/love/call-face.png` and `assets/images/message/kevin.png` are all Kevin. Control Sync (`src/screens/sync/sync_screen.tsx`, `SCREENS.SYNC_SCREEN`) rebound its header name to the picked person but kept `avatar-ring.png` for `SYNC_ACTIVE_CONFIRMATION` / `SYNC_ONGOING` — the state it boots into — so TestFlight 1.2 (9) showed Kevin's head for Chad and Amanda; `LoveSyncScreen` had the same `call-face.png` hard-code. Render `LookFace` with `lookFromCompanion(companion)` and `fallbackSource={faceSourceForId(companionId)}` like the Love chat header and pill. `__tests__/sync-selected-person.test.tsx` fails on any Kevin portrait when someone else was picked. `src/screens/love/call.tsx` still hard-codes `CALL_FACE` (voice call, out of scope so far).
 15. **One create-character form, one birthday rule.** Home `+` opened the avatar wizard (`AvatarIdentityScreen`: validated mm/dd/yyyy, male-only gender, then 3D) while Message `+` → Create new opened `ChatCreateScreen` (`src/screens/chat/create.tsx`: free-text gender, unvalidated birthday, Save always on, no 3D, then a "Create avatar" success screen). Maxwell saw two similar-but-different pages on TestFlight 1.2. `ChatCreateScreen`, `SCREENS.CHAT_CREATE` and `createBot` are deleted; both `+` menus go through `openCreateCompanion`. Do not add a second "quick create" form — extend `identity.tsx` instead. `__tests__/create-character-entry.test.tsx` follows both `+` entries into the wizard and fails if they mount different first screens or apply different birthday rules. Stored birthdays that predate the rule (seeded Amanda: `13th April 2001`) show `Use mm/dd/yyyy` and block Continue until retyped; that is the rule working.
+16. **Deleted seeded bots come back unless you tombstone them.** `mergeSeedThreads` re-inserts Kevin / Chad / Amanda on every hydrate and `loadChat` reseeds a blob whose `threads` is empty, so "Delete friend" on the inbox would have silently undone itself on the next launch. `deleteThread` records the id in `ChatBlob.deletedThreadIds`; `mergeSeedThreads` skips those seeds and `loadChat` treats an empty list with tombstones as real. Re-adding the same person (Add friends → `sendFriendRequest`) still works because an existing thread always wins over its tombstone. `__tests__/message-swipe-actions.test.tsx` relaunches the provider after deleting one and then all friends. Not device-verified as of this entry — the swipe itself (RNGH `Swipeable` inside the inbox `ScrollView`, wrapped in a local `GestureHandlerRootView` like `AlarmList`) has only run under Jest.
 
 ---
 
