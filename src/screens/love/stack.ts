@@ -6,7 +6,15 @@ export type LoveStackRoute = {
   params?: object;
 };
 
-export type LoveStackSurface = "love" | "message";
+/**
+ * Where a Love session was entered from, i.e. what sits under the Call/Sync
+ * overlay and where hang-up returns to:
+ * - `love`: the dark Love chat. Overlays stack on `LOVE_CHAT`.
+ * - `message`: a Message `CHAT_THREAD`. Overlays stack on that thread.
+ * - `control`: the Control hub Sync card (`SYNC_STACK` picker). Nothing
+ *   Love-related sits underneath, so overlays stack straight on the hub.
+ */
+export type LoveStackSurface = "love" | "message" | "control";
 
 export type LoveLayerParams = {
   companionId?: string;
@@ -42,6 +50,25 @@ const isMatchingChatThread = (
 const ensureRoot = (routes: LoveStackRoute[]): LoveStackRoute[] =>
   routes.length > 0 ? routes : [{ name: nameOf(SCREENS.NAV_BAR) }];
 
+const overlayForLayer = (
+  layer: LoveLayer | null,
+  params?: LoveLayerParams
+): LoveStackRoute | null => {
+  switch (layer) {
+    case "call":
+      return { name: nameOf(SCREENS.LOVE_CALL), params };
+    case "sync":
+      return { name: nameOf(SCREENS.LOVE_SYNC), params };
+    case "chat":
+    case null:
+      return null;
+    default: {
+      const exhaustive: never = layer;
+      return exhaustive;
+    }
+  }
+};
+
 export const stackForLoveLayer = ({
   routes,
   layer,
@@ -54,33 +81,32 @@ export const stackForLoveLayer = ({
   surface: LoveStackSurface;
 }): LoveStackRoute[] => {
   const companionId = params?.companionId;
-  let kept = routes.filter(
+  const kept = routes.filter(
     (route) => !LOVE_OVERLAY_SCREENS.has(nameOf(route.name))
   );
-  if (surface === "love") {
-    kept = kept.filter((route) => !isMatchingChatThread(route, companionId));
-  }
-  const next = ensureRoot(kept);
-  if (surface === "message") {
-    if (layer === "call") {
-      return [...next, { name: nameOf(SCREENS.LOVE_CALL), params }];
+  const overlay = overlayForLayer(layer, params);
+  switch (surface) {
+    case "love": {
+      const withChat = [
+        ...ensureRoot(
+          kept.filter((route) => !isMatchingChatThread(route, companionId))
+        ),
+        { name: nameOf(SCREENS.LOVE_CHAT), params },
+      ];
+      return overlay ? [...withChat, overlay] : withChat;
     }
-    if (layer === "sync") {
-      return [...next, { name: nameOf(SCREENS.LOVE_SYNC), params }];
+    case "message":
+    case "control": {
+      // The chat lives on the origin surface itself, so a `chat` layer needs
+      // no overlay and Call/Sync go straight on top of what is already there.
+      const base = ensureRoot(kept);
+      return overlay ? [...base, overlay] : base;
     }
-    return next;
+    default: {
+      const exhaustive: never = surface;
+      return exhaustive;
+    }
   }
-  const withChat = [
-    ...next,
-    { name: nameOf(SCREENS.LOVE_CHAT), params },
-  ];
-  if (layer === "call") {
-    return [...withChat, { name: nameOf(SCREENS.LOVE_CALL), params }];
-  }
-  if (layer === "sync") {
-    return [...withChat, { name: nameOf(SCREENS.LOVE_SYNC), params }];
-  }
-  return withChat;
 };
 
 export const stackForRestoredLoveLayer = ({
@@ -94,8 +120,18 @@ export const stackForRestoredLoveLayer = ({
   params?: LoveLayerParams;
   surface: LoveStackSurface;
 }): LoveStackRoute[] => {
-  if (surface === "love") {
-    return stackForLoveLayer({ routes, layer, params, surface });
+  switch (surface) {
+    case "love":
+    case "control":
+      // Nothing to rebuild underneath: Love chat is part of the layer stack,
+      // and the Control hub is whatever the pill was tapped on.
+      return stackForLoveLayer({ routes, layer, params, surface });
+    case "message":
+      break;
+    default: {
+      const exhaustive: never = surface;
+      return exhaustive;
+    }
   }
 
   const companionId = params?.companionId;

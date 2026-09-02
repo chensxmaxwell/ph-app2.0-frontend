@@ -56,9 +56,11 @@ const SyncScreen = () => {
   };
 
   const minimizeSync = () => {
+    // Origin is the Control hub card, not a Love chat: the pill restores
+    // LoveSync straight onto the hub and red X ends the session there.
     startSession({
       layer: "sync",
-      surface: "love",
+      surface: "control",
       companionId: partnerId,
       name: partnerName,
       syncing: true,
@@ -104,6 +106,7 @@ const SyncScreen = () => {
           <View style={styles.header}>
             <Text style={styles.headerTitle}>{partnerName}</Text>
             <TouchableOpacity
+              testID="control-sync-minimize"
               style={styles.minimizeIcon}
               onPress={minimizeSync}
             >
@@ -311,6 +314,7 @@ const SyncScreen = () => {
                 )}
               </TouchableOpacity>
               <TouchableOpacity
+                testID="control-sync-hangup"
                 style={{
                   height: 73,
                   width: 73,

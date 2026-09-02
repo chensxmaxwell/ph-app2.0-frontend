@@ -29,6 +29,10 @@ const loveSync = {
   params: { companionId: "kevin", name: "Kevin" },
 };
 const kevin = { companionId: "kevin", name: "Kevin" };
+const controlSyncStack = {
+  name: String(SCREENS.SYNC_STACK),
+  params: undefined,
+};
 
 const names = (routes: { name: string }[]) => routes.map((route) => route.name);
 
@@ -206,6 +210,96 @@ describe("stackForRestoredLoveLayer", () => {
   });
 });
 
+// Control hub (Maxwell: "Playground") → Sync card → pick a person → SyncScreen.
+// Minimize pops the whole SyncStack, so the pill sits on the Control hub with
+// nothing Love-related underneath. Restore must put LoveSync straight on top of
+// that hub; a LoveChat here is the dark chat that flashes and that red X lands on.
+describe("Control hub Sync origin", () => {
+  it("restores a Control Sync directly over the hub, never through a dark Love chat", () => {
+    const routes = stackForRestoredLoveLayer({
+      routes: [navBar],
+      layer: "sync",
+      params: kevin,
+      surface: "control",
+    });
+    expect(names(routes)).toEqual([
+      String(SCREENS.NAV_BAR),
+      String(SCREENS.LOVE_SYNC),
+    ]);
+    expect(routes).not.toContainEqual(
+      expect.objectContaining({ name: String(SCREENS.LOVE_CHAT) })
+    );
+    expect(routes).not.toContainEqual(
+      expect.objectContaining({ name: String(SCREENS.CHAT_THREAD) })
+    );
+  });
+
+  it("keeps the Control hub route itself under Sync so hang-up uncovers the same tab", () => {
+    const routes = stackForRestoredLoveLayer({
+      routes: [navBar],
+      layer: "sync",
+      params: kevin,
+      surface: "control",
+    });
+    expect(routes.slice(0, -1)).toEqual([navBar]);
+    expect(routes[0]).toBe(navBar);
+  });
+
+  it("opens the Control Sync overlay without a Love chat when the layer is applied", () => {
+    const routes = stackForLoveLayer({
+      routes: [navBar],
+      layer: "sync",
+      params: kevin,
+      surface: "control",
+    });
+    expect(names(routes)).toEqual([
+      String(SCREENS.NAV_BAR),
+      String(SCREENS.LOVE_SYNC),
+    ]);
+  });
+
+  it("drops a stale Love chat left under a Control Sync instead of restoring onto it", () => {
+    const routes = stackForRestoredLoveLayer({
+      routes: [navBar, loveChat, loveSync],
+      layer: "sync",
+      params: kevin,
+      surface: "control",
+    });
+    expect(names(routes)).toEqual([
+      String(SCREENS.NAV_BAR),
+      String(SCREENS.LOVE_SYNC),
+    ]);
+  });
+
+  it("leaves non-Love routes such as the Sync picker stack untouched", () => {
+    const routes = stackForLoveLayer({
+      routes: [navBar, controlSyncStack],
+      layer: "sync",
+      params: kevin,
+      surface: "control",
+    });
+    expect(names(routes)).toEqual([
+      String(SCREENS.NAV_BAR),
+      String(SCREENS.SYNC_STACK),
+      String(SCREENS.LOVE_SYNC),
+    ]);
+    expect(routes[1]).toBe(controlSyncStack);
+  });
+
+  it("never recreates a Message thread for a Control-origin Sync after relaunch", () => {
+    const routes = stackForRestoredLoveLayer({
+      routes: [navBar],
+      layer: "sync",
+      params: kevin,
+      surface: "control",
+    });
+    expect(routes).not.toContainEqual(
+      expect.objectContaining({ name: String(SCREENS.CHAT_THREAD) })
+    );
+    expect(routes.length).toBe(2);
+  });
+});
+
 describe("Sync entry wiring", () => {
   it("opens Message Sync with fromMessage so Love chat is not pushed", () => {
     const threadSource = readFileSync(
@@ -224,6 +318,25 @@ describe("Sync entry wiring", () => {
     expect(loveChatSource).toContain('surface: "love"');
     expect(loveChatSource).toContain("applyLoveLayer");
     expect(loveChatSource).not.toContain("SCREENS.LOVE_SYNC as never");
+  });
+
+  it("records the Control hub as the Sync origin instead of pretending it was Love chat", () => {
+    const controlSyncSource = readFileSync(
+      join(__dirname, "../src/screens/sync/sync_screen.tsx"),
+      "utf8"
+    );
+    expect(controlSyncSource).toContain('surface: "control"');
+    expect(controlSyncSource).not.toContain('surface: "love"');
+  });
+
+  it("ends a Control-origin Sync on red X instead of falling back to a Love chat", () => {
+    const syncSource = readFileSync(
+      join(__dirname, "../src/screens/love/sync.tsx"),
+      "utf8"
+    );
+    expect(syncSource).toContain('case "control"');
+    expect(syncSource).toContain("end();");
+    expect(syncSource).toContain("dismissLoveOverlays(navigation)");
   });
 
   it("restores on the recorded chat surface and clears Message sync on hang-up", () => {
