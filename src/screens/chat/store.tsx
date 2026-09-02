@@ -625,13 +625,12 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     [setRequest, threads]
   );
 
+  // Chat is local-only (on-device store, no GraphQL chat API). Dropping the
+  // thread here is the whole cancel; the persist effect writes it through.
   const cancelFriendRequest = useCallback((threadId: string) => {
     setThreads((current) =>
       current.filter((thread) => thread.id !== threadId)
     );
-    client
-      .mutate({ mutation: DELETE_CHAT_THREAD, variables: { id: threadId } })
-      .catch(() => undefined);
   }, []);
 
   const createBot = useCallback(
