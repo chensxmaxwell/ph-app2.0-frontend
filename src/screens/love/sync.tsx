@@ -59,8 +59,10 @@ export const LoveSyncScreen = () => {
     start,
     patchChat,
     minimize,
+    end,
     companionId,
     chat,
+    surface,
     syncStartedAt,
     ensureLayerTimer,
     clearLayerTimer,
@@ -101,6 +103,37 @@ export const LoveSyncScreen = () => {
     return () => clearInterval(timer);
   }, []);
 
+  const hangUp = () => {
+    patchChat({ synced: false });
+    if (partnerId) {
+      setSynced(partnerId, false);
+    }
+    clearLayerTimer("sync");
+    stopMotor();
+    switch (surface) {
+      case "love":
+      case "message":
+        // The chat this Sync was started from is directly under the overlay.
+        start({
+          layer: "chat",
+          companionId: partnerId,
+          name,
+        });
+        navigation.goBack();
+        return;
+      case "control":
+        // Control hub Sync has no chat under it. Red X ends the session so no
+        // pill lingers, and uncovers the hub the person started from.
+        end();
+        dismissLoveOverlays(navigation);
+        return;
+      default: {
+        const exhaustive: never = surface;
+        return exhaustive;
+      }
+    }
+  };
+
   return (
     <View style={styles.root}>
       <LinearGradient
@@ -130,6 +163,7 @@ export const LoveSyncScreen = () => {
         pointerEvents="none"
       />
       <TouchableOpacity
+        testID="love-sync-minimize"
         onPress={() => {
           minimize();
           dismissLoveOverlays(navigation);
@@ -160,21 +194,9 @@ export const LoveSyncScreen = () => {
           )}
         </TouchableOpacity>
         <TouchableOpacity
+          testID="love-sync-hangup"
           style={styles.hangup}
-          onPress={() => {
-            patchChat({ synced: false });
-            if (partnerId) {
-              setSynced(partnerId, false);
-            }
-            clearLayerTimer("sync");
-            stopMotor();
-            start({
-              layer: "chat",
-              companionId: partnerId,
-              name,
-            });
-            navigation.goBack();
-          }}
+          onPress={hangUp}
         >
           <Xmark width={s(20)} height={s(20)} />
         </TouchableOpacity>

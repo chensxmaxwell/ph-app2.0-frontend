@@ -80,7 +80,7 @@ const isLoveLayer = (value: unknown): value is LoveLayer =>
   value === "chat" || value === "call" || value === "sync";
 
 const isLoveStackSurface = (value: unknown): value is LoveStackSurface =>
-  value === "love" || value === "message";
+  value === "love" || value === "message" || value === "control";
 
 const isLoveMode = (value: unknown): value is LoveMode =>
   value === "none" || value === "pattern" || value === "kink" || value === "bliss";
