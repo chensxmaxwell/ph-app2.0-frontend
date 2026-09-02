@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useIsFocused } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
 import { AvatarLook } from "./viewer-html";
 import { LookFace } from "../look-face";
@@ -44,12 +45,23 @@ export const AvatarPreview = ({
   const slotId = slotIdRef.current;
   const propsRef = useRef({ look, viewMode, revealBody });
   propsRef.current = { look, viewMode, revealBody };
+  const isFocused = useIsFocused();
+  const activeRef = useRef(isFocused);
+  activeRef.current = isFocused;
   const { status, errorMessage, retry, viewerUri } = useAvatarEngine();
 
   const publish = () => {
+    if (!activeRef.current) {
+      return;
+    }
     const current = propsRef.current;
     viewRef.current?.measureInWindow((x, y, measuredWidth, measuredHeight) => {
-      if (measuredWidth < 2 || measuredHeight < 2) {
+      if (
+        !activeRef.current ||
+        ![x, y, measuredWidth, measuredHeight].every(Number.isFinite) ||
+        measuredWidth < 2 ||
+        measuredHeight < 2
+      ) {
         return;
       }
       attachAvatarSlot(slotId, {
@@ -67,9 +79,13 @@ export const AvatarPreview = ({
   };
 
   useEffect(() => {
+    if (!isFocused) {
+      detachAvatarSlot(slotId);
+      return;
+    }
     updateAvatarSlotLook(slotId, look, viewMode, revealBody);
     publish();
-  }, [look, viewMode, revealBody, width, height, slotId]);
+  }, [isFocused, look, viewMode, revealBody, width, height, slotId]);
 
   useEffect(() => {
     const handle = Dimensions.addEventListener("change", publish);
@@ -77,7 +93,10 @@ export const AvatarPreview = ({
   }, [slotId]);
 
   useEffect(() => {
-    return () => detachAvatarSlot(slotId);
+    return () => {
+      activeRef.current = false;
+      detachAvatarSlot(slotId);
+    };
   }, [slotId]);
 
   if (!viewerUri) {
