@@ -32,6 +32,7 @@ export const typeDefs = `
     id: ID!
     from: String!
     text: String!
+    sentAt: Float!
     voice: Boolean
     edited: Boolean
     synced: Boolean
@@ -43,7 +44,7 @@ export const typeDefs = `
     kind: String
     email: String
     preview: String
-    time: String
+    lastActivityAt: Float
     pinned: Boolean
     listen: Boolean
     synced: Boolean
@@ -103,6 +104,7 @@ export const typeDefs = `
     id: ID
     from: String!
     text: String!
+    sentAt: Float
     voice: Boolean
     edited: Boolean
     synced: Boolean

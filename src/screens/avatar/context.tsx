@@ -84,6 +84,8 @@ export const draftFromCompanion = (companion: Companion): AvatarDraft => ({
 
 type AvatarWizardContextValue = {
   draft: AvatarDraft;
+  // What the wizard opened with; lets a save tell edits from untouched defaults.
+  baseline: AvatarDraft;
   mode: WizardMode;
   companionId: string;
   patchDraft: (patch: Partial<AvatarDraft>) => void;
@@ -123,6 +125,7 @@ export const AvatarWizardProvider = ({
   const value = useMemo(
     () => ({
       draft,
+      baseline: baselineRef.current,
       mode,
       companionId,
       patchDraft,
@@ -148,7 +151,8 @@ export const useAvatarWizard = () => {
   return context;
 };
 
-export const lookFromDraft = (draft: AvatarDraft): AvatarLook => pickLook(draft);
+export const lookFromDraft = (draft: AvatarDraft): AvatarLook =>
+  pickLook(draft);
 
 export const applyCharacterPreset = (index: number): AvatarLook =>
   pickLook(CHARACTER_PRESETS[index] ?? DEFAULT_LOOK);
@@ -183,6 +187,13 @@ const DRAFT_ONLY_FIELDS: Record<DraftOnlyKey, true> = {
   experimentalVanilla: true,
 };
 
+export const samePersonalities = (
+  left: readonly PersonalityOption[],
+  right: readonly PersonalityOption[]
+): boolean =>
+  left.length === right.length &&
+  left.every((item, index) => item === right[index]);
+
 const isDraftDirty = (draft: AvatarDraft, baseline: AvatarDraft): boolean => {
   const lookKeys = Object.keys(AVATAR_LOOK_FIELDS) as Array<keyof AvatarLook>;
   if (lookKeys.some((key) => draft[key] !== baseline[key])) {
@@ -205,12 +216,7 @@ const isDraftDirty = (draft: AvatarDraft, baseline: AvatarDraft): boolean => {
         }
         break;
       case "personalities":
-        if (
-          draft.personalities.length !== baseline.personalities.length ||
-          draft.personalities.some(
-            (item, index) => item !== baseline.personalities[index]
-          )
-        ) {
+        if (!samePersonalities(draft.personalities, baseline.personalities)) {
           return true;
         }
         break;

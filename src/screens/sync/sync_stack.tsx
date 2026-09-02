@@ -15,7 +15,8 @@ const SyncStack = () => {
     | { name?: string; companionId?: string }
     | undefined;
   const boundName = params?.name?.trim();
-  const hasPerson = Boolean(boundName || params?.companionId);
+  const boundCompanionId = params?.companionId?.trim();
+  const hasPerson = Boolean(boundName || boundCompanionId);
 
   return (
     <Stack.Navigator
@@ -37,7 +38,11 @@ const SyncStack = () => {
         name={SCREENS.SYNC_SCREEN}
         component={SyncScreen}
         options={{ headerShown: false }}
-        initialParams={hasPerson ? { name: boundName } : undefined}
+        initialParams={
+          hasPerson
+            ? { name: boundName, companionId: boundCompanionId }
+            : undefined
+        }
       />
     </Stack.Navigator>
   );

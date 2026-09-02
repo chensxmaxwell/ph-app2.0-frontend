@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Image,
   Keyboard,
@@ -30,10 +30,13 @@ import Heartbeat from "@images/message/heartbeat.svg";
 import { s } from "../avatar/scale";
 import { useOpenLove } from "../love/pill";
 import { ChatGradient } from "./background";
+import { Dialog } from "./dialog";
 import { regenerateTargetId } from "./regenerate";
 import { useChat } from "./store";
+import { formatChatThreadTime, showsTimeSeparator } from "./time";
 import { ChatBubble, ChatThread } from "./types";
 import { faceSourceForId } from "./faces";
+import { useNow } from "./use-now";
 import { enterTalkMode, leaveTalkMode } from "./talk-mode";
 import { sanitizeComposerText } from "../../services/dictation-text";
 import { startVoiceInput, stopVoiceInput } from "../../services/voice-input";
@@ -43,35 +46,6 @@ type ThreadRoute = RouteProp<{ ChatThread: { threadId: string } }, "ChatThread">
 
 const faceFor = (thread: ChatThread) =>
   faceSourceForId(thread.id, thread.kind);
-
-const Dialog = ({
-  title,
-  body,
-  primary,
-  secondary,
-  onPrimary,
-  onSecondary,
-}: {
-  title: string;
-  body: string;
-  primary: string;
-  secondary: string;
-  onPrimary: () => void;
-  onSecondary: () => void;
-}) => (
-  <View style={styles.dialogScrim}>
-    <View style={styles.dialog}>
-      <Text style={styles.dialogTitle}>{title}</Text>
-      <Text style={styles.dialogBody}>{body}</Text>
-      <TouchableOpacity style={styles.dialogPrimary} onPress={onPrimary}>
-        <Text style={styles.dialogPrimaryText}>{primary}</Text>
-      </TouchableOpacity>
-      <TouchableOpacity onPress={onSecondary}>
-        <Text style={styles.dialogSecondary}>{secondary}</Text>
-      </TouchableOpacity>
-    </View>
-  </View>
-);
 
 export const ChatThreadScreen = () => {
   const navigation = useNavigation();
@@ -85,6 +59,7 @@ export const ChatThreadScreen = () => {
     setListen,
     setPinned,
     setSynced,
+    setUnread,
     speakMessage,
     speakingId,
     inCallThreadId,
@@ -97,6 +72,18 @@ export const ChatThreadScreen = () => {
   } = useChat();
   const thread = getThread(route.params.threadId);
   const openLove = useOpenLove();
+  // Ticks so a fresh separator's "now" ages to "3 min ago" in place.
+  const now = useNow();
+  const threadId = thread?.id;
+  const threadUnread = !!thread?.unread;
+
+  // Opening a thread reads it, whichever screen navigated here (Message list,
+  // Home avatar strip, search, contact).
+  useEffect(() => {
+    if (threadId && threadUnread) {
+      setUnread(threadId, false);
+    }
+  }, [setUnread, threadId, threadUnread]);
   const [draft, setDraft] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -193,42 +180,55 @@ export const ChatThreadScreen = () => {
     setListen(thread.id, !thread.listen);
   };
 
-  const renderBubble = (item: ChatBubble) => {
+  // WeChat puts a time line above a bubble (first one, then after every gap of
+  // five minutes or more) rather than a time on each bubble.
+  const renderBubble = (item: ChatBubble, index: number) => {
     const isMe = item.from === "me";
+    const separator = showsTimeSeparator(thread.messages[index - 1], item)
+      ? formatChatThreadTime(item.sentAt, now)
+      : null;
     const row = (
-      <Pressable
-        key={item.id}
-        onLongPress={() => {
-          if (isMe && lastMine?.id === item.id) {
-            setDraft(item.text);
-            setEditingId(item.id);
-            setTalkMode(false);
-            setDrawerOpen(false);
-          }
-        }}
-        style={[styles.bubbleWrap, isMe && styles.bubbleWrapMe]}
-      >
-        {item.voice && isMe ? (
-          <ListenIcon width={s(35)} height={s(35)} />
+      <React.Fragment key={item.id}>
+        {separator ? (
+          <Text testID={`message-time-${item.id}`} style={styles.timeLine}>
+            {separator}
+          </Text>
         ) : null}
-        <View
-          style={[
-            styles.bubble,
-            item.synced ? styles.bubbleSynced : null,
-          ]}
+        <Pressable
+          onLongPress={() => {
+            if (isMe && lastMine?.id === item.id) {
+              setDraft(item.text);
+              setEditingId(item.id);
+              setTalkMode(false);
+              setDrawerOpen(false);
+            }
+          }}
+          style={[styles.bubbleWrap, isMe && styles.bubbleWrapMe]}
         >
-          <Text style={styles.bubbleText}>{item.text}</Text>
-          {item.edited ? <Text style={styles.edited}>Edited</Text> : null}
-        </View>
-        {!isMe && thread.listen ? (
-          <TouchableOpacity
-            onPress={() => speakMessage(thread.id, item)}
-            style={speakingId === item.id ? styles.listenHitOn : styles.listenHit}
-          >
+          {item.voice && isMe ? (
             <ListenIcon width={s(35)} height={s(35)} />
-          </TouchableOpacity>
-        ) : null}
-      </Pressable>
+          ) : null}
+          <View
+            style={[
+              styles.bubble,
+              item.synced ? styles.bubbleSynced : null,
+            ]}
+          >
+            <Text style={styles.bubbleText}>{item.text}</Text>
+            {item.edited ? <Text style={styles.edited}>Edited</Text> : null}
+          </View>
+          {!isMe && thread.listen ? (
+            <TouchableOpacity
+              onPress={() => speakMessage(thread.id, item)}
+              style={
+                speakingId === item.id ? styles.listenHitOn : styles.listenHit
+              }
+            >
+              <ListenIcon width={s(35)} height={s(35)} />
+            </TouchableOpacity>
+          ) : null}
+        </Pressable>
+      </React.Fragment>
     );
     if (item.id !== regenerateId) {
       return row;
@@ -763,6 +763,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: "center",
   },
+  timeLine: {
+    alignSelf: "center",
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 11,
+    textAlign: "center",
+  },
   regen: {
     alignSelf: "flex-start",
   },
@@ -939,52 +946,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   link: {
-    color: colors.white,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 16,
-  },
-  dialogScrim: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.45)",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: s(40),
-  },
-  dialog: {
-    width: "100%",
-    borderRadius: s(20),
-    backgroundColor: "#3b3850",
-    padding: s(24),
-    alignItems: "center",
-    gap: s(12),
-  },
-  dialogTitle: {
-    color: colors.white,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 20,
-    textAlign: "center",
-  },
-  dialogBody: {
-    color: colors.grayLighter,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 13,
-    textAlign: "center",
-  },
-  dialogPrimary: {
-    marginTop: s(8),
-    width: "100%",
-    height: s(50),
-    borderRadius: s(25),
-    backgroundColor: colors.grayLightSolid,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  dialogPrimaryText: {
-    color: colors.white,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 16,
-  },
-  dialogSecondary: {
     color: colors.white,
     fontFamily: "Quicksand-Bold",
     fontSize: 16,

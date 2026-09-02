@@ -8,7 +8,7 @@ export const CHAT_THREADS = gql`
       kind
       email
       preview
-      time
+      lastActivityAt
       pinned
       listen
       synced
@@ -21,6 +21,7 @@ export const CHAT_THREADS = gql`
         id
         from
         text
+        sentAt
         voice
         edited
         synced
@@ -36,11 +37,12 @@ export const UPSERT_CHAT_THREAD = gql`
       name
       kind
       preview
-      time
+      lastActivityAt
       messages {
         id
         from
         text
+        sentAt
         voice
         edited
         synced
@@ -54,11 +56,12 @@ export const POST_CHAT_MESSAGE = gql`
     postChatMessage(threadId: $threadId, message: $message) {
       id
       preview
-      time
+      lastActivityAt
       messages {
         id
         from
         text
+        sentAt
         voice
         edited
         synced

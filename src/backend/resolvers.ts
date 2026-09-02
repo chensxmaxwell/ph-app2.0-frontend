@@ -211,6 +211,7 @@ export const resolvers = {
           id?: string;
           from: "them" | "me";
           text: string;
+          sentAt?: number;
           voice?: boolean;
         };
       },

@@ -1,5 +1,6 @@
 import { graphql, GraphQLSchema } from "graphql";
 import { makeExecutableSchema } from "@graphql-tools/schema";
+import { beforeEach, describe, expect, it, jest } from "@jest/globals";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { typeDefs } from "../src/backend/schema";
 import { resolvers } from "../src/backend/resolvers";
@@ -50,10 +51,12 @@ const POST = `
     postChatMessage(threadId: $threadId, message: $message) {
       id
       preview
+      lastActivityAt
       messages {
         id
         from
         text
+        sentAt
         voice
       }
     }
@@ -131,6 +134,21 @@ describe("on-device GraphQL backend", () => {
       (item: { voice?: boolean }) => item.voice
     );
     expect(voices.some((value: boolean) => value === true)).toBe(false);
+    // A posted message is stamped with a real epoch, and every bubble in the
+    // thread (seeded ones included) carries one.
+    const before = Date.now();
+    const postedThread = posted.data?.postChatMessage as {
+      lastActivityAt: number;
+      messages: { sentAt: number }[];
+    };
+    const stamped = postedThread.messages[postedThread.messages.length - 1];
+    expect(typeof stamped.sentAt).toBe("number");
+    expect(stamped.sentAt).toBeLessThanOrEqual(before);
+    expect(stamped.sentAt).toBeGreaterThan(before - 60_000);
+    expect(postedThread.lastActivityAt).toBe(stamped.sentAt);
+    for (const item of postedThread.messages) {
+      expect(typeof item.sentAt).toBe("number");
+    }
 
     const listed = await run(THREADS, undefined, token);
     expect(listed.errors).toBeUndefined();

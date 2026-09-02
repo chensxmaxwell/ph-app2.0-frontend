@@ -1,11 +1,5 @@
 import React, { useEffect, useState } from "react";
-import {
-  Image,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import { BlurView } from "@react-native-community/blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,8 +16,10 @@ import Xmark from "@images/icons/xmark.svg";
 import Speaker from "@images/speaker.svg";
 import MicroPhoneUnmute from "@images/microphone-unmute.svg";
 import MicroPhoneMute from "@images/microphone-mute.svg";
-import { useCompanions } from "../../store/companions";
+import { lookFromCompanion, useCompanions } from "../../store/companions";
+import { faceSourceForId } from "../chat/faces";
 import { useChat } from "../chat/store";
+import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
@@ -31,8 +27,6 @@ import { resolveLovePerson } from "./partner";
 import { useLoveSession } from "./session";
 import { usePatternPlayer } from "../../hooks/usePatternPlayer";
 import { wavePattern } from "../../store/patterns";
-
-const FACE = require("../../../assets/images/love/call-face.png");
 
 type SyncRoute = RouteProp<
   {
@@ -67,7 +61,11 @@ export const LoveSyncScreen = () => {
     ensureLayerTimer,
     clearLayerTimer,
   } = useLoveSession();
-  const { companionId: partnerId, name } = resolveLovePerson({
+  const {
+    companion,
+    companionId: partnerId,
+    name,
+  } = resolveLovePerson({
     companionId: companionId ?? route.params?.companionId ?? chat?.companionId,
     name: route.params?.name,
     companions,
@@ -179,7 +177,11 @@ export const LoveSyncScreen = () => {
       </View>
       <View style={styles.stage}>
         <View style={styles.glow} />
-        <Image source={FACE} style={styles.face} />
+        <LookFace
+          look={companion ? lookFromCompanion(companion) : null}
+          size={s(100)}
+          fallbackSource={faceSourceForId(partnerId)}
+        />
         <Text style={styles.caption}>Syncing</Text>
       </View>
       <View style={[styles.controls, { bottom: insets.bottom + s(26) }]}>
@@ -260,11 +262,6 @@ const styles = StyleSheet.create({
     height: s(220),
     borderRadius: s(110),
     backgroundColor: "rgba(204, 160, 221, 0.35)",
-  },
-  face: {
-    width: s(100),
-    height: s(100),
-    borderRadius: s(50),
   },
   caption: {
     marginTop: s(16),

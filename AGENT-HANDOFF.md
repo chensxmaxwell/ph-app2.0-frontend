@@ -149,13 +149,18 @@ Love is **not** a tab. Open via companion avatars on Home, avatar wizard finish,
 
 | File | What |
 |---|---|
-| `src/screens/chat/store.tsx` | Threads, send, listen, call flag, `replyPending(threadId)` while Ark is answering, persist `ph.chat.v1` |
+| `src/screens/chat/store.tsx` | Threads, send, listen, call flag, `replyPending(threadId)` while Ark is answering, `setUnread`, `deleteThread`, persist `ph.chat.v2` (`threads`, `isPremium`, `deletedThreadIds`). Every send / reply / request stamps `sentAt` on the bubble and `lastActivityAt` on the thread with `Date.now()`; persona edits (`updateBot`, existing-companion `upsertCompanionThread`) do **not** bump the time |
 | `src/screens/chat/regenerate.ts` | `regenerateTargetId(messages, replyPending)`: the one row that may carry **Regenerate** (final bubble, finished bot reply to a user message, nothing in flight) |
-| `src/screens/chat/types.ts` | Thread/bubble types |
-| `src/screens/chat/index.tsx` | Inbox |
-| `src/screens/chat/thread.tsx` | Thread + drawer |
+| `src/screens/chat/types.ts` | Thread/bubble types (`unread?` is the only read/unread state). `ChatBubble.sentAt` / `ChatThread.lastActivityAt` are epoch ms — there is no stored display string |
+| `src/screens/chat/time.ts` | The only chat time formatter. WeChat buckets in English, device-local time: `now` (<1 min) → `3 min ago` (<60 min) → `2:14 PM` (today) → `Yesterday` → `Mon` (2–6 days) → `Sep 2` → `Sep 2, 2025`. `formatChatListTime` (inbox row), `formatChatThreadTime` (adds the clock: `Yesterday 2:14 PM`, `Sep 2, 2:14 PM`), `showsTimeSeparator` (first bubble + every ≥5 min gap) |
+| `src/screens/chat/use-now.ts` | `useNow()` — 30 s tick + refresh on `AppState` active, so `now` becomes `3 min ago` without leaving the screen or relaunching |
+| `src/screens/chat/index.tsx` | Inbox. Row time = `formatChatListTime(thread.lastActivityAt, now)`. Swipe a row **left** (WeChat layout) → gray **Mark unread**, red **Delete friend**. Delete always double-checks via `Dialog`; confirm removes the thread only (Home 3D companion record untouched). Labels live in `SWIPE_LABELS` (Maxwell's words: 消息未读 / 删除好友) |
+| `src/screens/chat/thread.tsx` | Thread + drawer. WeChat-style time line above the first bubble and after every 5-minute gap (`message-time-<bubbleId>`), not a time per bubble. Mounting it clears `unread` — opening a chat is the only "mark read" |
+| `src/backend/chat-seed.ts` | Seeded Kevin / Chad / Amanda with **relative past** times: Amanda 2 h ago, Chad yesterday 2:14 PM, Kevin three nights ago ~11:50 PM. `seedThreads(now)` takes the clock so tests can pin it |
+| `src/backend/chat-timestamps.ts` | One-time recovery for blobs written before `sentAt` existed (`time: "Now"` strings, unstamped bubbles). Reads the epoch back out of ids (`${Date.now()}-hex`, `msg-<base36>-hex`), gives seeded bubbles their seed time, copies a neighbour for the rest. `loadChat` runs it and writes the migrated blob back |
+| `src/screens/chat/dialog.tsx` | Shared in-screen confirm (thread Leave / Listen-blocked, inbox Delete friend) |
 | `src/screens/chat/call.tsx` | Voice call. Minimize keeps `inCall`; hangup clears it |
-| `src/screens/chat/search.tsx` `create.tsx` `contact.tsx` `settings.tsx` | Search, create bot, contact, settings |
+| `src/screens/chat/search.tsx` `contact.tsx` `settings.tsx` | Search, contact, settings. **No create form here**: Message `+` → Create new opens the avatar wizard (`openCreateCompanion` in `src/screens/avatar/open.ts`) |
 
 Bots reply with `companionReply` today. `completeCompanionChat` in `src/services/llm.ts` is ready but **not called** from store/Love chat.
 
@@ -164,7 +169,9 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 | File | What |
 |---|---|
 | `src/screens/avatar/stack.tsx` | Wizard |
-| `src/screens/avatar/identity.tsx` … `intimate.tsx` `candle.tsx` `waiting.tsx` | Steps. `waiting.tsx` saves companion then `CommonActions.reset` to `LOVE_CHAT` |
+| `src/screens/avatar/identity.tsx` … `intimate.tsx` `candle.tsx` `waiting.tsx` | Steps. `identity.tsx` is the **basic info page** (name, gender, birthday, description). `waiting.tsx` saves companion then `CommonActions.reset` to `LOVE_CHAT` |
+| `src/screens/avatar/open.ts` | `openCreateCompanion` (Home `+`, Message `+`), `openEditPersona`, `openAvatarWizard` |
+| `src/screens/avatar/birthday.ts` | The only birthday rules: `formatBirthdayInput` (auto `/`), `isPlausibleBirthday` (empty OK, else real mm/dd/yyyy date) |
 | `src/screens/avatar/context.tsx` | Draft |
 | `src/screens/avatar/engine/AvatarPreview.tsx` | WebView → Metro `/ph-avatar/viewer.html` |
 | `src/screens/avatar/engine/viewer-html.ts` | Look types / presets |
@@ -221,7 +228,7 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 |---|---|
 | Pages / navigation | Reachable. Some playground/onboarding screens are still thin. |
 | Love overlay + pill | Session store. Minimize vs full exit. Do not put `LovePill` on Home unconditionally. |
-| Love / Message chat | Send works. **Replies are local `companionReply`**, not LLM, until you wire `completeCompanionChat`. |
+| Love / Message chat | Send works. **Replies are local `companionReply`**, not LLM, until you wire `completeCompanionChat`. Message times are real epochs formatted WeChat-style (`now` / `3 min ago` / `2:14 PM` / `Yesterday` / `Mon` / `Sep 2`); Love chat shows no times. |
 | Voice call UI | Timer / press / hangup. **No WebRTC.** |
 | Listen | UI + `speechSynthesis` stand-in. |
 | Avatar wizard | Works. Preview needs Metro. Companions persist. |
@@ -250,6 +257,10 @@ Bots reply with `companionReply` today. `completeCompanionChat` in `src/services
 12. **Check stacked PR branches actually contain the fixes you think they do.** `cursor/persist-kink-favorites-b118` (#19) was cut from an older #6 commit and never had `e9cb6f1` (TtsHost WKWebView removal), #12 (avatar WKWebView only for a focused slot) or #17. `git merge-base --is-ancestor <fix-sha> HEAD` before building a TestFlight from a stack tip.
 13. **Regenerate is a property of one message row, not a list footer.** Message thread used to render **Regenerate** at the bottom of the `ScrollView` whenever *any* bot bubble existed (`lastThem && !typing`). Once replies became real Ark round trips (`3389cd6`), that footer sat under the user's own bubble for the whole wait and after a failed send. The store now counts in-flight replies per thread (`replyPending`), and `src/screens/chat/regenerate.ts` decides the only row that may carry the control: the final bubble, from `them`, non-empty, non-voice, answering an earlier user message, with nothing pending. Love chat has no Regenerate at all; keep it that way unless it follows the same rule. `__tests__/chat-regenerate-gate.test.tsx` and `__tests__/love-chat-reply-rows.test.tsx` fail if the control returns to a pending / user / empty / greeting-only row.
 14. **Record the real origin `surface` whenever `start()` opens Call/Sync.** `surface: "love"` means "a dark LoveChat belongs under this overlay", so pill restore rebuilds `NavBar → LoveChat → LoveSync` and red X (`goBack`) lands on that LoveChat. The Control hub Sync (`src/screens/sync/sync_screen.tsx`, Maxwell calls this tab "Playground") recorded `love` on minimize; on TestFlight 1.2 (8) that showed as a dark-chat flash on pill restore and X dumping him on a chat he never opened. Control Sync is `surface: "control"`: restore is `NavBar → LoveSync`, X is `end()` + `dismissLoveOverlays` back onto the hub. Only Love chat's own `+ → Sync/Call` may use `love`.
+15. **Never `require()` a stock portrait where a person is shown.** `assets/images/avatar-ring.png`, `assets/images/love/call-face.png` and `assets/images/message/kevin.png` are all Kevin. Control Sync (`src/screens/sync/sync_screen.tsx`, `SCREENS.SYNC_SCREEN`) rebound its header name to the picked person but kept `avatar-ring.png` for `SYNC_ACTIVE_CONFIRMATION` / `SYNC_ONGOING` — the state it boots into — so TestFlight 1.2 (9) showed Kevin's head for Chad and Amanda; `LoveSyncScreen` had the same `call-face.png` hard-code. Render `LookFace` with `lookFromCompanion(companion)` and `fallbackSource={faceSourceForId(companionId)}` like the Love chat header and pill. `__tests__/sync-selected-person.test.tsx` fails on any Kevin portrait when someone else was picked. `src/screens/love/call.tsx` still hard-codes `CALL_FACE` (voice call, out of scope so far).
+16. **One create-character form, one birthday rule.** Home `+` opened the avatar wizard (`AvatarIdentityScreen`: validated mm/dd/yyyy, male-only gender, then 3D) while Message `+` → Create new opened `ChatCreateScreen` (`src/screens/chat/create.tsx`: free-text gender, unvalidated birthday, Save always on, no 3D, then a "Create avatar" success screen). Maxwell saw two similar-but-different pages on TestFlight 1.2. `ChatCreateScreen`, `SCREENS.CHAT_CREATE` and `createBot` are deleted; both `+` menus go through `openCreateCompanion`. Do not add a second "quick create" form — extend `identity.tsx` instead. `__tests__/create-character-entry.test.tsx` follows both `+` entries into the wizard and fails if they mount different first screens or apply different birthday rules. Stored birthdays that predate the rule (seeded Amanda: `13th April 2001`) show `Use mm/dd/yyyy` and block Continue until retyped; that is the rule working.
+17. **Deleted seeded bots come back unless you tombstone them.** `mergeSeedThreads` re-inserts Kevin / Chad / Amanda on every hydrate and `loadChat` reseeds a blob whose `threads` is empty, so "Delete friend" on the inbox would have silently undone itself on the next launch. `deleteThread` records the id in `ChatBlob.deletedThreadIds`; `mergeSeedThreads` skips those seeds and `loadChat` treats an empty list with tombstones as real. Re-adding the same person (Add friends → `sendFriendRequest`) still works because an existing thread always wins over its tombstone. `__tests__/message-swipe-actions.test.tsx` relaunches the provider after deleting one and then all friends. Not device-verified as of this entry — the swipe itself (RNGH `Swipeable` inside the inbox `ScrollView`, wrapped in a local `GestureHandlerRootView` like `AlarmList`) has only run under Jest.
+18. **Never store a chat time as a display string.** `ChatThread.time` was a string that every send, reply, request change and persona save overwrote with `"Now"` (`src/screens/chat/store.tsx` ×8, `src/backend/store.ts` `appendMessage` / `upsertThread`, seeded Amanda in `src/backend/chat-seed.ts`), and the inbox row printed it verbatim — so Maxwell saw **now** on every chat forever. Bubbles carry `sentAt` and threads `lastActivityAt` (epoch ms, `Date.now()`); the label is computed at render by `src/screens/chat/time.ts` and re-rendered by `useNow()` (30 s tick + `AppState` active). Thread bubbles get WeChat time *lines* (first bubble, then ≥5 min gaps), not a time each. Editing a persona / look is not chat activity and must not bump `lastActivityAt`. Blobs from before the change hit `normalizeThreadTimestamps` in `loadChat`, which recovers real epochs from the ids the store already minted (`${Date.now()}-hex`) instead of stamping everything with the migration moment. Love chat (`src/screens/love/chat.tsx`) shows no times at all and was left alone. `__tests__/chat-time-format.test.ts` + `__tests__/message-timestamps.test.tsx` fail if a 2-hour-old message renders `now`, a send stores no timestamp, or a bucket boundary moves. Not device-verified as of this entry (Jest only).
 
 ---
 
@@ -261,11 +272,11 @@ Overnight QA close-out (global Love pill, dead taps, Control→Kink hub, fake ta
 
 Treat **Create → Save → Edit look → Edit persona → Save again** as one product. Same `companionId`. `upsertCompanion` never clones.
 
-- **Create wizard** (`mode: create`): Identity → Ready → Appearance → Customize → Personality → Story → Intimate → Candle → Waiting. Back = previous step; close = discard if dirty. Each step says 3D vs chat persona. Male-only 3D.
+- **Create wizard** (`mode: create`): Identity (name, gender, birthday, description) → Ready → Appearance → Customize → Personality → Intimate → Candle → Waiting. Back = previous step; close = discard if dirty. Each step says 3D vs chat persona. Male-only 3D. Description *is* the persona `story`; there is no separate Story step.
 - **First save:** Waiting upserts companion + matching Message thread immediately, blocks system back, then opens Love. Home strip + Love header/pill use `LookFace`.
 - **Edit look** (`mode: editLook`): Appearance → Customize → **Save look**. Loads existing look. Cancel restores baseline.
-- **Edit persona** (`mode: editPersona`): Identity → Personality → Story → Intimate → **Save persona**. Does not open the full new-avatar wizard.
-- **Entry:** Love `···` → Edit avatar / Edit persona (dismisses Love overlay first). Chat settings: same if a companion exists; otherwise Edit traits (`create.tsx`) or Create avatar (wizard with that thread id).
+- **Edit persona** (`mode: editPersona`): Identity → Personality → Intimate → **Save persona**. Does not open the full new-avatar wizard. On a **chat-only bot** (seeded Kevin / Amanda, no `Companion` record) the save writes the thread only (`updateBot`); it never mints a default-look companion. Untouched personality traits leave the seeded free-text `personality` alone.
+- **Entry:** Home `+` and Message `+` → Create new both call `openCreateCompanion` → `AvatarStack { mode: "create" }`. Love `···` → Edit avatar / Edit persona (dismisses Love overlay first). Chat settings: Edit avatar / Edit persona if a companion exists; otherwise Edit persona (`openEditPersona`, same Identity form) or Create avatar (wizard with that thread id).
 - Preview Metro path unchanged. Outfit cards still do not wipe Customize.
 
 Do not regress SessionLovePill / Sync / Auto.

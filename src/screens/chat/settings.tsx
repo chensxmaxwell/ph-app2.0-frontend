@@ -16,12 +16,11 @@ import {
 } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors } from "@common/styles/colors";
-import { SCREENS } from "@common/constant";
 import ChevronBack from "@images/avatar/chevron-back.svg";
 import Pencil from "@images/message/pencil.svg";
 import { lookFromCompanion, useCompanions } from "../../store/companions";
 import { LookFace } from "../avatar/look-face";
-import { openAvatarWizard } from "../avatar/open";
+import { openAvatarWizard, openEditPersona } from "../avatar/open";
 import { s } from "../avatar/scale";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
@@ -55,19 +54,9 @@ export const ChatSettingsScreen = () => {
     return null;
   }
 
-  const openTraits = () => {
-    if (companion) {
-      openAvatarWizard(navigation, {
-        mode: "editPersona",
-        companionId: companion.id,
-      });
-      return;
-    }
-    navigation.navigate(
-      SCREENS.CHAT_CREATE as never,
-      { threadId: thread.id } as never
-    );
-  };
+  // Same Identity form whether this person already has a 3D companion record
+  // or is still a chat-only bot; the save path decides what gets written.
+  const openTraits = () => openEditPersona(navigation, thread.id);
 
   return (
     <ChatGradient>
@@ -110,8 +99,12 @@ export const ChatSettingsScreen = () => {
             </>
           ) : (
             <>
-              <TouchableOpacity style={styles.traits} onPress={openTraits}>
-                <Text style={styles.traitsText}>Edit traits</Text>
+              <TouchableOpacity
+                testID="chat-settings-edit-persona"
+                style={styles.traits}
+                onPress={openTraits}
+              >
+                <Text style={styles.traitsText}>Edit persona</Text>
               </TouchableOpacity>
               {thread.kind === "bot" ? (
                 <TouchableOpacity
@@ -141,9 +134,7 @@ export const ChatSettingsScreen = () => {
           {companion?.personalities?.length || thread.personality ? (
             <Field
               label="Personality"
-              value={
-                companion?.personalities?.join(", ") || thread.personality
-              }
+              value={companion?.personalities?.join(", ") || thread.personality}
             />
           ) : null}
         </ScrollView>

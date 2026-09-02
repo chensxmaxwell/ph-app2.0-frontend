@@ -25,7 +25,6 @@ import { LoveSyncScreen } from "../src/screens/love/sync";
 import { ChatThreadScreen } from "../src/screens/chat/thread";
 import { ChatSearchScreen } from "../src/screens/chat/search";
 import { ChatSettingsScreen } from "../src/screens/chat/settings";
-import { ChatCreateScreen } from "../src/screens/chat/create";
 import { ChatContactScreen } from "../src/screens/chat/contact";
 import { ChatCallScreen } from "../src/screens/chat/call";
 import SyncStack from "../src/screens/sync/sync_stack";
@@ -93,7 +92,6 @@ export const HomeStack = () => (
     <Stack.Screen name={SCREENS.CHAT_THREAD} component={ChatThreadScreen} />
     <Stack.Screen name={SCREENS.CHAT_SEARCH} component={ChatSearchScreen} />
     <Stack.Screen name={SCREENS.CHAT_SETTINGS} component={ChatSettingsScreen} />
-    <Stack.Screen name={SCREENS.CHAT_CREATE} component={ChatCreateScreen} />
     <Stack.Screen name={SCREENS.CHAT_CONTACT} component={ChatContactScreen} />
     <Stack.Screen
       name={SCREENS.CHAT_CALL}
@@ -152,7 +150,6 @@ export type HomeStackScreenProps = {
   ChatThread: { threadId: string };
   ChatSearch: { addFriends?: boolean } | undefined;
   ChatSettings: { threadId: string };
-  ChatCreate: { threadId?: string } | undefined;
   ChatContact: { personId: string };
   ChatCall: { threadId: string };
   SyncStack: { companionId?: string; name?: string } | undefined;

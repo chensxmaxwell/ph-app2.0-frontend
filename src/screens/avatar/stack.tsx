@@ -15,7 +15,6 @@ import { AvatarReadyScreen } from "./ready";
 import { AvatarAppearanceScreen } from "./appearance";
 import { AvatarCustomizeScreen } from "./customize";
 import { AvatarPersonalityScreen } from "./personality";
-import { AvatarStoryScreen } from "./story";
 import { AvatarIntimateScreen } from "./intimate";
 import { AvatarCandleScreen } from "./candle";
 import { AvatarWaitingScreen } from "./waiting";
@@ -39,7 +38,8 @@ const initialRouteFor = (mode: WizardMode) => {
 };
 
 export const AvatarStack = () => {
-  const route = useRoute<RouteProp<Record<string, AvatarStackParams>, string>>();
+  const route =
+    useRoute<RouteProp<Record<string, AvatarStackParams>, string>>();
   const params = route.params ?? {};
   const mode: WizardMode = params.mode ?? "create";
   const { companions } = useCompanions();
@@ -47,9 +47,10 @@ export const AvatarStack = () => {
   const companion = params.companionId
     ? companions.find((item) => item.id === params.companionId)
     : undefined;
-  const thread = !companion && params.companionId
-    ? getThread(params.companionId)
-    : undefined;
+  const thread =
+    !companion && params.companionId
+      ? getThread(params.companionId)
+      : undefined;
   const fallbackId = useMemo(() => `companion-${Date.now()}`, []);
   const companionId = params.companionId ?? fallbackId;
   const initialDraft = companion
@@ -81,7 +82,10 @@ export const AvatarStack = () => {
           name={SCREENS.AVATAR_IDENTITY}
           component={AvatarIdentityScreen}
         />
-        <Stack.Screen name={SCREENS.AVATAR_READY} component={AvatarReadyScreen} />
+        <Stack.Screen
+          name={SCREENS.AVATAR_READY}
+          component={AvatarReadyScreen}
+        />
         <Stack.Screen
           name={SCREENS.AVATAR_APPEARANCE}
           component={AvatarAppearanceScreen}
@@ -94,7 +98,6 @@ export const AvatarStack = () => {
           name={SCREENS.AVATAR_PERSONALITY}
           component={AvatarPersonalityScreen}
         />
-        <Stack.Screen name={SCREENS.AVATAR_STORY} component={AvatarStoryScreen} />
         <Stack.Screen
           name={SCREENS.AVATAR_INTIMATE}
           component={AvatarIntimateScreen}
