@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import {
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -32,6 +33,9 @@ import { ChatGradient } from "./background";
 import { useChat } from "./store";
 import { ChatBubble, ChatThread } from "./types";
 import { faceSourceForId } from "./faces";
+import { enterTalkMode, leaveTalkMode } from "./talk-mode";
+import { sanitizeComposerText } from "../../services/dictation-text";
+import { startVoiceInput, stopVoiceInput } from "../../services/voice-input";
 
 type ThreadRoute = RouteProp<{ ChatThread: { threadId: string } }, "ChatThread">;
 
@@ -74,7 +78,6 @@ export const ChatThreadScreen = () => {
   const {
     getThread,
     sendText,
-    sendVoice,
     editLastMine,
     regenerate,
     setListen,
@@ -100,7 +103,9 @@ export const ChatThreadScreen = () => {
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [listenBlocked, setListenBlocked] = useState(false);
   const [resentNote, setResentNote] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const listRef = useRef<ScrollView>(null);
+  const inputRef = useRef<TextInput>(null);
 
   if (!thread) {
     return (
@@ -341,57 +346,31 @@ export const ChatThreadScreen = () => {
                 <Text style={styles.link}>Return</Text>
               </TouchableOpacity>
             </View>
-          ) : talkMode ? (
-            <View
-              style={[
-                styles.talkBar,
-                { paddingBottom: insets.bottom, height: s(80) + insets.bottom },
-              ]}
-            >
-              <TouchableOpacity
-                onPress={() => setTalkMode(false)}
-                style={styles.iconHit}
-                hitSlop={8}
-              >
-                <KeyboardIcon width={s(35)} height={s(35)} />
-              </TouchableOpacity>
-              <Pressable
-                onPressIn={() => setHolding(true)}
-                onPressOut={() => {
-                  setHolding(false);
-                  sendVoice(thread.id);
-                }}
-                style={[styles.talkButton, holding && styles.talkButtonHot]}
-              >
-                <Text style={styles.talkText}>
-                  {holding ? "Release to send" : "Press to start talking"}
-                </Text>
-              </Pressable>
-              <TouchableOpacity
-                onPress={() => {
-                  setTalkMode(false);
-                  setDrawerOpen(true);
-                }}
-                style={styles.plus}
-                hitSlop={12}
-              >
-                <PlusCircle width={s(35)} height={s(35)} />
-              </TouchableOpacity>
-            </View>
           ) : (
+            <>
             <View
-              style={[
-                styles.composer,
-                {
-                  paddingBottom: insets.bottom,
-                  minHeight: s(80) + insets.bottom,
-                },
-              ]}
+              pointerEvents={talkMode ? "none" : "auto"}
+              style={
+                talkMode
+                  ? styles.composerHidden
+                  : [
+                      styles.composer,
+                      {
+                        paddingBottom: insets.bottom,
+                        minHeight: s(80) + insets.bottom,
+                      },
+                    ]
+              }
             >
               <TouchableOpacity
                 onPress={() => {
-                  setDrawerOpen(false);
-                  setTalkMode(true);
+                  setVoiceError(null);
+                  enterTalkMode({
+                    dismissKeyboard: () => Keyboard.dismiss(),
+                    blurInput: () => inputRef.current?.blur(),
+                    setDrawerOpen,
+                    setTalkMode,
+                  });
                 }}
                 style={styles.iconHit}
                 hitSlop={8}
@@ -400,9 +379,10 @@ export const ChatThreadScreen = () => {
               </TouchableOpacity>
               <View style={styles.inputWrap}>
                 <TextInput
+                  ref={inputRef}
                   value={draft}
                   onChangeText={(value) => {
-                    setDraft(value);
+                    setDraft(sanitizeComposerText(value));
                     setDrawerOpen(false);
                   }}
                   style={styles.input}
@@ -426,6 +406,71 @@ export const ChatThreadScreen = () => {
                 <Paperplane width={s(35)} height={s(35)} />
               </TouchableOpacity>
             </View>
+            {talkMode ? (
+              <View
+                style={[
+                  styles.talkBar,
+                  { paddingBottom: insets.bottom, height: s(80) + insets.bottom },
+                ]}
+              >
+                <TouchableOpacity
+                  onPress={() => {
+                    stopVoiceInput().catch(() => undefined);
+                    leaveTalkMode({ setTalkMode, setHolding });
+                    setVoiceError(null);
+                  }}
+                  style={styles.iconHit}
+                  hitSlop={8}
+                >
+                  <KeyboardIcon width={s(35)} height={s(35)} />
+                </TouchableOpacity>
+                <Pressable
+                  onPressIn={() => {
+                    setHolding(true);
+                    setVoiceError(null);
+                    startVoiceInput().then((result) => {
+                      if (!result.ok) {
+                        setHolding(false);
+                        setVoiceError(result.message);
+                      }
+                    });
+                  }}
+                  onPressOut={() => {
+                    setHolding(false);
+                    stopVoiceInput().then((result) => {
+                      if (result.ok && result.text.trim()) {
+                        sendText(thread.id, result.text);
+                        setVoiceError(null);
+                        return;
+                      }
+                      if (!result.ok) {
+                        setVoiceError(result.message);
+                      }
+                    });
+                  }}
+                  style={[styles.talkButton, holding && styles.talkButtonHot]}
+                >
+                  <Text style={styles.talkText}>
+                    {holding ? "Release to send" : "Press to start talking"}
+                  </Text>
+                </Pressable>
+                <TouchableOpacity
+                  onPress={() => {
+                    stopVoiceInput().catch(() => undefined);
+                    leaveTalkMode({ setTalkMode, setHolding });
+                    setDrawerOpen(true);
+                  }}
+                  style={styles.plus}
+                  hitSlop={12}
+                >
+                  <PlusCircle width={s(35)} height={s(35)} />
+                </TouchableOpacity>
+              </View>
+            ) : null}
+            {voiceError && talkMode ? (
+              <Text style={styles.voiceError}>{voiceError}</Text>
+            ) : null}
+            </>
           )}
 
           {drawerOpen && !talkMode && chatting ? (
@@ -696,6 +741,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: s(12),
     gap: s(8),
     zIndex: 5,
+  },
+  composerHidden: {
+    height: 0,
+    overflow: "hidden",
+    opacity: 0,
+  },
+  voiceError: {
+    color: colors.white,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 13,
+    textAlign: "center",
+    paddingHorizontal: s(16),
+    paddingBottom: s(8),
+    backgroundColor: "#4c495f",
   },
   inputWrap: {
     flex: 1,

@@ -554,6 +554,10 @@
 					"$(inherited)",
 					"-ObjC",
 					"-lc++",
+					"-framework",
+					"Speech",
+					"-framework",
+					"AVFoundation",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = ai.pleasurehouse.app;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = ai.pleasurehouse.app;
@@ -585,6 +589,10 @@
 					"$(inherited)",
 					"-ObjC",
 					"-lc++",
+					"-framework",
+					"Speech",
+					"-framework",
+					"AVFoundation",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = ai.pleasurehouse.app;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = ai.pleasurehouse.app;

@@ -308,6 +308,7 @@ export const AvatarEngineHost = () => {
           androidLayerType="hardware"
           mixedContentMode="always"
           javaScriptEnabled
+          mediaCapturePermissionGrantType="deny"
           onLoadEnd={() => {
             if (store.status === "ready") {
               pushLook();
