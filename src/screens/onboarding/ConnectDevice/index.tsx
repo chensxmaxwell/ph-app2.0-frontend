@@ -1,5 +1,5 @@
 import React, { memo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, Pressable } from 'react-native';
 import { PeripheralWrapper, useBleManager } from '../../../hooks/useBleManager';
 import { DEMO_DEVICE_ID, DEMO_DEVICE_NAME, useDevice } from '../../../store/device';
 import { useConnectDevice } from './hooks';
@@ -82,9 +82,18 @@ export const ConnectDevice = () => {
                 colors={['rgba(108, 108, 108, 0.6)', 'rgba(33, 33, 33, 0.6)']}
                 start={{ x: 0.5, y: 0 }}  
                 end={{ x: 0.5, y: 1 }}   
+                pointerEvents="none"
                 style={styles.fill}
             />
-            <GoBackIcon style={styles.BackIcon} onPress={handleNavigateToBack}></GoBackIcon>
+            <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Back"
+                hitSlop={16}
+                onPress={handleNavigateToBack}
+                style={styles.BackIcon}
+            >
+                <GoBackIcon />
+            </Pressable>
             <Text style={styles.title}>Find your device</Text>
             <View style={styles.connectContainer}>
                 <View style={linked ? styles.connectIndicator : styles.disconnectIndicator} />
@@ -146,8 +155,13 @@ const styles = StyleSheet.create({
     },
     BackIcon: {
         position: 'absolute',
-        top: 73,
-        left: 26
+        top: 61,
+        left: 10,
+        zIndex: 10,
+        width: 44,
+        height: 44,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     fill: {
         position: 'absolute',
