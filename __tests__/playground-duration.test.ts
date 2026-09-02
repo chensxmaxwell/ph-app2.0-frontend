@@ -14,10 +14,17 @@ import {
 const TimerDurationProbe = ({
   useDuration,
 }: {
-  useDuration: () => { time: number };
+  useDuration: () => {
+    time: number;
+    setTime: (minutes: number) => void;
+  };
 }) => {
-  const { time } = useDuration();
-  return React.createElement(Text, null, time * 60);
+  const { time, setTime } = useDuration();
+  return React.createElement(
+    Text,
+    { onPress: () => setTime(5) },
+    time * 60
+  );
 };
 
 describe.each([
@@ -50,5 +57,31 @@ describe.each([
     act(() => {
       tree?.unmount();
     });
+  });
+});
+
+it("keeps a selected 5-minute Quick Bliss session at 300 seconds", () => {
+  let tree: renderer.ReactTestRenderer | undefined;
+
+  act(() => {
+    tree = renderer.create(
+      React.createElement(
+        QuickBlissContext,
+        null,
+        React.createElement(TimerDurationProbe, {
+          useDuration: useAppContext,
+        })
+      )
+    );
+  });
+
+  act(() => {
+    tree?.root.findByType(Text).props.onPress();
+  });
+
+  expect(tree?.root.findByType(Text).props.children).toBe(5 * 60);
+
+  act(() => {
+    tree?.unmount();
   });
 });
