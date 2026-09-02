@@ -144,14 +144,15 @@ export const ChatThreadScreen = () => {
   };
 
   const submit = () => {
-    if (!draft.trim()) {
+    const text = sanitizeComposerText(draft);
+    if (!text.trim()) {
       return;
     }
     if (editingId) {
-      editLastMine(thread.id, draft);
+      editLastMine(thread.id, text);
       setEditingId(null);
     } else {
-      sendText(thread.id, draft);
+      sendText(thread.id, text);
     }
     setDraft("");
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
@@ -382,7 +383,8 @@ export const ChatThreadScreen = () => {
                   ref={inputRef}
                   value={draft}
                   onChangeText={(value) => {
-                    setDraft(sanitizeComposerText(value));
+                    // Do not rewrite marked text while iOS dictation or an IME owns it.
+                    setDraft(value);
                     setDrawerOpen(false);
                   }}
                   style={styles.input}
