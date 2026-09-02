@@ -16,8 +16,12 @@ import MicroPhone_unmute from "@images/microphone-unmute.svg";
 import MicroPhone_mute from "@images/microphone-mute.svg";
 import { usePatternPlayer } from "../../hooks/usePatternPlayer";
 import { wavePattern } from "../../store/patterns";
+import { lookFromCompanion, useCompanions } from "../../store/companions";
+import { LookFace } from "../avatar/look-face";
 import { useLoveSession } from "../love/session";
 import { faceSourceForId } from "../chat/faces";
+
+const AVATAR_SIZE = 100;
 
 const SyncScreen = () => {
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
@@ -27,6 +31,8 @@ const SyncScreen = () => {
     | undefined;
   const partnerName = params?.name?.trim() || "Kevin";
   const partnerId = params?.companionId?.trim() || `sync-${partnerName}`;
+  const { companions } = useCompanions();
+  const partner = companions.find((item) => item.id === partnerId);
   const { start: startSession, minimize, ensureLayerTimer } = useLoveSession();
   const [syncState, setSyncState] = useState("SYNC_ONGOING");
   const { start, stop } = usePatternPlayer(wavePattern(72), "sync");
@@ -121,44 +127,37 @@ const SyncScreen = () => {
 
   const renderAvatar = () => {
     let backgroundSource = null;
-    let ringSource = null;
 
     switch (syncState) {
       case "SYNC_INVITATION_SENT":
-        backgroundSource = require("../../../assets/images/eclipse-white.png");
-        ringSource = faceSourceForId(params?.companionId);
-        break;
-      case "SYNC_ACCEPTED":
-        backgroundSource = require("../../../assets/images/eclipse-pink.png");
-        ringSource = faceSourceForId(params?.companionId);
-        break;
       case "SYNC_REQUEST_RECEIVED":
         backgroundSource = require("../../../assets/images/eclipse-white.png");
-        ringSource = faceSourceForId(params?.companionId);
         break;
-      case "USER_BUSY":
-        ringSource = faceSourceForId(params?.companionId);
-        break;
+      case "SYNC_ACCEPTED":
       case "SYNC_ACTIVE_CONFIRMATION":
-        backgroundSource = require("../../../assets/images/eclipse-pink.png");
-        ringSource = require("../../../assets/images/avatar-ring.png");
-        break;
       case "SYNC_ONGOING":
         backgroundSource = require("../../../assets/images/eclipse-pink.png");
-        ringSource = require("../../../assets/images/avatar-ring.png");
         break;
+      case "USER_BUSY":
       default:
         backgroundSource = null;
-        ringSource = null;
     }
 
+    // Every state, including the live ones, shows the person picked on the
+    // selection screen; any stock portrait here reads as Kevin regardless.
     return (
       <View style={[styles.avatarContainer]}>
         {syncState === "SYNC_ONGOING" && (
           <Text style={styles.timeText}>{formatTime(elapsedTime)}</Text>
         )}
         <Image source={backgroundSource} style={styles.background} />
-        <Image source={ringSource} style={styles.avatar} />
+        <View style={styles.avatar}>
+          <LookFace
+            look={partner ? lookFromCompanion(partner) : null}
+            size={AVATAR_SIZE}
+            fallbackSource={faceSourceForId(partnerId)}
+          />
+        </View>
       </View>
     );
   };
@@ -399,9 +398,8 @@ const styles = StyleSheet.create({
     position: "absolute",
   },
   avatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
     position: "absolute",
   },
   timeText: {
