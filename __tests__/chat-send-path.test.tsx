@@ -123,9 +123,7 @@ const buttonWithLabel = (
   const match = tree.root
     .findAllByType(TouchableOpacity)
     .find((button) =>
-      button
-        .findAllByType(Text)
-        .some((text) => text.props.children === label)
+      button.findAllByType(Text).some((text) => text.props.children === label)
     );
   if (!match) {
     throw new Error(`No button labelled ${label}`);
@@ -150,7 +148,7 @@ beforeEach(async () => {
     email: "demo@local",
     token: "local.demo",
   });
-  global.fetch = jest.fn(() => arkReply("我在呢。")) as typeof fetch;
+  global.fetch = jest.fn(() => arkReply("我在呢。")) as unknown as typeof fetch;
   api = null;
 });
 
