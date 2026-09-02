@@ -36,6 +36,7 @@ import { faceSourceForId } from "./faces";
 import { enterTalkMode, leaveTalkMode } from "./talk-mode";
 import { sanitizeComposerText } from "../../services/dictation-text";
 import { startVoiceInput, stopVoiceInput } from "../../services/voice-input";
+import { clearComposerAfterSubmit } from "../../services/composer-submit";
 
 type ThreadRoute = RouteProp<{ ChatThread: { threadId: string } }, "ChatThread">;
 
@@ -106,6 +107,7 @@ export const ChatThreadScreen = () => {
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const listRef = useRef<ScrollView>(null);
   const inputRef = useRef<TextInput>(null);
+  const submittedDraftClearRef = useRef<(() => void) | null>(null);
 
   if (!thread) {
     return (
@@ -143,18 +145,36 @@ export const ChatThreadScreen = () => {
     navigation.goBack();
   };
 
+  const finishSubmittedDraftClear = () => {
+    const clear = submittedDraftClearRef.current;
+    submittedDraftClearRef.current = null;
+    clear?.();
+  };
+
+  const clearSubmittedDraft = () => {
+    clearComposerAfterSubmit({
+      endEditingBeforeClear: Platform.OS === "ios",
+      input: inputRef.current,
+      dismissKeyboard: Keyboard.dismiss,
+      clearDraft: () => setDraft(""),
+      deferClearUntilBlur: (clear) => {
+        submittedDraftClearRef.current = clear;
+      },
+    });
+  };
+
   const submit = () => {
     const text = sanitizeComposerText(draft);
     if (!text.trim()) {
       return;
     }
+    clearSubmittedDraft();
     if (editingId) {
       editLastMine(thread.id, text);
       setEditingId(null);
     } else {
       sendText(thread.id, text);
     }
-    setDraft("");
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
   };
 
@@ -392,6 +412,7 @@ export const ChatThreadScreen = () => {
                   placeholderTextColor={colors.grayLighter}
                   multiline
                   onFocus={() => setDrawerOpen(false)}
+                  onBlur={finishSubmittedDraftClear}
                 />
               </View>
               <TouchableOpacity
