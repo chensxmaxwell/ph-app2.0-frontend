@@ -16,10 +16,9 @@ import MicroPhone_unmute from "@images/microphone-unmute.svg";
 import MicroPhone_mute from "@images/microphone-mute.svg";
 import { usePatternPlayer } from "../../hooks/usePatternPlayer";
 import { wavePattern } from "../../store/patterns";
-import { lookFromCompanion, useCompanions } from "../../store/companions";
 import { LookFace } from "../avatar/look-face";
+import { usePersonFace } from "../avatar/use-person-face";
 import { useLoveSession } from "../love/session";
-import { faceSourceForId } from "../chat/faces";
 
 const AVATAR_SIZE = 100;
 
@@ -31,8 +30,7 @@ const SyncScreen = () => {
     | undefined;
   const partnerName = params?.name?.trim() || "Kevin";
   const partnerId = params?.companionId?.trim() || `sync-${partnerName}`;
-  const { companions } = useCompanions();
-  const partner = companions.find((item) => item.id === partnerId);
+  const { face } = usePersonFace(partnerId);
   const { start: startSession, minimize, ensureLayerTimer } = useLoveSession();
   const [syncState, setSyncState] = useState("SYNC_ONGOING");
   const { start, stop } = usePatternPlayer(wavePattern(72), "sync");
@@ -153,9 +151,9 @@ const SyncScreen = () => {
         <Image source={backgroundSource} style={styles.background} />
         <View style={styles.avatar}>
           <LookFace
-            look={partner ? lookFromCompanion(partner) : null}
+            look={face.look}
             size={AVATAR_SIZE}
-            fallbackSource={faceSourceForId(partnerId)}
+            fallbackSource={face.source}
           />
         </View>
       </View>

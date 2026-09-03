@@ -16,7 +16,9 @@ import {
 import { seedDirectory, seedThreads } from "../../backend/chat-seed";
 import { getCurrentUserId, subscribeSessionUser } from "../../backend/session";
 import { loadChat, saveChat } from "../../backend/store";
+import { defaultBotIdForName, threadIdForCompanion } from "./person";
 import {
+  AvatarChoice,
   ChatBubble,
   ChatThread,
   DirectoryPerson,
@@ -36,6 +38,7 @@ type ChatContextValue = {
   setPinned: (threadId: string, pinned: boolean) => void;
   setSynced: (threadId: string, synced: boolean) => void;
   setUnread: (threadId: string, unread: boolean) => void;
+  setAvatar: (threadId: string, avatar: AvatarChoice) => void;
   deleteThread: (threadId: string) => void;
   sendText: (threadId: string, text: string) => void;
   sendVoice: (threadId: string) => void;
@@ -103,18 +106,9 @@ const ChatContext = createContext<ChatContextValue | null>(null);
 
 const nextId = () => `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
-const DEFAULT_BOT_IDS: Record<string, string> = {
-  kevin: "kevin",
-  chad: "chad",
-  amanda: "amanda",
-};
-
-// A bot named after a seeded person shares that seed's thread id; the store
-// folds such threads together (`findSameBot`, `dedupeThreads`). Exported so
-// Home can pair a thread with its 3D companion record by the same rule.
-export const defaultBotIdForName = (name?: string) =>
-  DEFAULT_BOT_IDS[(name ?? "").trim().toLowerCase()];
-
+// A bot named after a seeded person shares that seed's thread id
+// (`defaultBotIdForName` in ./person.ts); the store folds such threads
+// together here and in `dedupeThreads`.
 const findSameBot = (
   threads: ChatThread[],
   id: string,
@@ -368,6 +362,17 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     (threadId: string, unread: boolean) => {
       updateThread(threadId, (thread) =>
         !!thread.unread === unread ? thread : { ...thread, unread }
+      );
+    },
+    [updateThread]
+  );
+
+  // The avatar picker. Choosing a face is not chat activity, so the Message
+  // row keeps the time of the last message.
+  const setAvatar = useCallback(
+    (threadId: string, avatar: AvatarChoice) => {
+      updateThread(threadId, (thread) =>
+        thread.avatar === avatar ? thread : { ...thread, avatar }
       );
     },
     [updateThread]
@@ -746,9 +751,12 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
               : thread
           );
         }
+        // A companion named after a seeded bot takes that seed's thread id up
+        // front, so no render ever sees it under the record id before
+        // `dedupeThreads` folds it.
         return [
           {
-            id: companion.id,
+            id: threadIdForCompanion({ id: companion.id, name }),
             name,
             kind: "bot" as const,
             preview: `Start chatting with ${name}.`,
@@ -800,6 +808,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       setPinned,
       setSynced,
       setUnread,
+      setAvatar,
       deleteThread,
       sendText,
       sendVoice,
@@ -833,6 +842,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       sendFriendRequest,
       sendText,
       sendVoice,
+      setAvatar,
       setListen,
       setPinned,
       setRequest,
