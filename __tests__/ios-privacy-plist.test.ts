@@ -2,9 +2,12 @@ import fs from "fs";
 import path from "path";
 import { describe, expect, it } from "@jest/globals";
 
+// Voice call: mic + on-device speech recognition. Video call: front camera.
+// iOS kills the process on first use of a capability with no usage string.
 const REQUIRED_IOS_VOICE_KEYS = [
   "NSMicrophoneUsageDescription",
   "NSSpeechRecognitionUsageDescription",
+  "NSCameraUsageDescription",
 ] as const;
 
 const plistPath = (...parts: string[]) =>
@@ -20,9 +23,9 @@ const plistStringValue = (plist: string, key: string) => {
   return match ? match[1].trim() : null;
 };
 
-describe("iOS voice privacy usage strings", () => {
+describe("iOS voice and video call privacy usage strings", () => {
   it.each(["AppFrontend/Info.plist", "AppFrontendTests/Info.plist"])(
-    "keeps non-empty mic and speech-recognition strings in %s",
+    "keeps non-empty mic, speech-recognition and camera strings in %s",
     (relative) => {
       const plist = readPlist(relative);
       for (const key of REQUIRED_IOS_VOICE_KEYS) {

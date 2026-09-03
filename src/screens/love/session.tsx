@@ -281,15 +281,20 @@ export const LoveSessionProvider = ({ children }: { children: ReactNode }) => {
             synced: options.syncing || options.layer === "sync" ? true : saved.synced,
             inCall: options.layer === "call" ? true : saved.inCall,
           }
-        : seedLoveChat({
-            companionId: options.companionId,
-            name: options.name,
-            personality: options.personality,
-            story: options.story,
-            messages: options.messages,
-            fromCreation: options.fromCreation,
-            syncing: options.syncing || options.layer === "sync",
-          });
+        : {
+            ...seedLoveChat({
+              companionId: options.companionId,
+              name: options.name,
+              personality: options.personality,
+              story: options.story,
+              messages: options.messages,
+              fromCreation: options.fromCreation,
+              syncing: options.syncing || options.layer === "sync",
+            }),
+            // Same rule as the reuse / saved branches above: opening the
+            // call layer is what puts the chat in a call.
+            inCall: options.layer === "call",
+          };
       if (next.companionId) {
         chatsByCompanionId.current[next.companionId] = next;
       }

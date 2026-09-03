@@ -1,14 +1,7 @@
-import React, { useEffect, useState } from "react";
-import {
-  Pressable,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import React, { useEffect, useMemo, useState } from "react";
+import { StyleSheet, View } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import { BlurView } from "@react-native-community/blur";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   NavigationProp,
   ParamListBase,
@@ -16,17 +9,15 @@ import {
   useNavigation,
   useRoute,
 } from "@react-navigation/native";
-import { colors } from "@common/styles/colors";
-import Minimize from "@images/minimize.svg";
-import PhoneDown from "@images/love/phone-down.svg";
 import { useCompanions } from "../../store/companions";
 import { useChat } from "../chat/store";
-import { LookFace } from "../avatar/look-face";
-import { s } from "../avatar/scale";
 import { usePersonFace } from "../avatar/use-person-face";
+import { CallBody } from "../call/call-body";
+import { CALL_CONNECT_DELAY_MS, useVoiceCall } from "../call/use-voice-call";
 import { dismissLoveOverlays } from "./overlay";
 import { resolveLovePerson } from "./partner";
 import { useLoveSession } from "./session";
+import type { LoveBubble } from "./types";
 
 type CallRoute = RouteProp<
   {
@@ -35,17 +26,14 @@ type CallRoute = RouteProp<
   "LoveCall"
 >;
 
-const formatElapsed = (seconds: number) => {
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return `${minutes.toString().padStart(2, "0")}:${rest
-    .toString()
-    .padStart(2, "0")}`;
-};
+const nextId = () => `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 
+// Voice / video call inside a Love session. Minimize keeps the session (the
+// global pill restores this overlay); hang-up ends the call layer and lands
+// back on the chat underneath. Spoken turns are written to the Love
+// transcript, which lives in LoveSessionProvider so minimize keeps them.
 export const LoveCallScreen = () => {
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
-  const insets = useSafeAreaInsets();
   const route = useRoute<CallRoute>();
   const { companions, activeCompanion } = useCompanions();
   const { threads } = useChat();
@@ -59,7 +47,12 @@ export const LoveCallScreen = () => {
     ensureLayerTimer,
     clearLayerTimer,
   } = useLoveSession();
-  const { companionId: partnerId, name } = resolveLovePerson({
+  const {
+    companionId: partnerId,
+    name,
+    personality,
+    story,
+  } = resolveLovePerson({
     companionId: companionId ?? route.params?.companionId ?? chat?.companionId,
     name: route.params?.name,
     companions,
@@ -69,8 +62,48 @@ export const LoveCallScreen = () => {
   });
   // The person being called, not the bundled stock call portrait (Kevin's).
   const { face } = usePersonFace(partnerId);
+  const chatMessages = chat?.messages;
+  const history = useMemo(
+    () =>
+      (chatMessages ?? [])
+        .filter((item): item is LoveBubble => item.kind === "bubble")
+        .map((item) => ({ from: item.from, text: item.text })),
+    [chatMessages]
+  );
+  // Restored from the pill: the call has been running, no ring.
+  const [connectDelayMs] = useState(() =>
+    callStartedAt ? 0 : CALL_CONNECT_DELAY_MS
+  );
+  const call = useVoiceCall({
+    name,
+    personality,
+    story,
+    history,
+    connectDelayMs,
+    onExchange: (userText, reply) =>
+      patchChat((current) => ({
+        ...current,
+        messages: [
+          ...current.messages,
+          {
+            kind: "bubble",
+            id: nextId(),
+            from: "me",
+            text: userText,
+            synced: current.synced || undefined,
+          },
+          {
+            kind: "bubble",
+            id: nextId(),
+            from: "them",
+            text: reply,
+            synced: current.synced || undefined,
+          },
+        ],
+      })),
+  });
+  const [video, setVideo] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const [pressing, setPressing] = useState(false);
   const elapsed = callStartedAt
     ? Math.max(0, Math.floor((now - callStartedAt) / 1000))
     : 0;
@@ -117,32 +150,19 @@ export const LoveCallScreen = () => {
         end={{ x: 0.5, y: 1 }}
         style={StyleSheet.absoluteFillObject}
       />
-      <TouchableOpacity
-        onPress={() => {
+      <CallBody
+        name={name}
+        face={face}
+        call={call}
+        elapsed={elapsed}
+        video={video}
+        onToggleVideo={() => setVideo((current) => !current)}
+        onMinimize={() => {
           minimize();
           dismissLoveOverlays(navigation);
         }}
-        hitSlop={8}
-        style={[styles.minimize, { top: insets.top + s(26) }]}
-      >
-        <Minimize width={s(35)} height={s(35)} />
-      </TouchableOpacity>
-      <View style={[styles.identity, { top: insets.top + s(26) }]}>
-        <Text style={styles.name}>{name}</Text>
-        <Text style={styles.timer}>{formatElapsed(elapsed)}</Text>
-      </View>
-      <View style={styles.stage}>
-        <Pressable
-          onPressIn={() => setPressing(true)}
-          onPressOut={() => setPressing(false)}
-          style={[styles.faceWrap, pressing && styles.facePressed]}
-        >
-          <LookFace look={face.look} size={s(100)} fallbackSource={face.source} />
-        </Pressable>
-        <Text style={styles.press}>Connected</Text>
-      </View>
-      <TouchableOpacity
-        onPress={() => {
+        onHangUp={() => {
+          call.hangUp();
           patchChat({ inCall: false });
           clearLayerTimer("call");
           start({
@@ -152,13 +172,7 @@ export const LoveCallScreen = () => {
           });
           navigation.goBack();
         }}
-        style={[styles.hangup, { bottom: insets.bottom + s(26) }]}
-        activeOpacity={0.85}
-      >
-        <View style={styles.hangupIcon}>
-          <PhoneDown width={s(45.38)} height={s(16.88)} />
-        </View>
-      </TouchableOpacity>
+      />
     </View>
   );
 };
@@ -167,77 +181,5 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: "#2B2358",
-  },
-  minimize: {
-    position: "absolute",
-    left: s(20),
-    width: s(35),
-    height: s(35),
-    zIndex: 2,
-  },
-  identity: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    alignItems: "center",
-  },
-  name: {
-    color: colors.white,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 24,
-    textAlign: "center",
-    width: s(151),
-    height: s(30),
-  },
-  timer: {
-    marginTop: s(24),
-    color: colors.grayLighter,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 24,
-    textAlign: "center",
-    width: s(151),
-    height: s(30),
-  },
-  stage: {
-    position: "absolute",
-    top: s(241),
-    left: 0,
-    right: 0,
-    alignItems: "center",
-  },
-  faceWrap: {
-    width: s(100),
-    height: s(100),
-  },
-  facePressed: {
-    opacity: 0.7,
-    transform: [{ scale: 0.96 }],
-  },
-  press: {
-    marginTop: s(10),
-    color: colors.white,
-    fontFamily: "OpenSans-Bold",
-    fontSize: 20,
-    textAlign: "center",
-    width: s(202),
-    height: s(54),
-    lineHeight: s(54),
-  },
-  hangup: {
-    position: "absolute",
-    alignSelf: "center",
-    left: s(144),
-    width: s(100),
-    height: s(100),
-    borderRadius: s(50),
-    backgroundColor: "rgba(249, 95, 110, 0.3)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  hangupIcon: {
-    width: s(60),
-    height: s(60),
-    alignItems: "center",
-    justifyContent: "center",
   },
 });

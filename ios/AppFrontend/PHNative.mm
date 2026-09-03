@@ -1,4 +1,5 @@
 #import <React/RCTBridgeModule.h>
+#import <React/RCTViewManager.h>
 #import <UserNotifications/UserNotifications.h>
 #import <AVFoundation/AVFoundation.h>
 #import <Speech/Speech.h>
@@ -83,6 +84,25 @@ RCT_EXPORT_MODULE();
   }
 }
 
+// Voice input leaves the shared session in the Record category, which has no
+// output route: the next AVSpeechSynthesizer utterance would be silent. A
+// call is hold → recognize → speak, so before speaking move the session to a
+// playback category (through the speaker, ducking other apps) and activate it.
+- (void)ensurePlaybackAudioSession
+{
+  @try {
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    if ([session.category isEqualToString:AVAudioSessionCategoryRecord]) {
+      [session setCategory:AVAudioSessionCategoryPlayback
+                      mode:AVAudioSessionModeDefault
+                   options:AVAudioSessionCategoryOptionDuckOthers
+                     error:nil];
+    }
+    [session setActive:YES error:nil];
+  } @catch (__unused NSException *exception) {
+  }
+}
+
 RCT_REMAP_METHOD(speak,
                  speak:(NSString *)text
                  resolver:(RCTPromiseResolveBlock)resolve
@@ -94,6 +114,7 @@ RCT_REMAP_METHOD(speak,
         self.synthesizer = [AVSpeechSynthesizer new];
         self.synthesizer.delegate = self;
       }
+      [self ensurePlaybackAudioSession];
       if (self.speakResolve) {
         RCTPromiseResolveBlock pending = self.speakResolve;
         self.speakResolve = nil;
@@ -389,5 +410,208 @@ RCT_REMAP_METHOD(syncAlarms,
     resolve(@YES);
   }];
 }
+
+@end
+
+#pragma mark - Front camera picture-in-picture (video call)
+
+// Live front-camera preview for the video call PiP. Video input only: no
+// audio device is ever added, and the session is told not to configure the
+// app's AVAudioSession, so the speech recognizer and the synthesizer keep
+// the session to themselves. Runs while attached to a window, stops when
+// detached. JS gates on UIManager having "PHCameraPreview" before rendering.
+@interface PHCameraPreviewView : UIView
+@property (nonatomic, copy) NSString *position;
+@property (nonatomic, copy) RCTDirectEventBlock onStatusChange;
+@end
+
+@implementation PHCameraPreviewView {
+  AVCaptureSession *_session;
+  AVCaptureVideoPreviewLayer *_previewLayer;
+  dispatch_queue_t _sessionQueue;
+  BOOL _requesting;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame
+{
+  if ((self = [super initWithFrame:frame])) {
+    self.backgroundColor = [UIColor blackColor];
+    self.clipsToBounds = YES;
+    _position = @"front";
+    _sessionQueue = dispatch_queue_create("house.pleasure.camera-preview",
+                                          DISPATCH_QUEUE_SERIAL);
+  }
+  return self;
+}
+
+- (void)layoutSubviews
+{
+  [super layoutSubviews];
+  _previewLayer.frame = self.bounds;
+}
+
+- (void)didMoveToWindow
+{
+  [super didMoveToWindow];
+  if (self.window) {
+    [self startPreview];
+  } else {
+    [self stopPreview];
+  }
+}
+
+- (void)emitStatus:(NSString *)status message:(NSString *)message
+{
+  RCTDirectEventBlock handler = self.onStatusChange;
+  if (!handler) {
+    return;
+  }
+  NSDictionary *payload = @{ @"status": status, @"message": message ?: @"" };
+  if ([NSThread isMainThread]) {
+    handler(payload);
+  } else {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      handler(payload);
+    });
+  }
+}
+
+- (void)startPreview
+{
+  @try {
+    if (_session) {
+      AVCaptureSession *session = _session;
+      dispatch_async(_sessionQueue, ^{
+        if (!session.isRunning) {
+          [session startRunning];
+        }
+      });
+      return;
+    }
+    AVAuthorizationStatus status =
+        [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
+    switch (status) {
+      case AVAuthorizationStatusAuthorized:
+        [self configureAndRun];
+        return;
+      case AVAuthorizationStatusNotDetermined: {
+        if (_requesting) {
+          return;
+        }
+        _requesting = YES;
+        __weak PHCameraPreviewView *weakSelf = self;
+        [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo
+                                 completionHandler:^(BOOL granted) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            PHCameraPreviewView *strongSelf = weakSelf;
+            if (!strongSelf) {
+              return;
+            }
+            strongSelf->_requesting = NO;
+            if (!strongSelf.window) {
+              return;
+            }
+            if (granted) {
+              [strongSelf configureAndRun];
+            } else {
+              [strongSelf emitStatus:@"denied"
+                             message:@"Camera access is needed for video."];
+            }
+          });
+        }];
+        return;
+      }
+      default:
+        [self emitStatus:@"denied" message:@"Camera access is needed for video."];
+        return;
+    }
+  } @catch (__unused NSException *exception) {
+    [self emitStatus:@"unavailable" message:@"The camera could not start."];
+  }
+}
+
+- (void)configureAndRun
+{
+  @try {
+    AVCaptureDevicePosition wanted =
+        [self.position isEqualToString:@"back"] ? AVCaptureDevicePositionBack
+                                                : AVCaptureDevicePositionFront;
+    AVCaptureDevice *device =
+        [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
+                                           mediaType:AVMediaTypeVideo
+                                            position:wanted];
+    if (!device) {
+      device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+    }
+    NSError *error = nil;
+    AVCaptureDeviceInput *input =
+        device ? [AVCaptureDeviceInput deviceInputWithDevice:device error:&error] : nil;
+    AVCaptureSession *session = [AVCaptureSession new];
+    // Never let the capture session reconfigure the voice loop's audio session.
+    session.automaticallyConfiguresApplicationAudioSession = NO;
+    if (!input || ![session canAddInput:input]) {
+      [self emitStatus:@"unavailable" message:@"No camera on this device."];
+      return;
+    }
+    [session beginConfiguration];
+    if ([session canSetSessionPreset:AVCaptureSessionPreset640x480]) {
+      session.sessionPreset = AVCaptureSessionPreset640x480;
+    }
+    [session addInput:input];
+    [session commitConfiguration];
+
+    AVCaptureVideoPreviewLayer *layer =
+        [AVCaptureVideoPreviewLayer layerWithSession:session];
+    layer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+    layer.frame = self.bounds;
+    if (layer.connection.isVideoOrientationSupported) {
+      layer.connection.videoOrientation = AVCaptureVideoOrientationPortrait;
+    }
+    [self.layer addSublayer:layer];
+    _previewLayer = layer;
+    _session = session;
+    dispatch_async(_sessionQueue, ^{
+      [session startRunning];
+    });
+    [self emitStatus:@"authorized" message:@""];
+  } @catch (__unused NSException *exception) {
+    [self emitStatus:@"unavailable" message:@"The camera could not start."];
+  }
+}
+
+- (void)stopPreview
+{
+  AVCaptureSession *session = _session;
+  if (!session) {
+    return;
+  }
+  dispatch_async(_sessionQueue, ^{
+    if (session.isRunning) {
+      [session stopRunning];
+    }
+  });
+}
+
+- (void)dealloc
+{
+  [self stopPreview];
+}
+
+@end
+
+@interface PHCameraPreviewManager : RCTViewManager
+@end
+
+@implementation PHCameraPreviewManager
+
+RCT_EXPORT_MODULE(PHCameraPreview)
+
+- (UIView *)view
+{
+  return [PHCameraPreviewView new];
+}
+
+RCT_EXPORT_VIEW_PROPERTY(position, NSString)
+RCT_EXPORT_VIEW_PROPERTY(onStatusChange, RCTDirectEventBlock)
 
 @end
