@@ -510,6 +510,26 @@
   // for the bust (6.6deg down) and full (9.4deg down) cameras plus
   // convergence, not enough to roll the eye into the socket wall.
   var MAX_GAZE_ANGLE = 0.24;
+  // TestFlight 1.2 (13): with the lids, gaze and 0.31 iris above, Maxwell
+  // still read the eyes as too big - the whole eye, not the pupil. Eyes_0 is
+  // two 22.2mm-radius spheres (44mm across on a 26cm head; a real eye is
+  // 24mm). The eye bones are scaled by this factor, so the eyeball, the
+  // Head_0 eye cap (both skinned 1.0 to eyeRoot_l/r) and the lid margins
+  // (0.8-0.99 to the eye bone, fading to 0 by the brow) all shrink about the
+  // eye centre together: the aperture closes in with the ball, the brow and
+  // cheek stay, and the iris keeps its share of the smaller opening. 0.70 is
+  // a 30% smaller eye (31mm across).
+  var EYE_SCALE = 0.70;
+
+  // Uniform scale on the eye bones. Absolute, so it can be re-applied; the
+  // gaze solver only writes the quaternion and leaves it in place.
+  function applyEyeScale(bones, scale) {
+    var i;
+    for (i = 0; i < bones.length; i++) {
+      bones[i].scale.setScalar(scale);
+      bones[i].updateMatrixWorld(true);
+    }
+  }
 
   // GLSL appended after map_fragment: paints sclera, iris, pupil and limbal
   // ring onto the Eyes_0 UVs, shades the eyeball under the upper lid so it
@@ -944,6 +964,7 @@
             }
             if (isPoseArmBone(boneName)) armBones.push(bone);
           });
+          applyEyeScale(eyeBones, EYE_SCALE);
           modelRoot.traverse(function (obj) {
             if (!obj.isMesh) return;
             obj.frustumCulled = !obj.isSkinnedMesh;
@@ -1131,6 +1152,7 @@
       var entry = {
         position: [pos.x, pos.y, pos.z],
         forward: [fwd.x, fwd.y, fwd.z],
+        scale: bone.scale.x,
         offCameraDeg: null
       };
       if (camera) {
@@ -1153,6 +1175,8 @@
     PUPIL_RADIUS: PUPIL_RADIUS,
     UPPER_LID_DROP: UPPER_LID_DROP,
     MAX_GAZE_ANGLE: MAX_GAZE_ANGLE,
+    EYE_SCALE: EYE_SCALE,
+    applyEyeScale: applyEyeScale,
     upperLidDrop: upperLidDrop,
     aimBoneAt: aimBoneAt,
     irisFragmentChunk: irisFragmentChunk,

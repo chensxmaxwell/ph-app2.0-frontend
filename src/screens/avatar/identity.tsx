@@ -19,8 +19,13 @@ import {
   formatBirthdayInput,
   isPlausibleBirthday,
 } from "./birthday";
+import { useCompanions } from "../../store/companions";
+import { threadIdForCompanion } from "../chat/person";
+import { AvatarPicker } from "./avatar-picker";
 import { useWizardChrome } from "./chrome";
 import { GENDER_OPTIONS, GenderOption, useAvatarWizard } from "./context";
+import { avatarOptions } from "./face";
+import { companionFromDraft } from "./persist";
 import { s } from "./scale";
 import {
   FieldHint,
@@ -33,18 +38,37 @@ import {
 
 export const DESCRIPTION_LIMIT = 3000;
 
+export const GENDER_NOTE = "3D appearance is the current body for every gender.";
+
 // Basic info for a companion: the single form behind Home `+`, Message `+` →
 // Create new, and every Edit persona entry. Description is the same field the
-// chat persona reads as `story`.
+// chat persona reads as `story`. The Choose avatar grid lives here too, so the
+// face is picked while the person is being made (TestFlight 1.2 (13): nobody
+// found the picker hidden behind Chat settings).
 export const AvatarIdentityScreen = () => {
   const navigation = useNavigation();
-  const { draft, patchDraft } = useAvatarWizard();
-  const { mode, title, requestLeave, goBackStep, modal } = useWizardChrome();
+  const { draft, patchDraft, mode, companionId } = useAvatarWizard();
+  const { title, requestLeave, goBackStep, modal } = useWizardChrome();
+  const { companions } = useCompanions();
   const [nameFocused, setNameFocused] = useState(true);
   const [genderOpen, setGenderOpen] = useState(false);
   const birthdayLooksInvalid = !isPlausibleBirthday(draft.birthday);
-  const canContinue = draft.name.trim().length > 0 && !birthdayLooksInvalid;
+  // Creating requires a face; editing opens with the current one selected.
+  const needsAvatar = mode === "create" && draft.avatar === null;
+  const canContinue =
+    draft.name.trim().length > 0 && !birthdayLooksInvalid && !needsAvatar;
   const name = draft.name.trim() || "[name]";
+  // The 3D look is on offer when it is about to be crafted (create) or already
+  // exists (a companion record); a chat-only bot has no look to pick.
+  const hasLook =
+    mode === "create" || companions.some((item) => item.id === companionId);
+  const drafted = companionFromDraft(companionId, draft);
+  const options = avatarOptions({
+    id: threadIdForCompanion(drafted),
+    companion: hasLook ? drafted : undefined,
+    gender: draft.gender,
+    choice: draft.avatar ?? undefined,
+  });
 
   return (
     <WizardShell
@@ -78,8 +102,8 @@ export const AvatarIdentityScreen = () => {
           showsVerticalScrollIndicator={false}
         >
           <StepNote>
-            Name, gender, birthday, and description for this person. Gender does
-            not change the 3D model — demo is male-only.
+            Name, gender, avatar, birthday, and description for this person.
+            The 3D body is the same for every gender.
           </StepNote>
           <FieldLabel>Name</FieldLabel>
           <FieldHint>
@@ -128,41 +152,43 @@ export const AvatarIdentityScreen = () => {
             </TouchableOpacity>
             {genderOpen
               ? GENDER_OPTIONS.map((option) => {
-                  const available = option === "Male";
                   const selected = draft.gender === option;
                   return (
                     <TouchableOpacity
                       key={option}
                       testID={`identity-gender-${option}`}
-                      disabled={!available}
+                      disabled={false}
                       style={[
                         styles.genderOption,
                         selected && styles.genderOptionSelected,
-                        !available && styles.genderOptionDisabled,
                       ]}
                       onPress={() => {
-                        if (!available) {
-                          return;
-                        }
                         patchDraft({ gender: option as GenderOption });
                         setGenderOpen(false);
                       }}
                     >
-                      <Text
-                        style={[
-                          styles.genderOptionText,
-                          !available && styles.genderOptionTextDisabled,
-                        ]}
-                      >
-                        {available ? option : `${option} · unavailable`}
-                      </Text>
+                      <Text style={styles.genderOptionText}>{option}</Text>
                     </TouchableOpacity>
                   );
                 })
               : null}
-            <Text style={styles.genderNote}>
-              Demo: male avatar only for now
-            </Text>
+            <Text style={styles.genderNote}>{GENDER_NOTE}</Text>
+          </View>
+
+          <View style={styles.section}>
+            <FieldLabel>Choose avatar</FieldLabel>
+            <FieldHint>
+              {mode === "create"
+                ? `The face ${name} shows on Home and in chat: the 3D avatar you are about to craft, or a portrait.`
+                : `The face ${name} shows on Home and in chat.`}
+            </FieldHint>
+            <View style={styles.avatarGrid}>
+              <AvatarPicker
+                options={options}
+                selected={draft.avatar}
+                onSelect={(choice) => patchDraft({ avatar: choice })}
+              />
+            </View>
           </View>
 
           <View style={styles.section}>
@@ -289,16 +315,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.grayLighter,
     borderColor: colors.white,
   },
-  genderOptionDisabled: {
-    opacity: 0.42,
-  },
   genderOptionText: {
     color: colors.white,
     fontFamily: "Quicksand-Bold",
     fontSize: 13,
   },
-  genderOptionTextDisabled: {
-    color: colors.grayLighter,
+  avatarGrid: {
+    marginTop: s(16),
+    width: s(329),
   },
   genderNote: {
     marginTop: s(10),

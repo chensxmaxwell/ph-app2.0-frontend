@@ -1,6 +1,15 @@
+import type { PortraitId } from "../avatar/portraits";
+
 export type ChatKind = "bot" | "human";
 
 export type FriendRequest = "none" | "incoming" | "sent" | "accepted" | "refused";
+
+// Which face a person wears on every surface (Home strip, Message list and
+// thread, Love overlays, calls). `look` is the crafted 3D avatar, `portrait`
+// the bundled photo a seeded person owns, a PortraitId one of the six
+// generated portraits every companion may pick. Unset means the default: the
+// crafted look when the person has one, otherwise the portrait.
+export type AvatarChoice = "look" | "portrait" | PortraitId;
 
 export type ChatBubble = {
   id: string;
@@ -35,6 +44,10 @@ export type ChatThread = {
   birthday?: string;
   description?: string;
   personality?: string;
+  // The user's avatar pick for this person; see AvatarChoice. Lives on the
+  // thread because the thread is the one membership record (a seeded person
+  // has no companion record) and dies with "Delete friend".
+  avatar?: AvatarChoice;
   messages: ChatBubble[];
 };
 

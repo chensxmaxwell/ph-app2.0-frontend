@@ -13,6 +13,8 @@ import {
   it,
   jest,
 } from "@jest/globals";
+import { readFileSync } from "fs";
+import { join } from "path";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SCREENS } from "../src/common/constant";
@@ -40,6 +42,9 @@ import {
 } from "../src/screens/avatar/context";
 import { useSaveCompanion } from "../src/screens/avatar/use-save-companion";
 import { isPlausibleBirthday } from "../src/screens/avatar/birthday";
+import { companionFace } from "../src/screens/avatar/face";
+import { PORTRAIT_IDS } from "../src/screens/avatar/portraits";
+import { DEFAULT_LOOK, pickLook } from "../src/screens/avatar/engine/viewer-html";
 import type { AvatarStackParams } from "../src/screens/avatar/types";
 
 jest.mock("@react-native-async-storage/async-storage", () =>
@@ -298,6 +303,13 @@ const renderForm = async (form: Awaited<ReturnType<typeof openedForm>>) => {
 const continueButton = (tree: ReactTestRenderer) =>
   buttonLabelled(tree, "Continue");
 
+// The Choose avatar grid's tiles, in display order.
+const avatarOptionIds = (tree: ReactTestRenderer) =>
+  tree.root
+    .findAllByType(TouchableOpacity)
+    .map((node) => String(node.props.testID ?? ""))
+    .filter((id) => id.startsWith("avatar-option-"));
+
 beforeEach(async () => {
   await AsyncStorage.clear();
   clearLoveSessionBoot();
@@ -362,18 +374,98 @@ describe("the basic info page each entry lands on", () => {
           .map((node) => node.props.testID)
           .sort()
       ).toEqual(["identity-birthday", "identity-description", "identity-name"]);
-      // Gender is the male-only dropdown, not a free-text box.
+      // Gender is a dropdown, not a free-text box, and every option can be
+      // chosen: TestFlight 1.2 (13) still greyed Female / Non-binary out.
       press(touchable(tree, "identity-gender"));
-      expect(touchable(tree, "identity-gender-Male").props.disabled).toBe(
-        false
+      for (const option of ["Male", "Female", "Non-binary"]) {
+        expect(
+          touchable(tree, `identity-gender-${option}`).props.disabled
+        ).toBe(false);
+      }
+      expect(texts(tree)).not.toContain("Female · unavailable");
+      expect(texts(tree)).not.toContain("Demo: male avatar only for now");
+      expect(texts(tree)).toContain(
+        "3D appearance is the current body for every gender."
       );
-      expect(touchable(tree, "identity-gender-Female").props.disabled).toBe(
-        true
-      );
-      expect(touchable(tree, "identity-gender-Non-binary").props.disabled).toBe(
-        true
-      );
-      expect(labels).toContain("Demo: male avatar only for now");
+      press(touchable(tree, "identity-gender-Female"));
+      expect(texts(tree)).toContain("Female");
+    }
+  );
+
+  it.each(entries)(
+    "%s: a Choose avatar grid offers the 3D look and the portraits for the chosen gender",
+    async (_label, entry) => {
+      const tree = await renderForm(await openedForm(await entry()));
+      expect(texts(tree)).toContain("Choose avatar");
+
+      // Default gender is Male: the look you are about to craft + the three
+      // male portraits. "Nova" owns no seeded photo.
+      type(input(tree, "identity-name"), "Nova");
+      expect(avatarOptionIds(tree)).toEqual([
+        "avatar-option-look",
+        "avatar-option-m-warm",
+        "avatar-option-m-calm",
+        "avatar-option-m-tousled",
+      ]);
+
+      press(touchable(tree, "identity-gender"));
+      press(touchable(tree, "identity-gender-Female"));
+      expect(avatarOptionIds(tree)).toEqual([
+        "avatar-option-look",
+        "avatar-option-f-bangs",
+        "avatar-option-f-long",
+      ]);
+
+      press(touchable(tree, "identity-gender"));
+      press(touchable(tree, "identity-gender-Non-binary"));
+      expect(avatarOptionIds(tree)).toEqual([
+        "avatar-option-look",
+        ...PORTRAIT_IDS.map((id) => `avatar-option-${id}`),
+      ]);
+
+      // A seeded name also gets that person's photo.
+      type(input(tree, "identity-name"), "Kevin");
+      expect(avatarOptionIds(tree)).toContain("avatar-option-portrait");
+    }
+  );
+
+  it.each(entries)(
+    "%s: Continue needs an avatar pick as well as a name",
+    async (_label, entry) => {
+      const tree = await renderForm(await openedForm(await entry()));
+      type(input(tree, "identity-name"), "Nova");
+      expect(continueButton(tree).props.disabled).toBe(true);
+      expect(
+        tree.root
+          .findAllByType(TouchableOpacity)
+          .filter((node) => String(node.props.testID ?? "").startsWith("avatar-option-"))
+          .every((node) => node.props.accessibilityState?.selected === false)
+      ).toBe(true);
+
+      press(touchable(tree, "avatar-option-m-calm"));
+      expect(
+        touchable(tree, "avatar-option-m-calm").props.accessibilityState
+      ).toEqual({ selected: true });
+      expect(continueButton(tree).props.disabled).toBeFalsy();
+
+      // Switching gender keeps the pick visible and selected.
+      press(touchable(tree, "identity-gender"));
+      press(touchable(tree, "identity-gender-Female"));
+      expect(avatarOptionIds(tree)).toEqual([
+        "avatar-option-look",
+        "avatar-option-f-bangs",
+        "avatar-option-f-long",
+        "avatar-option-m-calm",
+      ]);
+      expect(
+        touchable(tree, "avatar-option-m-calm").props.accessibilityState
+      ).toEqual({ selected: true });
+      expect(continueButton(tree).props.disabled).toBeFalsy();
+
+      press(touchable(tree, "avatar-option-look"));
+      expect(
+        touchable(tree, "avatar-option-look").props.accessibilityState
+      ).toEqual({ selected: true });
     }
   );
 
@@ -394,6 +486,7 @@ describe("the basic info page each entry lands on", () => {
     async (_label, entry) => {
       const tree = await renderForm(await openedForm(await entry()));
       type(input(tree, "identity-name"), "Kevin");
+      press(touchable(tree, "avatar-option-look"));
 
       expect(continueButton(tree).props.disabled).toBeFalsy();
       expect(texts(tree)).not.toContain("Use mm/dd/yyyy");
@@ -415,6 +508,7 @@ describe("the basic info page each entry lands on", () => {
 
   it.each(entries)("%s: a name is required", async (_label, entry) => {
     const tree = await renderForm(await openedForm(await entry()));
+    press(touchable(tree, "avatar-option-look"));
 
     expect(continueButton(tree).props.disabled).toBe(true);
     type(input(tree, "identity-name"), "   ");
@@ -439,6 +533,127 @@ describe("the basic info page each entry lands on", () => {
       );
     }
   );
+});
+
+describe("creating a companion saves the avatar pick and the gender", () => {
+  type WizardApi = ReturnType<typeof useAvatarWizard>;
+  type ChatApi = ReturnType<typeof useChat>;
+  type CompanionsApi = ReturnType<typeof useCompanions>;
+  let wizard: WizardApi | null = null;
+  let chat: ChatApi | null = null;
+  let companionsApi: CompanionsApi | null = null;
+  let save: (() => Companion) | null = null;
+
+  const Probe = () => {
+    wizard = useAvatarWizard();
+    chat = useChat();
+    companionsApi = useCompanions();
+    save = useSaveCompanion();
+    return null;
+  };
+
+  const mountCreator = async () => {
+    const form = await openedForm(await homePlusEntry());
+    expect(form.initialDraft.avatar).toBeNull();
+    mockNavigation = fakeNavigation(fakeNavigation());
+    return mount(
+      <AvatarWizardProvider
+        mode="create"
+        companionId="companion-nova"
+        initialDraft={form.initialDraft}
+      >
+        <Probe />
+      </AvatarWizardProvider>
+    );
+  };
+
+  beforeEach(() => {
+    wizard = null;
+    chat = null;
+    companionsApi = null;
+    save = null;
+  });
+
+  it("the portrait picked on the Identity page is the thread's face after save", async () => {
+    await mountCreator();
+    act(() => {
+      wizard!.patchDraft({ name: "Nova", gender: "Female", avatar: "f-long" });
+    });
+    act(() => {
+      save!();
+    });
+    await settle();
+
+    const nova = chat!.getThread("companion-nova")!;
+    expect(nova).toMatchObject({ name: "Nova", gender: "Female", avatar: "f-long" });
+    const record = companionsApi!.companions.find((item) => item.id === "companion-nova")!;
+    expect(record.gender).toBe("Female");
+    expect(
+      companionFace({ thread: nova, companion: record })
+    ).toMatchObject({ kind: "f-long", look: null });
+  });
+
+  it("Chat settings → Create avatar on chat-only Kevin also starts with no face picked", async () => {
+    const form = await openedForm({
+      name: AVATAR_STACK,
+      params: { mode: "create", companionId: "kevin" },
+    });
+    expect(form.mode).toBe("create");
+    expect(form.initialDraft.name).toBe("Kevin");
+    // Create always asks: the photo he wears today is one of the tiles, not
+    // a silent default that would survive crafting a 3D look.
+    expect(form.initialDraft.avatar).toBeNull();
+    const tree = await renderForm(form);
+    expect(continueButton(tree).props.disabled).toBe(true);
+    expect(avatarOptionIds(tree)).toEqual([
+      "avatar-option-look",
+      "avatar-option-portrait",
+      "avatar-option-m-warm",
+      "avatar-option-m-calm",
+      "avatar-option-m-tousled",
+    ]);
+    press(touchable(tree, "avatar-option-look"));
+    expect(continueButton(tree).props.disabled).toBeFalsy();
+  });
+
+  it("picking the 3D look keeps the crafted cartoon as the face", async () => {
+    await mountCreator();
+    act(() => {
+      wizard!.patchDraft({ name: "Nova", avatar: "look" });
+    });
+    act(() => {
+      save!();
+    });
+    await settle();
+    expect(chat!.getThread("companion-nova")?.avatar).toBe("look");
+  });
+
+  it("gender is stored on the companion but never changes the 3D craft, which stays the male GLB", async () => {
+    await mountCreator();
+    act(() => {
+      wizard!.patchDraft({ name: "Nova", gender: "Non-binary", avatar: "nb-short" });
+    });
+    let saved: Companion | null = null;
+    act(() => {
+      saved = save!();
+    });
+    await settle();
+    expect(saved!.gender).toBe("Non-binary");
+    expect(chat!.getThread("companion-nova")?.gender).toBe("Non-binary");
+    // The look is the same set of sliders whatever the gender says...
+    const asMale: Companion = { ...saved!, gender: "Male" };
+    expect(pickLook(saved!)).toEqual(pickLook(asMale));
+    expect(Object.keys(DEFAULT_LOOK)).not.toContain("gender");
+    // ...and the viewer has exactly one body to load.
+    const viewer = readFileSync(
+      join(__dirname, "../assets/avatar-engine/viewer-page.html"),
+      "utf8"
+    );
+    expect(viewer.match(/"[^"\n]*\.glb[^"\n]*"/g)).toEqual([
+      '"bozo-male.glb?v=bozo24"',
+    ]);
+    expect(viewer).not.toMatch(/gender/i);
+  });
 });
 
 describe("one birthday rule", () => {
@@ -566,6 +781,38 @@ describe("saving an edit for a bot that has no 3D companion", () => {
     await settle();
 
     expect(chat!.getThread("kevin")!.personality).toBe("Playful & whimsical");
+    expect(companionsApi!.companions).toEqual([]);
+  });
+
+  it("Edit persona on chat-only Kevin offers his photo and the male portraits, no 3D look, and saves the pick", async () => {
+    const form = await openedForm({
+      name: AVATAR_STACK,
+      params: { mode: "editPersona", companionId: "kevin" },
+    });
+    // Seeded Kevin wears his photo today, so that is what opens selected.
+    expect(form.initialDraft.avatar).toBe("portrait");
+    const tree = await renderForm(form);
+    expect(avatarOptionIds(tree)).toEqual([
+      "avatar-option-portrait",
+      "avatar-option-m-warm",
+      "avatar-option-m-calm",
+      "avatar-option-m-tousled",
+    ]);
+    expect(
+      touchable(tree, "avatar-option-portrait").props.accessibilityState
+    ).toEqual({ selected: true });
+    // Editing does not lock Continue behind a re-pick.
+    expect(continueButton(tree).props.disabled).toBeFalsy();
+
+    await mountEditor("kevin");
+    act(() => {
+      wizard!.patchDraft({ avatar: "m-warm" });
+    });
+    act(() => {
+      save!();
+    });
+    await settle();
+    expect(chat!.getThread("kevin")?.avatar).toBe("m-warm");
     expect(companionsApi!.companions).toEqual([]);
   });
 

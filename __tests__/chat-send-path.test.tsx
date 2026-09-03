@@ -20,6 +20,7 @@ import {
   ARK_MODEL,
   saveLlmConfig,
 } from "../src/services/llm-config";
+import { CompanionsProvider } from "../src/store/companions";
 import { ChatProvider, useChat } from "../src/screens/chat/store";
 import { ChatThreadScreen } from "../src/screens/chat/thread";
 
@@ -70,11 +71,15 @@ const settle = () => act(flush);
 
 const trees: ReactTestRenderer[] = [];
 
+// The thread header draws the person's one face, which pairs the thread with
+// its 3D record, so the companions store sits above the chat store as in App.tsx.
 const threadTree = () => (
-  <ChatProvider>
-    <Probe />
-    <ChatThreadScreen />
-  </ChatProvider>
+  <CompanionsProvider>
+    <ChatProvider>
+      <Probe />
+      <ChatThreadScreen />
+    </ChatProvider>
+  </CompanionsProvider>
 );
 
 const renderThread = async (threadId: string) => {

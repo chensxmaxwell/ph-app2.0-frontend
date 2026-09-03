@@ -1,4 +1,5 @@
 import { useNavigation } from "@react-navigation/native";
+import { threadIdForCompanion } from "../chat/person";
 import { useChat } from "../chat/store";
 import { useCompanions } from "../../store/companions";
 import { samePersonalities, useAvatarWizard } from "./context";
@@ -7,10 +8,17 @@ import { companionFromDraft } from "./persist";
 export const useSaveCompanion = () => {
   const { draft, baseline, companionId, mode } = useAvatarWizard();
   const { companions, upsertCompanion } = useCompanions();
-  const { updateBot, upsertCompanionThread } = useChat();
+  const { updateBot, upsertCompanionThread, setAvatar } = useChat();
 
   return () => {
-    const companion = companionFromDraft(companionId, draft);
+    const drafted = companionFromDraft(companionId, draft);
+    // A new companion named after a seeded bot (Kevin / Chad / Amanda) takes
+    // that seed's id, so its record and the Message thread it folds into
+    // share one id instead of pairing by name forever.
+    const companion =
+      mode === "create"
+        ? { ...drafted, id: threadIdForCompanion(drafted) }
+        : drafted;
     const hasCompanionRecord = companions.some(
       (item) => item.id === companionId
     );
@@ -33,11 +41,36 @@ export const useSaveCompanion = () => {
           ? companion.personalities.join(", ")
           : undefined,
       });
+      if (draft.avatar) {
+        setAvatar(companionId, draft.avatar);
+      }
       return companion;
     }
 
     upsertCompanion(companion);
     upsertCompanionThread(companion);
+    const threadId = threadIdForCompanion(companion);
+    switch (mode) {
+      case "create":
+        // The Identity page's Choose avatar grid decided the face; the 3D
+        // look is the fallback for drafts saved without a pick.
+        setAvatar(threadId, draft.avatar ?? "look");
+        break;
+      case "editLook":
+        // A look that was just re-crafted is the face until the user picks
+        // another.
+        setAvatar(threadId, "look");
+        break;
+      case "editPersona":
+        if (draft.avatar) {
+          setAvatar(threadId, draft.avatar);
+        }
+        break;
+      default: {
+        const exhaustive: never = mode;
+        return exhaustive;
+      }
+    }
     return companion;
   };
 };

@@ -35,12 +35,12 @@ import LinkIcon from "@images/message/link.svg";
 import Heartbeat from "@images/message/heartbeat.svg";
 import PatternIcon from "@images/icons/pattern-icon.svg";
 import KinkIcon from "@images/icons/kink-icon.svg";
-import { lookFromCompanion, useCompanions } from "../../store/companions";
+import { useCompanions } from "../../store/companions";
 import { LookFace } from "../avatar/look-face";
 import { openAvatarWizard } from "../avatar/open";
 import { s } from "../avatar/scale";
+import { usePersonFace } from "../avatar/use-person-face";
 import { useChat } from "../chat/store";
-import { faceSourceForId } from "../chat/faces";
 import { LovePill } from "./pill";
 import { applyLoveLayer, dismissLoveOverlays } from "./overlay";
 import { resolveLovePerson } from "./partner";
@@ -228,6 +228,10 @@ export const LoveChatScreen = () => {
   });
   const fromCreation = route.params?.fromCreation === true;
   const startedSyncing = route.params?.syncing === true;
+  // One face per person: the same resolver Home, Message and the pill use.
+  // Changing it happens in the wizard (create, or Edit persona) and in Chat
+  // settings, not from this overlay.
+  const { face } = usePersonFace(partnerId);
 
   const [draft, setDraft] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -545,15 +549,12 @@ export const LoveChatScreen = () => {
           >
             <ChevronBack width={s(35)} height={s(35)} />
           </TouchableOpacity>
-          <View style={styles.identity}>
-            <LookFace
-              look={companion ? lookFromCompanion(companion) : null}
-              size={s(50)}
-              fallbackSource={faceSourceForId(partnerId)}
-            />
+          <View style={styles.identity} testID="love-chat-header-face">
+            <LookFace look={face.look} size={s(50)} fallbackSource={face.source} />
             <Text style={styles.name}>{name}</Text>
           </View>
           <TouchableOpacity
+            testID="love-chat-info"
             onPress={() => setInfoOpen(true)}
             hitSlop={8}
             style={styles.headerSide}
@@ -702,8 +703,8 @@ export const LoveChatScreen = () => {
             personality ||
             `${name} is your companion.`
           }
-          extras={
-            companion
+          extras={[
+            ...(companion
               ? [
                   {
                     label: "Edit avatar",
@@ -730,8 +731,8 @@ export const LoveChatScreen = () => {
                     },
                   },
                 ]
-              : undefined
-          }
+              : []),
+          ]}
           primary="Close"
           onPrimary={() => setInfoOpen(false)}
         />
