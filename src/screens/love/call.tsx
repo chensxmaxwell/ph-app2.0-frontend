@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import {
-  Image,
   Pressable,
   StyleSheet,
   Text,
@@ -22,12 +21,12 @@ import Minimize from "@images/minimize.svg";
 import PhoneDown from "@images/love/phone-down.svg";
 import { useCompanions } from "../../store/companions";
 import { useChat } from "../chat/store";
+import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
+import { usePersonFace } from "../avatar/use-person-face";
 import { dismissLoveOverlays } from "./overlay";
 import { resolveLovePerson } from "./partner";
 import { useLoveSession } from "./session";
-
-const CALL_FACE = require("../../../assets/images/love/call-face.png");
 
 type CallRoute = RouteProp<
   {
@@ -68,6 +67,8 @@ export const LoveCallScreen = () => {
     activeCompanion,
     chatName: chat?.name,
   });
+  // The person being called, not the bundled stock call portrait (Kevin's).
+  const { face } = usePersonFace(partnerId);
   const [now, setNow] = useState(Date.now());
   const [pressing, setPressing] = useState(false);
   const elapsed = callStartedAt
@@ -136,7 +137,7 @@ export const LoveCallScreen = () => {
           onPressOut={() => setPressing(false)}
           style={[styles.faceWrap, pressing && styles.facePressed]}
         >
-          <Image source={CALL_FACE} style={styles.face} />
+          <LookFace look={face.look} size={s(100)} fallbackSource={face.source} />
         </Pressable>
         <Text style={styles.press}>Connected</Text>
       </View>
@@ -211,11 +212,6 @@ const styles = StyleSheet.create({
   facePressed: {
     opacity: 0.7,
     transform: [{ scale: 0.96 }],
-  },
-  face: {
-    width: s(100),
-    height: s(100),
-    borderRadius: s(50),
   },
   press: {
     marginTop: s(10),

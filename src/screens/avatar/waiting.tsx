@@ -6,19 +6,27 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { colors } from "@common/styles/colors";
 import { SCREENS } from "@common/constant";
 import WaitGlow from "@images/avatar/wait-glow.svg";
-import { useLoveSession } from "../love/session";
+import { threadIdForCompanion } from "../chat/person";
 import { useAvatarWizard } from "./context";
 import { s } from "./scale";
 import { useSaveCompanion } from "./use-save-companion";
 
+// Where the create wizard lands after saving: Home underneath, the new
+// companion's own Message thread on top, so back returns to Home. It used to
+// reset onto the dark Love overlay seeded with "Start chatting with …", which
+// Maxwell read as an empty black page (TestFlight 1.2 (12)); that Love session
+// is not started here anymore.
+export const routesAfterCompanionSaved = (threadId: string) => [
+  { name: String(SCREENS.NAV_BAR) },
+  { name: String(SCREENS.CHAT_THREAD), params: { threadId } },
+];
+
 export const AvatarWaitingScreen = () => {
   const navigation = useNavigation();
-  const { draft, companionId, restoreBaseline } = useAvatarWizard();
+  const { draft, restoreBaseline } = useAvatarWizard();
   const save = useSaveCompanion();
-  const { start } = useLoveSession();
   const didSaveRef = useRef(false);
   const allowLeaveRef = useRef(false);
-  const savedIdRef = useRef(companionId);
 
   useEffect(() => {
     navigation.setOptions({ gestureEnabled: false });
@@ -43,29 +51,15 @@ export const AvatarWaitingScreen = () => {
     }
     didSaveRef.current = true;
     const companion = save();
-    savedIdRef.current = companion.id;
-    start({
-      layer: "chat",
-      surface: "love",
-      companionId: companion.id,
-      name: companion.name,
-      fromCreation: true,
-      replace: true,
-    });
     restoreBaseline();
+    const routes = routesAfterCompanionSaved(threadIdForCompanion(companion));
 
     const timer = setTimeout(() => {
       allowLeaveRef.current = true;
       navigation.getParent()?.dispatch(
         CommonActions.reset({
-          index: 1,
-          routes: [
-            { name: SCREENS.NAV_BAR },
-            {
-              name: SCREENS.LOVE_CHAT,
-              params: { companionId: companion.id, fromCreation: true },
-            },
-          ],
+          index: routes.length - 1,
+          routes: routes as never,
         })
       );
     }, 1800);

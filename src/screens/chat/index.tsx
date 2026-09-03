@@ -1,7 +1,6 @@
 import React, { useMemo, useRef, useState } from "react";
 import {
   Animated,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -21,8 +20,11 @@ import {
 import { ScreenWrapper } from "@common/components/screen-wrapper";
 import { SCREENS } from "@common/constant";
 import { colors } from "@common/styles/colors";
+import type { CompanionFace } from "../avatar/face";
+import { LookFace } from "../avatar/look-face";
 import { openCreateCompanion } from "../avatar/open";
 import { s } from "../avatar/scale";
+import { useFaceResolver } from "../avatar/use-person-face";
 import SearchIcon from "@images/message/search.svg";
 import PlusIcon from "@images/message/plus.svg";
 import PencilIcon from "@images/message/pencil.svg";
@@ -32,10 +34,13 @@ import { messageFriends } from "./friends";
 import { useChat } from "./store";
 import { formatChatListTime } from "./time";
 import { ChatThread } from "./types";
-import { faceSourceForId } from "./faces";
 import { useNow } from "./use-now";
 
-const faceFor = (thread: ChatThread) => faceSourceForId(thread.id, thread.kind);
+const ROW_FACE_SIZE = s(52);
+
+const RowFace = ({ face }: { face: CompanionFace }) => (
+  <LookFace look={face.look} size={ROW_FACE_SIZE} fallbackSource={face.source} />
+);
 
 // Swipe a row left (WeChat layout): gray "mark unread", then red "delete
 // friend". Delete always double-checks through the Dialog below. Maxwell named
@@ -53,6 +58,8 @@ export const Chat = () => {
   const navigation = useNavigation();
   const parent = navigation.getParent() as NavigationProp<ParamListBase>;
   const { threads, setUnread, deleteThread } = useChat();
+  // Same face as Home "My Companions" and the thread header for this person.
+  const faceFor = useFaceResolver();
   // Ticks so a row's "now" becomes "3 min ago" while the list stays open.
   const now = useNow();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -248,7 +255,7 @@ export const Chat = () => {
                 activeOpacity={0.85}
               >
                 <View style={styles.rowFaceWrap}>
-                  <Image source={faceFor(thread)} style={styles.rowFace} />
+                  <RowFace face={faceFor(thread.id, thread.kind)} />
                   {thread.unread ? (
                     <View
                       testID={`message-row-unread-dot-${thread.id}`}
@@ -415,13 +422,8 @@ const styles = StyleSheet.create({
     paddingVertical: s(12),
   },
   rowFaceWrap: {
-    width: s(52),
-    height: s(52),
-  },
-  rowFace: {
-    width: s(52),
-    height: s(52),
-    borderRadius: s(26),
+    width: ROW_FACE_SIZE,
+    height: ROW_FACE_SIZE,
   },
   unreadDot: {
     position: "absolute",

@@ -6,11 +6,11 @@ import {
   useNavigation,
 } from "@react-navigation/native";
 import { colors } from "@common/styles/colors";
-import { lookFromCompanion, useCompanions } from "../../store/companions";
+import { useCompanions } from "../../store/companions";
 import { useChat } from "../chat/store";
 import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
-import { faceSourceForId } from "../chat/faces";
+import { usePersonFace } from "../avatar/use-person-face";
 import { applyLoveLayer, getHomeStackNavigation, restoreLoveOverlays } from "./overlay";
 import {
   LovePersonParams,
@@ -38,8 +38,11 @@ export const useOpenLove = () => {
       activeCompanion,
       chatName: chat?.name,
     });
-    if (person.companionId) {
-      setActiveCompanionId(person.companionId);
+    // The active companion is a record id; the session id below is the thread
+    // id when the person has one (they differ for a Kevin folded into the seed).
+    const activeId = person.companion?.id ?? person.companionId;
+    if (activeId) {
+      setActiveCompanionId(activeId);
     }
 
     const switching = Boolean(
@@ -100,25 +103,19 @@ type LovePillProps = {
 
 export const LovePill = ({ onPress, style }: LovePillProps) => {
   const openLove = useOpenLove();
-  const { companions, activeCompanion } = useCompanions();
+  const { activeCompanion } = useCompanions();
   const { companionId } = useLoveSession();
-  const companion =
-    companions.find((item) => item.id === companionId) ??
-    companions.find((item) => item.id === activeCompanion?.id);
-  const look = companion ? lookFromCompanion(companion) : null;
   const personId = companionId ?? activeCompanion?.id;
+  const { face } = usePersonFace(personId);
 
   return (
     <TouchableOpacity
       style={[styles.pill, style]}
       onPress={onPress ?? (() => openLove({ companionId: personId }))}
       activeOpacity={0.85}
+      testID="love-pill"
     >
-      <LookFace
-        look={look}
-        size={s(37)}
-        fallbackSource={faceSourceForId(personId)}
-      />
+      <LookFace look={face.look} size={s(37)} fallbackSource={face.source} />
     </TouchableOpacity>
   );
 };

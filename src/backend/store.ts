@@ -311,6 +311,7 @@ export const upsertThread = async (
     birthday: input.birthday ?? existing?.birthday,
     description: input.description ?? existing?.description,
     personality: input.personality ?? existing?.personality,
+    avatar: input.avatar ?? existing?.avatar,
     messages:
       input.messages !== undefined ? input.messages : existing?.messages ?? [],
   };

@@ -1,12 +1,9 @@
 import { useMemo } from "react";
-import type { AvatarLook } from "../avatar/engine/viewer-html";
-import {
-  Companion,
-  lookFromCompanion,
-  useCompanions,
-} from "../../store/companions";
+import { Companion, useCompanions } from "../../store/companions";
+import { CompanionFace, companionFace } from "../avatar/face";
 import { messageFriends } from "../chat/friends";
-import { defaultBotIdForName, useChat } from "../chat/store";
+import { companionForThread } from "../chat/person";
+import { useChat } from "../chat/store";
 import type { ChatKind, ChatThread } from "../chat/types";
 
 export type HomeCompanion = {
@@ -14,19 +11,11 @@ export type HomeCompanion = {
   id: string;
   name: string;
   kind: ChatKind;
-  // The crafted 3D look when this person has a companion record, otherwise
-  // null and Home falls back to the stock portrait for the id.
-  look: AvatarLook | null;
+  // The one face this person shows everywhere: the crafted 3D look when they
+  // have a companion record (unless the user picked the photo), else the
+  // stock portrait for the id.
+  face: CompanionFace;
 };
-
-// A created companion's thread normally shares its id. The chat store folds a
-// companion named after a seeded bot (Kevin / Chad / Amanda) into that seed's
-// thread instead, so pair by the same canonical-name rule as a fallback.
-const companionForThread = (thread: ChatThread, companions: Companion[]) =>
-  companions.find((companion) => companion.id === thread.id) ??
-  companions.find(
-    (companion) => defaultBotIdForName(companion.name) === thread.id
-  );
 
 // Home "My Companions" is the Message friends list: membership and order come
 // from the chat threads (so a deleted friend, and a seed kept deleted by its
@@ -36,15 +25,15 @@ export const homeCompanions = (
   threads: ChatThread[],
   companions: Companion[]
 ): HomeCompanion[] =>
-  messageFriends(threads).map((thread) => {
-    const companion = companionForThread(thread, companions);
-    return {
-      id: thread.id,
-      name: thread.name,
-      kind: thread.kind,
-      look: companion ? lookFromCompanion(companion) : null,
-    };
-  });
+  messageFriends(threads).map((thread) => ({
+    id: thread.id,
+    name: thread.name,
+    kind: thread.kind,
+    face: companionFace({
+      thread,
+      companion: companionForThread(thread, companions),
+    }),
+  }));
 
 export const useHomeCompanions = (): HomeCompanion[] => {
   const { threads } = useChat();

@@ -21,6 +21,7 @@ import {
   normalizeThreadTimestamps,
   sentAtFromId,
 } from "../src/backend/chat-timestamps";
+import { CompanionsProvider } from "../src/store/companions";
 import { ChatProvider, useChat } from "../src/screens/chat/store";
 import { Chat } from "../src/screens/chat";
 import { ChatThreadScreen } from "../src/screens/chat/thread";
@@ -114,12 +115,17 @@ const persisted = () => advance(300);
 
 const trees: ReactTestRenderer[] = [];
 
+// Message rows and the thread header draw each person's one face, which
+// pairs the thread with its 3D record, so the companions store sits above the
+// chat store exactly as in App.tsx.
 const Screens = ({ thread }: { thread?: string }) => (
-  <ChatProvider>
-    <Probe />
-    <Chat />
-    {thread ? <ChatThreadScreen /> : null}
-  </ChatProvider>
+  <CompanionsProvider>
+    <ChatProvider>
+      <Probe />
+      <Chat />
+      {thread ? <ChatThreadScreen /> : null}
+    </ChatProvider>
+  </CompanionsProvider>
 );
 
 const mountList = async () => {

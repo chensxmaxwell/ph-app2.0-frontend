@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  Image,
   FlatList,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
@@ -18,7 +17,10 @@ import { SCREENS } from "@common/constant";
 import { colors } from "@common/styles/colors";
 import { fontSizes, fontWeights } from "@common/styles/fonts";
 import { ConnectionPill } from "@common/components/connection-pill";
-import { faceSourceForId } from "../chat/faces";
+import { LookFace } from "../avatar/look-face";
+import { useFaceResolver } from "../avatar/use-person-face";
+
+const AVATAR_SIZE = 60;
 
 const users = [
   { id: "kevin", name: "Kevin" },
@@ -28,6 +30,8 @@ const users = [
 
 const SyncSelectionScreen = () => {
   const navigation = useNavigation();
+  // Same face the person wears on Home / Message (crafted look or photo).
+  const faceFor = useFaceResolver();
   const [text, setText] = useState("");
   const searchRef = useRef<TextInput>(null);
   const filteredUsers = useMemo(() => {
@@ -102,7 +106,13 @@ const SyncSelectionScreen = () => {
               )
             }
           >
-            <Image source={faceSourceForId(item.id)} style={styles.avatar} />
+            <View style={styles.avatar}>
+              <LookFace
+                look={faceFor(item.id).look}
+                size={AVATAR_SIZE}
+                fallbackSource={faceFor(item.id).source}
+              />
+            </View>
             <Text style={styles.userName}>{item.name}</Text>
             <View style={styles.waveButton}>
               <AntennaIcon width={35} height={35}></AntennaIcon>
@@ -191,9 +201,8 @@ const styles = StyleSheet.create({
     height: 90,
   },
   avatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 50,
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
     marginRight: 10,
   },
   userName: {

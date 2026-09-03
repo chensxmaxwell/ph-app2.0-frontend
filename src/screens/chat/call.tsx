@@ -1,14 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors } from "@common/styles/colors";
 import Minimize from "@images/minimize.svg";
 import PhoneDown from "@images/love/phone-down.svg";
+import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
+import { usePersonFace } from "../avatar/use-person-face";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
-import { faceSourceForId } from "./faces";
 
 type CallRoute = RouteProp<{ ChatCall: { threadId: string } }, "ChatCall">;
 
@@ -26,6 +27,7 @@ export const ChatCallScreen = () => {
   const route = useRoute<CallRoute>();
   const { getThread, setInCall, setListen, stopSpeaking } = useChat();
   const thread = getThread(route.params.threadId);
+  const { face } = usePersonFace(route.params.threadId, thread?.kind);
   const name = thread?.name ?? "Kevin";
   const [connected, setConnected] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -73,10 +75,7 @@ export const ChatCallScreen = () => {
       </View>
       <View style={styles.stage}>
         <View style={styles.ring}>
-          <Image
-            source={faceSourceForId(thread?.id, thread?.kind)}
-            style={styles.face}
-          />
+          <LookFace look={face.look} size={s(100)} fallbackSource={face.source} />
         </View>
         <Text style={styles.status}>
           {connected ? "Connected" : `Calling ${name}`}
@@ -138,11 +137,6 @@ const styles = StyleSheet.create({
     borderColor: "#cbb7e8",
     alignItems: "center",
     justifyContent: "center",
-  },
-  face: {
-    width: s(100),
-    height: s(100),
-    borderRadius: s(50),
   },
   status: {
     marginTop: s(16),

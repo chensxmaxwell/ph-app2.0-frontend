@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Image,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -27,15 +26,16 @@ import PhoneIcon from "@images/message/phone.svg";
 import PinIcon from "@images/message/pin.svg";
 import LinkIcon from "@images/message/link.svg";
 import Heartbeat from "@images/message/heartbeat.svg";
+import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
+import { usePersonFace } from "../avatar/use-person-face";
 import { useOpenLove } from "../love/pill";
 import { ChatGradient } from "./background";
 import { Dialog } from "./dialog";
 import { regenerateTargetId } from "./regenerate";
 import { useChat } from "./store";
 import { formatChatThreadTime, showsTimeSeparator } from "./time";
-import { ChatBubble, ChatThread } from "./types";
-import { faceSourceForId } from "./faces";
+import { ChatBubble } from "./types";
 import { useNow } from "./use-now";
 import { enterTalkMode, leaveTalkMode } from "./talk-mode";
 import { sanitizeComposerText } from "../../services/dictation-text";
@@ -43,9 +43,6 @@ import { startVoiceInput, stopVoiceInput } from "../../services/voice-input";
 import { clearComposerAfterSubmit } from "../../services/composer-submit";
 
 type ThreadRoute = RouteProp<{ ChatThread: { threadId: string } }, "ChatThread">;
-
-const faceFor = (thread: ChatThread) =>
-  faceSourceForId(thread.id, thread.kind);
 
 export const ChatThreadScreen = () => {
   const navigation = useNavigation();
@@ -71,6 +68,10 @@ export const ChatThreadScreen = () => {
     replyPending,
   } = useChat();
   const thread = getThread(route.params.threadId);
+  // The same face Home and the Message list draw for this person: the crafted
+  // 3D look when they have one (or the photo, if that was picked), never the
+  // stock portrait for the id on its own.
+  const { face } = usePersonFace(route.params.threadId, thread?.kind);
   const openLove = useOpenLove();
   // Ticks so a fresh separator's "now" ages to "3 min ago" in place.
   const now = useNow();
@@ -257,8 +258,8 @@ export const ChatThreadScreen = () => {
           <TouchableOpacity onPress={goBack} hitSlop={8} style={styles.headerSide}>
             <ChevronBack width={s(35)} height={s(35)} />
           </TouchableOpacity>
-          <View style={styles.identity}>
-            <Image source={faceFor(thread)} style={styles.headerFace} />
+          <View style={styles.identity} testID="chat-thread-header-face">
+            <LookFace look={face.look} size={s(50)} fallbackSource={face.source} />
             <Text style={styles.headerName}>{thread.name}</Text>
           </View>
           <TouchableOpacity
@@ -288,7 +289,11 @@ export const ChatThreadScreen = () => {
           >
             {showHero ? (
               <View style={styles.hero}>
-                <Image source={faceFor(thread)} style={styles.heroFace} />
+                <LookFace
+                  look={face.look}
+                  size={s(120)}
+                  fallbackSource={face.source}
+                />
                 <Text style={styles.heroName}>{thread.name}</Text>
                 {thread.email ? (
                   <Text style={styles.heroSub}>{thread.email}</Text>
@@ -661,11 +666,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: s(16),
   },
-  headerFace: {
-    width: s(50),
-    height: s(50),
-    borderRadius: s(25),
-  },
   headerName: {
     color: colors.white,
     fontFamily: "Quicksand-Bold",
@@ -680,11 +680,6 @@ const styles = StyleSheet.create({
   hero: {
     alignItems: "center",
     paddingBottom: s(16),
-  },
-  heroFace: {
-    width: s(120),
-    height: s(120),
-    borderRadius: s(60),
   },
   heroName: {
     marginTop: s(16),

@@ -458,7 +458,7 @@ describe("homeCompanions selector", () => {
       [novaThread, ...seedThreads()],
       [nova, kevin3d]
     );
-    expect(rows.map((item) => [item.id, item.look !== null])).toEqual([
+    expect(rows.map((item) => [item.id, item.face.look !== null])).toEqual([
       ["kevin", true],
       ["companion-nova", true],
       ["chad", false],
