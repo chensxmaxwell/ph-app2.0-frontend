@@ -52,6 +52,9 @@ type ViewerRig = {
   OUTFIT_POSES: OutfitPose[];
   MIN_PLAUSIBLE_HEIGHT: number;
   FALLBACK_HEIGHT: number;
+  IRIS_RADIUS: number;
+  PUPIL_RADIUS: number;
+  irisFragmentChunk: () => string;
   figureMeshVisible: (name: string, look: Look) => boolean;
   nameHasExposedSkin: (name: string, outfit: number) => boolean;
   isFigureMesh: (name: string) => boolean;
@@ -185,6 +188,37 @@ describe("eyes", () => {
     const iris = html.slice(html.indexOf("function upgradeIrisMat"));
     expect(iris).toMatch(/mat\.polygonOffset = true/);
     expect(iris).toMatch(/mat\.polygonOffsetFactor = -\d/);
+  });
+
+  it("paints the iris well inside the lid opening, with a pupil that reads as an iris rather than a black disc", () => {
+    // TestFlight 1.2 (11) "eyes too big": irisR 0.58 (in the shader's units,
+    // where the lids clip ~0.39 above/below the centre and the opening is
+    // ~0.69 to either side) spanned the eye edge to edge. Sclera has to show
+    // on both sides of the iris, and the pupil must leave a visible iris
+    // band, at every Eyes-slider setting (irisSize 0.82..1.10).
+    expect(rig.IRIS_RADIUS).toBeLessThanOrEqual(0.45);
+    expect(rig.IRIS_RADIUS * 1.1).toBeLessThan(0.55);
+    // Still a cartoon eye, not a pinprick.
+    expect(rig.IRIS_RADIUS).toBeGreaterThanOrEqual(0.3);
+    const pupilToIris = rig.PUPIL_RADIUS / rig.IRIS_RADIUS;
+    expect(pupilToIris).toBeGreaterThanOrEqual(0.3);
+    expect(pupilToIris).toBeLessThanOrEqual(0.5);
+  });
+
+  it("compiles those radii into the eyeball shader and still paints the sclera", () => {
+    const chunk = rig.irisFragmentChunk();
+    expect(chunk).toContain(
+      `float irisR = ${rig.IRIS_RADIUS.toFixed(3)} * irisSize;`
+    );
+    expect(chunk).toContain(
+      `float pupilR = ${rig.PUPIL_RADIUS.toFixed(3)} * irisSize;`
+    );
+    // Eyes_0 stays a whole eyeball: white around the iris, not a bare iris.
+    expect(chunk).toContain("vec3 scleraCol = vec3(0.98, 0.99, 1.0);");
+    expect(chunk).toContain("diffuseColor.rgb = col;");
+    // No stale hard-coded radius left over from the oversized eye.
+    expect(chunk).not.toMatch(/0\.58\d* \* irisSize/);
+    expect(chunk).not.toMatch(/0\.26\d* \* irisSize/);
   });
 });
 

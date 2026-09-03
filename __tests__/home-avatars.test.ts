@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "@jest/globals";
 import { ROW_AVATAR_SIZE, circleAvatarStyle } from "../src/screens/avatar/circle-avatar";
+import { seedThreads } from "../src/backend/chat-seed";
 import { faceSourceForId } from "../src/screens/chat/faces";
-import { MOCK_HOME_COMPANIONS } from "../src/screens/home/mock-companions";
 
 const homeSource = readFileSync(
   join(__dirname, "../src/screens/home/index.tsx"),
@@ -35,13 +35,27 @@ describe("circleAvatarStyle", () => {
   });
 });
 
-describe("home mock portraits", () => {
-  it("maps Kevin, Chad, and Amanda to distinct circular photo sources", () => {
-    const sources = MOCK_HOME_COMPANIONS.map((person) =>
-      faceSourceForId(person.id)
+describe("home seeded portraits", () => {
+  it("maps seeded Kevin, Chad, and Amanda to distinct circular photo sources", () => {
+    const sources = seedThreads().map((thread) =>
+      faceSourceForId(thread.id, thread.kind)
     );
     expect(sources).toHaveLength(3);
     expect(new Set(sources).size).toBe(3);
+  });
+
+  it("reads My Companions from the Message friends list, not a Home-only catalog", () => {
+    // TestFlight 1.2 (11): Kevin deleted from Message still sat on Home
+    // because Home rendered a static mock list that knew nothing about the
+    // chat store's tombstones.
+    expect(
+      existsSync(join(__dirname, "../src/screens/home/mock-companions.ts"))
+    ).toBe(false);
+    expect(homeSource).not.toContain("MOCK_HOME_COMPANIONS");
+    expect(homeHooksSource).not.toContain("MOCK_HOME_COMPANIONS");
+    expect(homeHooksSource).not.toMatch(/const companions\b/);
+    expect(homeSource).not.toContain("useCompanions()");
+    expect(homeSource).toContain("useHomeCompanions");
   });
 });
 

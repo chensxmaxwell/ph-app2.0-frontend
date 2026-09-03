@@ -14,32 +14,36 @@ import {
   NavigationProp,
   ParamListBase,
 } from "@react-navigation/native";
-import { lookFromCompanion, useCompanions } from "../../store/companions";
 import { LookFace } from "../avatar/look-face";
 import { ROW_AVATAR_SIZE, circleAvatarStyle } from "../avatar/circle-avatar";
 import { openCreateCompanion } from "../avatar/open";
 import { faceSourceForId } from "../chat/faces";
+import type { ChatKind } from "../chat/types";
 import type { AvatarLook } from "../avatar/engine/viewer-html";
+import { useHomeCompanions } from "./companions";
 
 const HomeFace = ({
   companionId,
+  kind,
   look,
   size,
 }: {
   companionId: string;
+  kind: ChatKind;
   look?: AvatarLook | null;
   size: number;
 }) => (
   <LookFace
     look={look}
     size={size}
-    fallbackSource={faceSourceForId(companionId)}
+    fallbackSource={faceSourceForId(companionId, kind)}
   />
 );
 
 export const Home = () => {
-  const { companions, events, navigateToNestedScreen } = useHome();
-  const { companions: createdCompanions } = useCompanions();
+  const { events, navigateToNestedScreen } = useHome();
+  // One membership with the Message friends list: see ./companions.ts.
+  const companions = useHomeCompanions();
   const navigation = useNavigation();
   const parentNavigation = navigation.getParent() as
     | NavigationProp<ParamListBase>
@@ -57,40 +61,23 @@ export const Home = () => {
     );
   };
 
-  const renderCreatedCompanions = () =>
-    createdCompanions.map((companion) => (
+  const renderCompanions = () =>
+    companions.map((companion) => (
       <TouchableOpacity
         key={companion.id}
+        testID={`home-companion-${companion.id}`}
+        accessibilityLabel={companion.name}
         style={[styles.companionPicture, circleAvatarStyle(ROW_AVATAR_SIZE)]}
         onPress={() => openCompanion(companion.id)}
       >
         <HomeFace
           companionId={companion.id}
-          look={lookFromCompanion(companion)}
+          kind={companion.kind}
+          look={companion.look}
           size={ROW_AVATAR_SIZE}
         />
       </TouchableOpacity>
     ));
-
-  const renderCompanions = () =>
-    companions
-      .filter(
-        (companion) =>
-          !createdCompanions.some((created) => created.id === companion.id)
-      )
-      .map((companion) => (
-        <TouchableOpacity
-          key={companion.id}
-          style={[styles.companionPicture, circleAvatarStyle(ROW_AVATAR_SIZE)]}
-          onPress={() => openCompanion(companion.id)}
-        >
-          <HomeFace
-            companionId={companion.id}
-            look={null}
-            size={ROW_AVATAR_SIZE}
-          />
-        </TouchableOpacity>
-      ));
 
   const generatePath = (screens: string[]) => {
     return screens.map((screen) => ({
@@ -156,7 +143,6 @@ export const Home = () => {
               contentContainerStyle={styles.companionRow}
               showsHorizontalScrollIndicator={false}
             >
-              {renderCreatedCompanions()}
               {renderCompanions()}
               <TouchableOpacity
                 testID="home-add-companion"

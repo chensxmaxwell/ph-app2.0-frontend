@@ -469,6 +469,45 @@
     return mat;
   }
 
+  // Iris geometry, in the eyeball shader's normalised units (1.0 = the 0.061
+  // UV radius `p` is divided by below; the lid opening spans roughly 0.69 to
+  // either side of the iris centre and 0.39 above and below it). tintLook
+  // scales both radii by irisSize, 0.82..1.10 from the Eyes slider. 0.58 put
+  // the iris edge to edge across the opening with the lids clipping it top
+  // and bottom, and the 0.26 pupil read as a black disc - TestFlight 1.2 (11)
+  // "eyes too big". 0.40 leaves the iris about the height of the opening with
+  // sclera showing on both sides; the pupil keeps ~40% of the iris.
+  var IRIS_RADIUS = 0.40;
+  var PUPIL_RADIUS = 0.17;
+
+  // GLSL appended after map_fragment: paints sclera, iris, pupil, limbal ring
+  // and two catchlights onto the Eyes_0 UVs. Everything but the sclera is
+  // sized from irisR so the eye stays coherent when the radius changes.
+  function irisFragmentChunk() {
+    return [
+      "#include <map_fragment>",
+      "vec2 c = vec2(0.5623, 0.4378);",
+      "vec2 p = (vUv - c) / vec2(0.061, 0.061);",
+      "float d = length(p);",
+      "float irisR = " + IRIS_RADIUS.toFixed(3) + " * irisSize;",
+      "float pupilR = " + PUPIL_RADIUS.toFixed(3) + " * irisSize;",
+      "float irisM = 1.0 - smoothstep(irisR, irisR + 0.05, d);",
+      "float pupilM = 1.0 - smoothstep(pupilR, pupilR + 0.03, d);",
+      "vec3 scleraCol = vec3(0.98, 0.99, 1.0);",
+      "vec3 irisCol = mix(irisColor * 0.42, irisColor + vec3(0.22, 0.22, 0.28), clamp(1.0 - 0.56 * d / irisR, 0.0, 1.0));",
+      "vec3 pupilCol = vec3(0.03, 0.02, 0.02);",
+      "vec3 col = mix(scleraCol, irisCol, irisM);",
+      "col = mix(col, pupilCol, pupilM);",
+      "float spec = 1.0 - smoothstep(0.09 * irisR, 0.25 * irisR, length(p - vec2(-0.36, 0.50) * irisR));",
+      "float spec2 = 1.0 - smoothstep(0.05 * irisR, 0.14 * irisR, length(p - vec2(0.32, -0.22) * irisR));",
+      "col = mix(col, vec3(1.0), spec * 0.95);",
+      "col = mix(col, vec3(1.0), spec2 * 0.35);",
+      "float rim = smoothstep(irisR * 0.86, irisR, d) * irisM;",
+      "col = mix(col, irisColor * 0.22, rim * 0.55);",
+      "diffuseColor.rgb = col;"
+    ].join("\n");
+  }
+
   function upgradeIrisMat(oldMat, envMap) {
     var mat = new THREE.MeshPhysicalMaterial();
     if (oldMat && oldMat.map) mat.map = oldMat.map;
@@ -498,28 +537,7 @@
       );
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <map_fragment>",
-        [
-          "#include <map_fragment>",
-          "vec2 c = vec2(0.5623, 0.4378);",
-          "vec2 p = (vUv - c) / vec2(0.061, 0.061);",
-          "float d = length(p);",
-          "float irisR = 0.58 * irisSize;",
-          "float pupilR = 0.26 * irisSize;",
-          "float irisM = 1.0 - smoothstep(irisR, irisR + 0.06, d);",
-          "float pupilM = 1.0 - smoothstep(pupilR, pupilR + 0.035, d);",
-          "vec3 scleraCol = vec3(0.98, 0.99, 1.0);",
-          "vec3 irisCol = mix(irisColor * 0.42, irisColor + vec3(0.22, 0.22, 0.28), clamp(1.0 - d, 0.0, 1.0));",
-          "vec3 pupilCol = vec3(0.03, 0.02, 0.02);",
-          "vec3 col = mix(scleraCol, irisCol, irisM);",
-          "col = mix(col, pupilCol, pupilM);",
-          "float spec = 1.0 - smoothstep(0.05, 0.14, length(p - vec2(-0.20, 0.28)));",
-          "float spec2 = 1.0 - smoothstep(0.03, 0.08, length(p - vec2(0.18, -0.12)));",
-          "col = mix(col, vec3(1.0), spec * 0.95);",
-          "col = mix(col, vec3(1.0), spec2 * 0.35);",
-          "float rim = smoothstep(irisR - 0.08, irisR, d) * irisM;",
-          "col = mix(col, irisColor * 0.22, rim * 0.55);",
-          "diffuseColor.rgb = col;"
-        ].join("\n")
+        irisFragmentChunk()
       );
       mat.userData.shader = shader;
     };
@@ -1006,6 +1024,9 @@
     OUTFIT_POSES: OUTFIT_POSES,
     MIN_PLAUSIBLE_HEIGHT: MIN_PLAUSIBLE_HEIGHT,
     FALLBACK_HEIGHT: FALLBACK_HEIGHT,
+    IRIS_RADIUS: IRIS_RADIUS,
+    PUPIL_RADIUS: PUPIL_RADIUS,
+    irisFragmentChunk: irisFragmentChunk,
     figureMeshVisible: figureMeshVisible,
     nameHasExposedSkin: nameHasExposedSkin,
     isFigureMesh: isFigureMesh,
