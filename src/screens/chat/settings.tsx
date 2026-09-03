@@ -87,9 +87,9 @@ export const ChatSettingsScreen = () => {
           )}
           {options.length > 1 && choose ? (
             <View style={styles.pickerWrap}>
-              <Text style={styles.pickerTitle}>Avatar</Text>
+              <Text style={styles.pickerTitle}>Choose avatar</Text>
               <Text style={styles.pickerHint}>
-                {`Pick the face ${thread.name} uses on Home, Message and Love.`}
+                {`The face ${thread.name} shows on Home, Message and Love. Picked when the companion was created; switch it here any time.`}
               </Text>
               <AvatarPicker
                 options={options}

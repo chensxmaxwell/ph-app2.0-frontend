@@ -1,12 +1,15 @@
+import type { PortraitId } from "../avatar/portraits";
+
 export type ChatKind = "bot" | "human";
 
 export type FriendRequest = "none" | "incoming" | "sent" | "accepted" | "refused";
 
 // Which face a person wears on every surface (Home strip, Message list and
 // thread, Love overlays, calls). `look` is the crafted 3D avatar, `portrait`
-// the bundled photo a seeded person owns. Unset means the default: the crafted
-// look when the person has one, otherwise the portrait.
-export type AvatarChoice = "look" | "portrait";
+// the bundled photo a seeded person owns, a PortraitId one of the six
+// generated portraits every companion may pick. Unset means the default: the
+// crafted look when the person has one, otherwise the portrait.
+export type AvatarChoice = "look" | "portrait" | PortraitId;
 
 export type ChatBubble = {
   id: string;

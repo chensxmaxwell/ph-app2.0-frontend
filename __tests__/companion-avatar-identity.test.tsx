@@ -47,6 +47,11 @@ import { LoveCallScreen } from "../src/screens/love/call";
 import { LookFace } from "../src/screens/avatar/look-face";
 import { avatarOptions, companionFace } from "../src/screens/avatar/face";
 import {
+  PORTRAIT_IDS,
+  PortraitId,
+  portraitById,
+} from "../src/screens/avatar/portraits";
+import {
   AvatarWizardProvider,
   DEFAULT_DRAFT,
 } from "../src/screens/avatar/context";
@@ -540,10 +545,21 @@ describe("one companion, one face on every surface", () => {
   });
 });
 
-describe("avatar picker", () => {
+const portraitFace = (id: PortraitId): FaceSig => ({
+  kind: "portrait",
+  uri: uriOf(portraitById(id)!.source),
+});
+
+const avatarOptionIds = (root: ReactTestInstance) =>
+  root
+    .findAllByType(TouchableOpacity)
+    .map((node) => String(node.props.testID ?? ""))
+    .filter((id) => id.startsWith("avatar-option-"));
+
+describe("secondary avatar switch on Chat settings", () => {
   const wizard = { companionId: "companion-k", name: "Kevin" };
 
-  it("Chat settings offers the crafted look and the old photo, and the pick changes Home, Message header and Love header together", async () => {
+  it("offers the crafted look, the old photo and the male portraits; a pick changes Home, Message header and Love header together", async () => {
     const tree = await craftKevin(await mountScreens({ wizard }));
     await update(tree, {
       wizard,
@@ -553,12 +569,13 @@ describe("avatar picker", () => {
     });
     const look = facesFor(tree, "kevin").home;
     expect(look.kind).toBe("look");
-    expect(
-      tree.root
-        .findAllByType(TouchableOpacity)
-        .map((node) => String(node.props.testID ?? ""))
-        .filter((id) => id.startsWith("avatar-option-"))
-    ).toEqual(["avatar-option-look", "avatar-option-portrait"]);
+    expect(avatarOptionIds(tree.root)).toEqual([
+      "avatar-option-look",
+      "avatar-option-portrait",
+      "avatar-option-m-warm",
+      "avatar-option-m-calm",
+      "avatar-option-m-tousled",
+    ]);
     expect(
       touchable(tree.root, "avatar-option-look").props.accessibilityState
     ).toEqual({ selected: true });
@@ -571,6 +588,11 @@ describe("avatar picker", () => {
     ).toEqual({ selected: true });
     expect(chat!.getThread("kevin")?.avatar).toBe("portrait");
 
+    press(touchable(tree.root, "avatar-option-m-tousled"));
+    await settle();
+    expectOneFace(tree, "kevin", portraitFace("m-tousled"));
+    expect(chat!.getThread("kevin")?.avatar).toBe("m-tousled");
+
     press(touchable(tree.root, "avatar-option-look"));
     await settle();
     expectOneFace(tree, "kevin", look);
@@ -579,38 +601,35 @@ describe("avatar picker", () => {
   it("picking a face is not chat activity: the Message row keeps its time", async () => {
     const tree = await craftKevin(await mountScreens({ wizard, settings: "kevin" }));
     const before = chat!.getThread("kevin")!.lastActivityAt;
-    press(touchable(tree.root, "avatar-option-portrait"));
+    press(touchable(tree.root, "avatar-option-m-warm"));
     await settle();
     expect(chat!.getThread("kevin")!.lastActivityAt).toBe(before);
   });
 
-  it("Love chat ··· switches between the photo and the 3D avatar in place", async () => {
+  it("Love chat ··· no longer lists per-face switches; Edit persona leads to the Identity page grid", async () => {
     const tree = await craftKevin(await mountScreens({ wizard }));
     await update(tree, { wizard, thread: "kevin", love: "kevin" });
-    const look = facesFor(tree, "kevin").home;
-
     press(touchable(tree.root, "love-chat-info"));
-    expect(texts(tree.root)).toContain("Use photo");
-    expect(texts(tree.root)).not.toContain("Use 3D avatar");
-    press(buttonLabelled(tree.root, "Use photo"));
-    await settle();
-    expectOneFace(tree, "kevin", kevinPhoto);
-
-    press(touchable(tree.root, "love-chat-info"));
-    expect(texts(tree.root)).toContain("Use 3D avatar");
-    press(buttonLabelled(tree.root, "Use 3D avatar"));
-    await settle();
-    expectOneFace(tree, "kevin", look);
+    const labels = texts(tree.root);
+    expect(labels).not.toContain("Use photo");
+    expect(labels).not.toContain("Use 3D avatar");
+    expect(labels).toContain("Edit persona");
+    expect(labels).toContain("Edit avatar");
   });
 
-  it("seeded Chad has only his photo: no picker, no 3D option", async () => {
+  it("seeded Chad (no 3D record) can switch between his photo and the male portraits", async () => {
     const tree = await mountScreens({ settings: "chad" });
-    expect(
-      tree.root
-        .findAllByType(TouchableOpacity)
-        .map((node) => String(node.props.testID ?? ""))
-        .filter((id) => id.startsWith("avatar-option-"))
-    ).toEqual([]);
+    expect(avatarOptionIds(tree.root)).toEqual([
+      "avatar-option-portrait",
+      "avatar-option-m-warm",
+      "avatar-option-m-calm",
+      "avatar-option-m-tousled",
+    ]);
+    press(touchable(tree.root, "avatar-option-m-calm"));
+    await settle();
+    expect(chat!.getThread("chad")?.avatar).toBe("m-calm");
+    expect(faceAt(tree.root, "home-companion-chad")).toEqual(portraitFace("m-calm"));
+    expect(faceAt(tree.root, "message-row-chad")).toEqual(portraitFace("m-calm"));
   });
 
   it("the pick survives an app relaunch", async () => {
@@ -763,19 +782,98 @@ describe("face rules", () => {
       avatar: "portrait",
     };
     expect(companionFace({ thread: novaThread, companion: nova }).kind).toBe("look");
+    // Nova is Male: the look, then the male portraits; never Kevin's photo.
     expect(avatarOptions({ thread: novaThread, companion: nova }).map((o) => o.kind)).toEqual(
-      ["look"]
+      ["look", "m-warm", "m-calm", "m-tousled"]
     );
     expect(portraitPresetForId("companion-nova")).toBeNull();
   });
 
-  it("options: seeded person = photo; crafted seeded-name = look + photo", () => {
+  it("options: seeded person = photo + portraits for their gender; crafted seeded-name = look + photo + portraits", () => {
     expect(avatarOptions({ thread: kevinThread }).map((o) => o.kind)).toEqual([
       "portrait",
+      "m-warm",
+      "m-calm",
+      "m-tousled",
     ]);
     expect(
       avatarOptions({ thread: kevinThread, companion: kevin3d }).map((o) => o.kind)
-    ).toEqual(["look", "portrait"]);
+    ).toEqual(["look", "portrait", "m-warm", "m-calm", "m-tousled"]);
+    const amanda = seedThreads().find((thread) => thread.id === "amanda")!;
+    expect(amanda.gender).toBe("Female");
+    expect(avatarOptions({ thread: amanda }).map((o) => o.kind)).toEqual([
+      "portrait",
+      "f-bangs",
+      "f-long",
+    ]);
+    // Non-binary (and unknown gender) sees all six.
+    expect(
+      avatarOptions({
+        thread: { ...kevinThread, gender: "Non-binary" },
+        companion: { ...kevin3d, gender: "Non-binary" },
+      }).map((o) => o.kind)
+    ).toEqual(["look", "portrait", ...PORTRAIT_IDS]);
+    expect(
+      avatarOptions({ thread: { ...kevinThread, gender: undefined } }).map((o) => o.kind)
+    ).toEqual(["portrait", ...PORTRAIT_IDS]);
+  });
+
+  it("options carry English labels and the portrait image", () => {
+    const options = avatarOptions({ thread: kevinThread, companion: kevin3d });
+    expect(options.map((o) => o.label)).toEqual([
+      "3D avatar",
+      "Photo",
+      "Warm",
+      "Calm",
+      "Tousled",
+    ]);
+    const warm = options.find((o) => o.kind === "m-warm")!;
+    expect(warm.face).toEqual({
+      kind: "m-warm",
+      look: null,
+      source: portraitById("m-warm")!.source,
+    });
+  });
+
+  it("a pick that the gender filter would hide stays offered, so a gender change never strands the selection", () => {
+    expect(
+      avatarOptions({ thread: kevinThread, companion: kevin3d, choice: "f-long" }).map(
+        (o) => o.kind
+      )
+    ).toEqual(["look", "portrait", "m-warm", "m-calm", "m-tousled", "f-long"]);
+    // An explicit gender override (the wizard's draft) beats the stored one.
+    expect(
+      avatarOptions({ thread: kevinThread, companion: kevin3d, gender: "Female" }).map(
+        (o) => o.kind
+      )
+    ).toEqual(["look", "portrait", "f-bangs", "f-long"]);
+  });
+
+  it("a bundled portrait pick wins over the look and the photo, for crafted and chat-only people alike", () => {
+    const warm = portraitById("m-warm")!;
+    expect(
+      companionFace({ thread: { ...kevinThread, avatar: "m-warm" }, companion: kevin3d })
+    ).toEqual({ kind: "m-warm", look: null, source: warm.source });
+    expect(companionFace({ thread: { ...kevinThread, avatar: "f-long" } })).toEqual({
+      kind: "f-long",
+      look: null,
+      source: portraitById("f-long")!.source,
+    });
+    // The picker preview overrides the stored pick.
+    expect(
+      companionFace({ thread: { ...kevinThread, avatar: "m-warm" }, choice: "look", companion: kevin3d })
+        .kind
+    ).toBe("look");
+    // A stored id nothing ships for falls back to the default rule.
+    expect(
+      companionFace({
+        thread: { ...kevinThread, avatar: "portrait-gone" as ChatThread["avatar"] },
+        companion: kevin3d,
+      }).kind
+    ).toBe("look");
+    expect(
+      companionFace({ thread: { ...kevinThread, avatar: "portrait-gone" as ChatThread["avatar"] } })
+    ).toMatchObject({ kind: "portrait", source: faceSourceForId("kevin") });
   });
 
   it("threadIdForCompanion folds seeded names and keeps everyone else's id", () => {

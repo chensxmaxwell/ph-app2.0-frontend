@@ -8,20 +8,21 @@ import { s } from "./scale";
 
 const RING = 3;
 
-// Row of the faces a person can wear (crafted 3D look, bundled photo). The
-// selected one is ringed. Callers only render this when there is a choice.
+// Grid of the faces a person can wear: the crafted 3D look, a seeded photo,
+// the bundled portraits. The selected one is ringed; `selected` is null while
+// the create wizard still waits for a pick.
 export const AvatarPicker = ({
   options,
   selected,
   onSelect,
-  size = s(72),
+  size = s(64),
 }: {
   options: AvatarOption[];
-  selected: AvatarChoice;
+  selected: AvatarChoice | null;
   onSelect: (choice: AvatarChoice) => void;
   size?: number;
 }) => (
-  <View style={styles.row} testID="avatar-picker">
+  <View style={styles.grid} testID="avatar-picker">
     {options.map((option) => {
       const active = option.kind === selected;
       return (
@@ -52,7 +53,10 @@ export const AvatarPicker = ({
               fallbackSource={option.face.source}
             />
           </View>
-          <Text style={[styles.label, active ? styles.labelOn : null]}>
+          <Text
+            style={[styles.label, active ? styles.labelOn : null]}
+            numberOfLines={1}
+          >
             {option.label}
           </Text>
         </TouchableOpacity>
@@ -62,14 +66,17 @@ export const AvatarPicker = ({
 );
 
 const styles = StyleSheet.create({
-  row: {
+  grid: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "center",
-    gap: s(24),
+    columnGap: s(14),
+    rowGap: s(12),
   },
   option: {
     alignItems: "center",
-    gap: s(8),
+    gap: s(6),
+    width: s(72),
   },
   ring: {
     borderWidth: RING,
@@ -83,7 +90,7 @@ const styles = StyleSheet.create({
   label: {
     color: colors.grayLighter,
     fontFamily: "Quicksand-Bold",
-    fontSize: 13,
+    fontSize: 12,
   },
   labelOn: {
     color: colors.white,
