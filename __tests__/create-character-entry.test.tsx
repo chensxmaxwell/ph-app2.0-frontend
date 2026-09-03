@@ -593,6 +593,29 @@ describe("creating a companion saves the avatar pick and the gender", () => {
     ).toMatchObject({ kind: "f-long", look: null });
   });
 
+  it("Chat settings → Create avatar on chat-only Kevin also starts with no face picked", async () => {
+    const form = await openedForm({
+      name: AVATAR_STACK,
+      params: { mode: "create", companionId: "kevin" },
+    });
+    expect(form.mode).toBe("create");
+    expect(form.initialDraft.name).toBe("Kevin");
+    // Create always asks: the photo he wears today is one of the tiles, not
+    // a silent default that would survive crafting a 3D look.
+    expect(form.initialDraft.avatar).toBeNull();
+    const tree = await renderForm(form);
+    expect(continueButton(tree).props.disabled).toBe(true);
+    expect(avatarOptionIds(tree)).toEqual([
+      "avatar-option-look",
+      "avatar-option-portrait",
+      "avatar-option-m-warm",
+      "avatar-option-m-calm",
+      "avatar-option-m-tousled",
+    ]);
+    press(touchable(tree, "avatar-option-look"));
+    expect(continueButton(tree).props.disabled).toBeFalsy();
+  });
+
   it("picking the 3D look keeps the crafted cartoon as the face", async () => {
     await mountCreator();
     act(() => {
