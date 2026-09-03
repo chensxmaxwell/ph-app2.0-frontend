@@ -18,13 +18,15 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { colors } from "@common/styles/colors";
 import ChevronBack from "@images/avatar/chevron-back.svg";
 import Pencil from "@images/message/pencil.svg";
-import { lookFromCompanion, useCompanions } from "../../store/companions";
+import { useCompanions } from "../../store/companions";
+import { AvatarPicker } from "../avatar/avatar-picker";
 import { LookFace } from "../avatar/look-face";
 import { openAvatarWizard, openEditPersona } from "../avatar/open";
 import { s } from "../avatar/scale";
+import { usePersonFace } from "../avatar/use-person-face";
 import { ChatGradient } from "./background";
+import { findPerson } from "./person";
 import { useChat } from "./store";
-import { faceSourceForId } from "./faces";
 
 type SettingsRoute = RouteProp<
   { ChatSettings: { threadId: string } },
@@ -45,10 +47,16 @@ const Field = ({ label, value }: { label: string; value?: string }) => (
 export const ChatSettingsScreen = () => {
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
   const route = useRoute<SettingsRoute>();
-  const { getThread } = useChat();
+  const { threads } = useChat();
   const { companions } = useCompanions();
-  const thread = getThread(route.params.threadId);
-  const companion = companions.find((item) => item.id === thread?.id);
+  const thread = threads.find((item) => item.id === route.params.threadId);
+  // A 3D companion named after a seeded bot lives under the seed's thread id
+  // but its own record id; pair through findPerson, not a bare id match.
+  const companion = findPerson(thread?.id, threads, companions)?.companion;
+  const { face, options, choose } = usePersonFace(
+    route.params.threadId,
+    thread?.kind
+  );
 
   if (!thread) {
     return null;
@@ -70,16 +78,26 @@ export const ChatSettingsScreen = () => {
           </TouchableOpacity>
         </View>
         <ScrollView contentContainerStyle={styles.body}>
-          {companion ? (
+          {face.look ? (
             <View style={styles.portraitWrap}>
-              <LookFace look={lookFromCompanion(companion)} size={s(160)} />
+              <LookFace look={face.look} size={s(160)} />
             </View>
           ) : (
-            <Image
-              source={faceSourceForId(thread.id, thread.kind)}
-              style={styles.portrait}
-            />
+            <Image source={face.source} style={styles.portrait} />
           )}
+          {options.length > 1 && choose ? (
+            <View style={styles.pickerWrap}>
+              <Text style={styles.pickerTitle}>Avatar</Text>
+              <Text style={styles.pickerHint}>
+                {`Pick the face ${thread.name} uses on Home, Message and Love.`}
+              </Text>
+              <AvatarPicker
+                options={options}
+                selected={face.kind}
+                onSelect={choose}
+              />
+            </View>
+          ) : null}
           {companion ? (
             <>
               <TouchableOpacity
@@ -169,6 +187,27 @@ const styles = StyleSheet.create({
     height: s(160),
     alignItems: "center",
     justifyContent: "center",
+  },
+  pickerWrap: {
+    width: "100%",
+    marginTop: s(16),
+    paddingVertical: s(16),
+    paddingHorizontal: s(16),
+    borderRadius: s(16),
+    backgroundColor: colors.grayLight,
+    alignItems: "center",
+    gap: s(12),
+  },
+  pickerTitle: {
+    color: colors.white,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 16,
+  },
+  pickerHint: {
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 13,
+    textAlign: "center",
   },
   traits: {
     marginTop: s(16),
