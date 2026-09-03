@@ -51,6 +51,7 @@ import {
   PortraitId,
   portraitById,
 } from "../src/screens/avatar/portraits";
+import type { AvatarChoice } from "../src/screens/chat/types";
 import {
   AvatarWizardProvider,
   DEFAULT_DRAFT,
@@ -193,7 +194,13 @@ type ScreensProps = {
   settings?: string;
   love?: string;
   loveCall?: string;
-  wizard?: { companionId: string; name: string; waiting?: boolean };
+  wizard?: {
+    companionId: string;
+    name: string;
+    // The Identity page's Choose avatar pick; the 3D look unless a test says.
+    avatar?: AvatarChoice;
+    waiting?: boolean;
+  };
 };
 
 // The app's provider tree with the surfaces a test wants side by side.
@@ -250,7 +257,11 @@ const Screens = ({
           <AvatarWizardProvider
             mode="create"
             companionId={wizard.companionId}
-            initialDraft={{ ...DEFAULT_DRAFT, name: wizard.name }}
+            initialDraft={{
+              ...DEFAULT_DRAFT,
+              name: wizard.name,
+              avatar: wizard.avatar ?? "look",
+            }}
           >
             <WizardProbe />
             {wizard.waiting ? (
@@ -555,6 +566,52 @@ const avatarOptionIds = (root: ReactTestInstance) =>
     .findAllByType(TouchableOpacity)
     .map((node) => String(node.props.testID ?? ""))
     .filter((id) => id.startsWith("avatar-option-"));
+
+describe("the avatar picked in the create wizard is the companion's face", () => {
+  it("a portrait picked on the Identity page shows on Home, the Message row, the thread header, the Love header and the pill", async () => {
+    const wizard = { companionId: "companion-nova", name: "Nova", avatar: "m-calm" as const };
+    const tree = await craftKevin(await mountScreens({ wizard }));
+    await update(tree, { wizard, thread: "companion-nova", love: "companion-nova" });
+
+    expectOneFace(tree, "companion-nova", portraitFace("m-calm"));
+    expect(chat!.getThread("companion-nova")?.avatar).toBe("m-calm");
+    // The record still carries the crafted look for the 3D option later.
+    expect(companionsApi!.companions.map((companion) => companion.id)).toEqual([
+      "companion-nova",
+    ]);
+  });
+
+  it("a female portrait picked for a Kevin folded onto the seed thread beats both his old photo and the look", async () => {
+    const wizard = { companionId: "companion-k", name: "Kevin", avatar: "f-bangs" as const };
+    const tree = await craftKevin(await mountScreens({ wizard }));
+    await update(tree, { wizard, thread: "kevin", love: "kevin" });
+    expectOneFace(tree, "kevin", portraitFace("f-bangs"));
+    expect(
+      imageUris(hostWithTestId(tree.root, "chat-thread-header-face")).filter(isKevinPhoto)
+    ).toEqual([]);
+  });
+
+  it("picking the 3D look in the wizard keeps the crafted cartoon everywhere", async () => {
+    const wizard = { companionId: "companion-k", name: "Kevin", avatar: "look" as const };
+    const tree = await craftKevin(await mountScreens({ wizard }));
+    await update(tree, { wizard, thread: "kevin", love: "kevin" });
+    const faces = facesFor(tree, "kevin");
+    expect(faces.home.kind).toBe("look");
+    expectOneFace(tree, "kevin", faces.home);
+  });
+
+  it("the wizard pick survives an app relaunch", async () => {
+    const wizard = { companionId: "companion-nova", name: "Nova", avatar: "m-warm" as const };
+    await craftKevin(await mountScreens({ wizard }));
+    await persisted();
+    expect(
+      (await loadChat("demo")).threads.find((thread) => thread.id === "companion-nova")
+        ?.avatar
+    ).toBe("m-warm");
+    const tree = await relaunch({ thread: "companion-nova", love: "companion-nova" });
+    expectOneFace(tree, "companion-nova", portraitFace("m-warm"));
+  });
+});
 
 describe("secondary avatar switch on Chat settings", () => {
   const wizard = { companionId: "companion-k", name: "Kevin" };

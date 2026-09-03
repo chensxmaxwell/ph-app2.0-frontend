@@ -41,14 +41,35 @@ export const useSaveCompanion = () => {
           ? companion.personalities.join(", ")
           : undefined,
       });
+      if (draft.avatar) {
+        setAvatar(companionId, draft.avatar);
+      }
       return companion;
     }
 
     upsertCompanion(companion);
     upsertCompanionThread(companion);
-    if (mode !== "editPersona") {
-      // A look that was just crafted is the face until the user picks another.
-      setAvatar(threadIdForCompanion(companion), "look");
+    const threadId = threadIdForCompanion(companion);
+    switch (mode) {
+      case "create":
+        // The Identity page's Choose avatar grid decided the face; the 3D
+        // look is the fallback for drafts saved without a pick.
+        setAvatar(threadId, draft.avatar ?? "look");
+        break;
+      case "editLook":
+        // A look that was just re-crafted is the face until the user picks
+        // another.
+        setAvatar(threadId, "look");
+        break;
+      case "editPersona":
+        if (draft.avatar) {
+          setAvatar(threadId, draft.avatar);
+        }
+        break;
+      default: {
+        const exhaustive: never = mode;
+        return exhaustive;
+      }
     }
     return companion;
   };

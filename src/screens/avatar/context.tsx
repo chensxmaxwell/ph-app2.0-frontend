@@ -8,6 +8,7 @@ import React, {
 } from "react";
 
 import { Companion } from "../../store/companions";
+import type { AvatarChoice } from "../chat/types";
 import {
   AvatarLook,
   CHARACTER_PRESETS,
@@ -35,6 +36,10 @@ export type AvatarDraft = AvatarLook & {
   name: string;
   birthday: string;
   gender: GenderOption;
+  // The face this person will show on Home and in chat: the 3D look being
+  // crafted, a seeded photo, or a bundled portrait. `null` until the user picks
+  // one on the Identity page; the create wizard does not continue without it.
+  avatar: AvatarChoice | null;
   personalities: PersonalityOption[];
   story: string;
   passionateTender: number;
@@ -47,6 +52,7 @@ export const DEFAULT_DRAFT: AvatarDraft = {
   name: "",
   birthday: "",
   gender: "Male",
+  avatar: null,
   personalities: ["Loyal & protective", "Wise & thoughtful"],
   story: "",
   passionateTender: 0.5,
@@ -70,11 +76,17 @@ export const toPersonalityOptions = (values: string[]): PersonalityOption[] =>
     (PERSONALITY_OPTIONS as readonly string[]).includes(item)
   );
 
-export const draftFromCompanion = (companion: Companion): AvatarDraft => ({
+// `avatar` is the face the person wears today (from their thread), so an edit
+// opens with the current pick selected instead of forcing a new one.
+export const draftFromCompanion = (
+  companion: Companion,
+  avatar: AvatarChoice | null = "look"
+): AvatarDraft => ({
   ...pickLook(companion),
   name: companion.name,
   birthday: companion.birthday,
   gender: toGenderOption(companion.gender),
+  avatar,
   personalities: toPersonalityOptions(companion.personalities),
   story: companion.story,
   passionateTender: companion.passionateTender,
@@ -180,6 +192,7 @@ const DRAFT_ONLY_FIELDS: Record<DraftOnlyKey, true> = {
   name: true,
   birthday: true,
   gender: true,
+  avatar: true,
   personalities: true,
   story: true,
   passionateTender: true,
@@ -210,6 +223,7 @@ const isDraftDirty = (draft: AvatarDraft, baseline: AvatarDraft): boolean => {
         }
         break;
       case "gender":
+      case "avatar":
       case "story":
         if (draft[key] !== baseline[key]) {
           return true;
