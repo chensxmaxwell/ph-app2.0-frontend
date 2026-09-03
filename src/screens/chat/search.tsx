@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from "react";
 import {
-  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -18,10 +17,11 @@ import ChevronBack from "@images/avatar/chevron-back.svg";
 import SearchIcon from "@images/message/search.svg";
 import PersonPlus from "@images/message/person-plus.svg";
 import Paperplane from "@images/love/paperplane.svg";
+import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
+import { useFaceResolver } from "../avatar/use-person-face";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
-import { faceSourceForId } from "./faces";
 
 type SearchRoute = RouteProp<
   { ChatSearch: { addFriends?: boolean } | undefined },
@@ -32,6 +32,7 @@ export const ChatSearchScreen = () => {
   const navigation = useNavigation();
   const route = useRoute<SearchRoute>();
   const { threads, directory } = useChat();
+  const faceFor = useFaceResolver();
   const [query, setQuery] = useState(route.params?.addFriends ? "" : "Chad");
   const needle = query.trim().toLowerCase();
 
@@ -48,6 +49,7 @@ export const ChatSearchScreen = () => {
       .map((person) => ({
         key: `dir-${person.id}`,
         kind: "person" as const,
+        personId: person.id,
         title: person.name,
         subtitle: person.email,
         person,
@@ -66,6 +68,7 @@ export const ChatSearchScreen = () => {
             {
               key: `thread-${thread.id}`,
               kind: "thread" as const,
+              personId: thread.id,
               title: thread.name,
               subtitle: thread.email,
               threadId: thread.id,
@@ -75,6 +78,7 @@ export const ChatSearchScreen = () => {
         return hits.slice(0, 2).map((message) => ({
           key: `msg-${message.id}`,
           kind: "thread" as const,
+          personId: thread.id,
           title: thread.name,
           subtitle: message.text,
           threadId: thread.id,
@@ -114,11 +118,10 @@ export const ChatSearchScreen = () => {
           >
             {results.map((item) => (
               <View key={item.key} style={styles.card}>
-                <Image
-                  source={faceSourceForId(
-                    item.kind === "person" ? item.person.id : item.threadId
-                  )}
-                  style={styles.face}
+                <LookFace
+                  look={faceFor(item.personId).look}
+                  size={s(60)}
+                  fallbackSource={faceFor(item.personId).source}
                 />
                 <View style={styles.copy}>
                   <Text style={styles.name}>{item.title}</Text>
@@ -216,11 +219,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: s(15),
-  },
-  face: {
-    width: s(60),
-    height: s(60),
-    borderRadius: s(30),
   },
   copy: {
     flex: 1,
