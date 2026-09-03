@@ -17,27 +17,11 @@ import {
 import { LookFace } from "../avatar/look-face";
 import { ROW_AVATAR_SIZE, circleAvatarStyle } from "../avatar/circle-avatar";
 import { openCreateCompanion } from "../avatar/open";
-import { faceSourceForId } from "../chat/faces";
-import type { ChatKind } from "../chat/types";
-import type { AvatarLook } from "../avatar/engine/viewer-html";
+import type { CompanionFace } from "../avatar/face";
 import { useHomeCompanions } from "./companions";
 
-const HomeFace = ({
-  companionId,
-  kind,
-  look,
-  size,
-}: {
-  companionId: string;
-  kind: ChatKind;
-  look?: AvatarLook | null;
-  size: number;
-}) => (
-  <LookFace
-    look={look}
-    size={size}
-    fallbackSource={faceSourceForId(companionId, kind)}
-  />
+const HomeFace = ({ face, size }: { face: CompanionFace; size: number }) => (
+  <LookFace look={face.look} size={size} fallbackSource={face.source} />
 );
 
 export const Home = () => {
@@ -70,12 +54,7 @@ export const Home = () => {
         style={[styles.companionPicture, circleAvatarStyle(ROW_AVATAR_SIZE)]}
         onPress={() => openCompanion(companion.id)}
       >
-        <HomeFace
-          companionId={companion.id}
-          kind={companion.kind}
-          look={companion.look}
-          size={ROW_AVATAR_SIZE}
-        />
+        <HomeFace face={companion.face} size={ROW_AVATAR_SIZE} />
       </TouchableOpacity>
     ));
 

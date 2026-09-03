@@ -16,11 +16,11 @@ import Xmark from "@images/icons/xmark.svg";
 import Speaker from "@images/speaker.svg";
 import MicroPhoneUnmute from "@images/microphone-unmute.svg";
 import MicroPhoneMute from "@images/microphone-mute.svg";
-import { lookFromCompanion, useCompanions } from "../../store/companions";
-import { faceSourceForId } from "../chat/faces";
+import { useCompanions } from "../../store/companions";
 import { useChat } from "../chat/store";
 import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
+import { usePersonFace } from "../avatar/use-person-face";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
 import { resolveLovePerson } from "./partner";
@@ -61,11 +61,7 @@ export const LoveSyncScreen = () => {
     ensureLayerTimer,
     clearLayerTimer,
   } = useLoveSession();
-  const {
-    companion,
-    companionId: partnerId,
-    name,
-  } = resolveLovePerson({
+  const { companionId: partnerId, name } = resolveLovePerson({
     companionId: companionId ?? route.params?.companionId ?? chat?.companionId,
     name: route.params?.name,
     companions,
@@ -73,6 +69,7 @@ export const LoveSyncScreen = () => {
     activeCompanion,
     chatName: chat?.name,
   });
+  const { face } = usePersonFace(partnerId);
   const { stop: stopMotor } = usePatternPlayer(
     wavePattern(72),
     "sync",
@@ -177,11 +174,7 @@ export const LoveSyncScreen = () => {
       </View>
       <View style={styles.stage}>
         <View style={styles.glow} />
-        <LookFace
-          look={companion ? lookFromCompanion(companion) : null}
-          size={s(100)}
-          fallbackSource={faceSourceForId(partnerId)}
-        />
+        <LookFace look={face.look} size={s(100)} fallbackSource={face.source} />
         <Text style={styles.caption}>Syncing</Text>
       </View>
       <View style={[styles.controls, { bottom: insets.bottom + s(26) }]}>

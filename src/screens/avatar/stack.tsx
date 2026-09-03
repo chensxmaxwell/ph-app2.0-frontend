@@ -2,6 +2,7 @@ import React, { useMemo } from "react";
 import { RouteProp, useRoute } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { COMMON_HEADER_OPTIONS_CONFIG, SCREENS } from "@common/constant";
+import { findPerson } from "../chat/person";
 import { useChat } from "../chat/store";
 import { useCompanions } from "../../store/companions";
 import {
@@ -43,16 +44,16 @@ export const AvatarStack = () => {
   const params = route.params ?? {};
   const mode: WizardMode = params.mode ?? "create";
   const { companions } = useCompanions();
-  const { getThread } = useChat();
-  const companion = params.companionId
-    ? companions.find((item) => item.id === params.companionId)
-    : undefined;
-  const thread =
-    !companion && params.companionId
-      ? getThread(params.companionId)
-      : undefined;
+  const { threads } = useChat();
+  // Opened with either the thread id (chat settings, Love ···) or the 3D
+  // record id (Edit avatar); a Kevin folded into the seeded thread has both.
+  const person = findPerson(params.companionId, threads, companions);
+  const companion = person?.companion;
+  const thread = companion ? undefined : person?.thread;
   const fallbackId = useMemo(() => `companion-${Date.now()}`, []);
-  const companionId = params.companionId ?? fallbackId;
+  // Edits address the record when there is one, so the save updates it
+  // instead of writing the thread only and leaving the record stale.
+  const companionId = companion?.id ?? params.companionId ?? fallbackId;
   const initialDraft = companion
     ? draftFromCompanion(companion)
     : thread
