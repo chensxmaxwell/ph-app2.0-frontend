@@ -9,10 +9,11 @@ import {
 
 /**
  * TestFlight 1.2 showed the BoZo companion with blank eye sockets, no hands
- * and arms folded through the torso. All three lived in
- * assets/avatar-engine/viewer-page.html, which the Release IPA bundles
- * verbatim. These tests run that exact script under Node with the bundled
- * three.min.js (no WebGL) and check the rig decisions it exposes on
+ * and arms folded through the torso; 1.2 (11) and (12) then showed saucer
+ * irises under wide-open lids, staring parallel past the camera. All of it
+ * lived in assets/avatar-engine/viewer-page.html, which the Release IPA
+ * bundles verbatim. These tests run that exact script under Node with the
+ * bundled three.min.js (no WebGL) and check the rig decisions it exposes on
  * window.phViewerRig, plus that the bundled copies cannot drift.
  */
 
@@ -54,6 +55,15 @@ type ViewerRig = {
   FALLBACK_HEIGHT: number;
   IRIS_RADIUS: number;
   PUPIL_RADIUS: number;
+  UPPER_LID_DROP: number;
+  MAX_GAZE_ANGLE: number;
+  upperLidDrop: (eyeSize: number) => number;
+  aimBoneAt: (
+    bone: unknown,
+    rest: unknown,
+    target: unknown,
+    maxAngle: number
+  ) => number;
   irisFragmentChunk: () => string;
   figureMeshVisible: (name: string, look: Look) => boolean;
   nameHasExposedSkin: (name: string, outfit: number) => boolean;
@@ -191,18 +201,19 @@ describe("eyes", () => {
   });
 
   it("paints the iris well inside the lid opening, with a pupil that reads as an iris rather than a black disc", () => {
-    // TestFlight 1.2 (11) "eyes too big": irisR 0.58 (in the shader's units,
-    // where the lids clip ~0.39 above/below the centre and the opening is
-    // ~0.69 to either side) spanned the eye edge to edge. Sclera has to show
-    // on both sides of the iris, and the pupil must leave a visible iris
-    // band, at every Eyes-slider setting (irisSize 0.82..1.10).
-    expect(rig.IRIS_RADIUS).toBeLessThanOrEqual(0.45);
-    expect(rig.IRIS_RADIUS * 1.1).toBeLessThan(0.55);
+    // Measured on bozo-male.glb: in the shader's units (d = angle / 90deg)
+    // the rest lids uncover 0.26 above and 0.35 below the iris axis, 0.40 to
+    // the nose and 0.66 to the temple. 1.2 (11) shipped irisR 0.58 (edge to
+    // edge), 1.2 (12) shipped 0.40, still the full height of the aperture
+    // with a black-disc pupil. The iris must stay inside the lower lid at
+    // every Eyes-slider setting (irisSize 0.82..1.10) with sclera on both
+    // sides, and the pupil must leave a wide iris band.
+    expect(rig.IRIS_RADIUS * 1.1).toBeLessThan(0.35);
     // Still a cartoon eye, not a pinprick.
-    expect(rig.IRIS_RADIUS).toBeGreaterThanOrEqual(0.3);
+    expect(rig.IRIS_RADIUS * 0.82).toBeGreaterThan(0.22);
     const pupilToIris = rig.PUPIL_RADIUS / rig.IRIS_RADIUS;
     expect(pupilToIris).toBeGreaterThanOrEqual(0.3);
-    expect(pupilToIris).toBeLessThanOrEqual(0.5);
+    expect(pupilToIris).toBeLessThanOrEqual(0.42);
   });
 
   it("compiles those radii into the eyeball shader and still paints the sclera", () => {
@@ -214,11 +225,135 @@ describe("eyes", () => {
       `float pupilR = ${rig.PUPIL_RADIUS.toFixed(3)} * irisSize;`
     );
     // Eyes_0 stays a whole eyeball: white around the iris, not a bare iris.
-    expect(chunk).toContain("vec3 scleraCol = vec3(0.98, 0.99, 1.0);");
+    expect(chunk).toMatch(/vec3 scleraCol = /);
+    expect(chunk).toContain("vec3 col = mix(scleraCol, irisCol, irisM);");
     expect(chunk).toContain("diffuseColor.rgb = col;");
-    // No stale hard-coded radius left over from the oversized eye.
+    // No stale hard-coded radius left over from the oversized eyes.
     expect(chunk).not.toMatch(/0\.58\d* \* irisSize/);
     expect(chunk).not.toMatch(/0\.26\d* \* irisSize/);
+    expect(chunk).not.toMatch(/0\.40\d* \* irisSize/);
+    expect(chunk).not.toMatch(/0\.17\d* \* irisSize/);
+  });
+
+  it("shades the eyeball under the upper lid and lights both eyes from the same screen direction", () => {
+    const chunk = rig.irisFragmentChunk();
+    // 1.2 (12): a pure-white bead with a UV-fixed catchlight that mirrored
+    // between the eyes. The sclera is no longer pure white, it darkens toward
+    // the upper lid, and the catchlight comes from the view-space normal.
+    expect(chunk).not.toContain("vec3(0.98, 0.99, 1.0)");
+    expect(chunk).toMatch(/lidShade = smoothstep\([^)]*p\.y\)/);
+    expect(chunk).toContain("scleraCol *= 1.0 - lidShade;");
+    expect(chunk).toMatch(/dot\(vn, normalize\(vec3\(/);
+    expect(chunk).not.toMatch(/length\(p - vec2\([^)]*\) \* irisR\)/);
+    // Lifted unlit so the lower white does not go steel grey under the
+    // purple hemisphere ground.
+    expect(chunk).toMatch(/totalEmissiveRadiance \+= col \*/);
+  });
+
+  it("lowers the upper lid off the startled rest pose for every Eyes setting, never onto the pupil", () => {
+    // Shape_EyeLidHeight on Head_0: 0 is the wide-open rest lid (+24deg above
+    // the iris axis), ~0.27 puts the lid on the pupil, 0.45 on the iris
+    // centre. Bigger Eyes open the lid a little, never all the way.
+    const drops = [0, 0.25, 0.5, 0.75, 1].map((eye) => rig.upperLidDrop(eye));
+    for (const drop of drops) {
+      expect(drop).toBeGreaterThanOrEqual(0.1);
+      expect(drop).toBeLessThanOrEqual(0.24);
+    }
+    for (let i = 1; i < drops.length; i += 1) {
+      expect(drops[i]).toBeLessThan(drops[i - 1]);
+    }
+    expect(rig.upperLidDrop(0.5)).toBeCloseTo(rig.UPPER_LID_DROP - 0.04, 6);
+    // Out-of-range slider values clamp instead of flipping the lid open.
+    expect(rig.upperLidDrop(-3)).toBe(rig.upperLidDrop(0));
+    expect(rig.upperLidDrop(9)).toBe(rig.upperLidDrop(1));
+  });
+
+  it("turns an eye bone's local +Z onto a world target, through a rotated parent, and clamps the turn", () => {
+    const parent = new THREE.Object3D();
+    parent.position.set(0, 1.6, 0);
+    // Like the BoZo head bone, the parent is not axis-aligned and the eye's
+    // rest quaternion compensates so the iris axis is world +Z: the aim has
+    // to be solved in world space, not in the bone's local frame.
+    parent.rotation.set(0.3, Math.PI / 2, -0.2);
+    const bone = new THREE.Bone();
+    bone.position.set(0.04, 0.07, 0.09);
+    parent.add(bone);
+    const rest = parent.quaternion.clone().invert();
+    bone.quaternion.copy(rest);
+    parent.updateMatrixWorld(true);
+    const forward = () =>
+      new THREE.Vector3(0, 0, 1)
+        .applyQuaternion(bone.getWorldQuaternion(new THREE.Quaternion()))
+        .normalize();
+    const restForward = forward();
+    expect(restForward.angleTo(new THREE.Vector3(0, 0, 1))).toBeLessThan(1e-6);
+    const eye = bone.getWorldPosition(new THREE.Vector3());
+
+    // A target a few degrees away is hit exactly.
+    const near = eye.clone().add(new THREE.Vector3(0.1, -0.2, 1.7));
+    const wantNear = near.clone().sub(eye).normalize();
+    const turned = rig.aimBoneAt(bone, rest, near, rig.MAX_GAZE_ANGLE);
+    expect(forward().angleTo(wantNear)).toBeLessThan(1e-6);
+    expect(turned).toBeCloseTo(restForward.angleTo(wantNear), 6);
+    expect(turned).toBeLessThan(rig.MAX_GAZE_ANGLE);
+
+    // Re-aiming starts from rest again, so it does not accumulate.
+    rig.aimBoneAt(bone, rest, near, rig.MAX_GAZE_ANGLE);
+    expect(forward().angleTo(wantNear)).toBeLessThan(1e-6);
+
+    // A target far off-axis is only approached by maxAngle.
+    const far = eye.clone().add(new THREE.Vector3(0, -3, 0.2));
+    const wantFar = far.clone().sub(eye).normalize();
+    expect(rig.aimBoneAt(bone, rest, far, rig.MAX_GAZE_ANGLE)).toBeCloseTo(
+      rig.MAX_GAZE_ANGLE,
+      6
+    );
+    expect(forward().angleTo(restForward)).toBeCloseTo(rig.MAX_GAZE_ANGLE, 5);
+    expect(forward().angleTo(wantFar)).toBeLessThan(
+      restForward.angleTo(wantFar)
+    );
+  });
+
+  it("converges both eyes on the bust and full cameras, looking down toward them", () => {
+    // Eye centres and cameras as the viewer places them for a 1.80m figure
+    // (frameCamera: bust at 0.82h looking at 0.80h, full at 0.5h).
+    const h = 1.802;
+    const cameras = {
+      bust: new THREE.Vector3(h * 0.05, h * 0.82, 1.73),
+      full: new THREE.Vector3(h * 0.06, h * 0.5, 4.6),
+    };
+    for (const cam of Object.values(cameras)) {
+      const root = new THREE.Group();
+      const left = new THREE.Bone();
+      left.position.set(0.036, 1.666, 0.069);
+      const right = new THREE.Bone();
+      right.position.set(-0.046, 1.666, 0.069);
+      root.add(left, right);
+      root.updateMatrixWorld(true);
+      const rest = new THREE.Quaternion();
+      rig.aimBoneAt(left, rest, cam, rig.MAX_GAZE_ANGLE);
+      rig.aimBoneAt(right, rest, cam, rig.MAX_GAZE_ANGLE);
+      const fwd = (bone: Three) =>
+        new THREE.Vector3(0, 0, 1)
+          .applyQuaternion(bone.getWorldQuaternion(new THREE.Quaternion()))
+          .normalize();
+      const l = fwd(left);
+      const r = fwd(right);
+      const wantL = cam.clone().sub(left.position).normalize();
+      const wantR = cam.clone().sub(right.position).normalize();
+      // Neither camera needs more than the clamp, so both hit exactly.
+      expect(l.angleTo(wantL)).toBeLessThan(1e-6);
+      expect(r.angleTo(wantR)).toBeLessThan(1e-6);
+      // Down toward the viewer (1.2 (12) stared level, above the camera)...
+      expect(l.y).toBeLessThan(-0.1);
+      expect(r.y).toBeLessThan(-0.1);
+      // ...and converged: the right eye turns further toward +x than the left.
+      expect(r.x).toBeGreaterThan(l.x + 0.005);
+    }
+    // The clamp leaves headroom over the steepest camera (full: ~9.4deg down
+    // plus convergence) without letting the eye roll into the socket wall.
+    expect(rig.MAX_GAZE_ANGLE).toBeGreaterThan(0.18);
+    expect(rig.MAX_GAZE_ANGLE).toBeLessThan(0.35);
   });
 });
 
