@@ -3,8 +3,10 @@
  * Renders assets/avatar-engine/viewer-page.html in headless Chrome (software
  * WebGL) and asserts what the 捏人 preview must show for every outfit: the
  * whole figure in frame, both hands drawn and on screen, the eyeball mesh
- * inside the head, hair on the head, one posed master skeleton. Screenshots go
- * to --out (default /tmp/ph-avatar-check) so a human can eyeball the poses.
+ * inside the head, both irises converged on the camera under a lowered upper
+ * lid, hair on the head, one posed master skeleton. Screenshots (plus a 4x
+ * close-up of the eyes) go to --out (default /tmp/ph-avatar-check) so a human
+ * can eyeball the poses and the face.
  *
  *   node scripts/check-avatar-viewer.js [--out DIR] [--chrome PATH]
  *
@@ -247,6 +249,23 @@ const boxInside = (inner, outer, slack) =>
   inner.max.every((v, i) => v <= outer.max[i] + slack);
 
 const center = (box) => box.min.map((v, i) => (v + box.max[i]) / 2);
+
+// CSS-pixel clip around a projected (NDC) frame, padded to twice its size.
+const eyeClip = (frame) => {
+  const x0 = ((frame.minX + 1) / 2) * WIDTH;
+  const x1 = ((frame.maxX + 1) / 2) * WIDTH;
+  const y0 = ((1 - frame.maxY) / 2) * HEIGHT;
+  const y1 = ((1 - frame.minY) / 2) * HEIGHT;
+  const padX = (x1 - x0) / 2;
+  const padY = (y1 - y0) / 2;
+  return {
+    x: Math.max(0, x0 - padX),
+    y: Math.max(0, y0 - padY),
+    width: Math.min(WIDTH, x1 - x0 + 2 * padX),
+    height: Math.min(HEIGHT, y1 - y0 + 2 * padY),
+    scale: 4,
+  };
+};
 const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 const assertLook = (entry, state) => {
@@ -324,6 +343,42 @@ const assertLook = (entry, state) => {
       );
     }
   }
+  // TestFlight 1.2 (12): lids wide open, eyes parallel and aimed above the
+  // camera. Both irises must point at the camera (they converge, so the
+  // forward vectors are not parallel) and the upper lid must be lowered.
+  const gaze = (state.eyes && state.eyes.gaze) || {};
+  const left = gaze.eyeRoot_l;
+  const right = gaze.eyeRoot_r;
+  check(`${tag}: both eye bones found`, !!left && !!right);
+  if (left && right) {
+    check(
+      `${tag}: irises aimed at the camera`,
+      left.offCameraDeg < 1.5 && right.offCameraDeg < 1.5,
+      `l=${left.offCameraDeg.toFixed(2)}deg r=${right.offCameraDeg.toFixed(
+        2
+      )}deg`
+    );
+    check(
+      `${tag}: eyes look down toward the camera, not past it`,
+      left.forward[1] < -0.05 && right.forward[1] < -0.05,
+      `fwd.y l=${left.forward[1].toFixed(3)} r=${right.forward[1].toFixed(3)}`
+    );
+    const dot =
+      left.forward[0] * right.forward[0] +
+      left.forward[1] * right.forward[1] +
+      left.forward[2] * right.forward[2];
+    check(
+      `${tag}: eyes converge (right eye turned further toward +x than left)`,
+      right.forward[0] > left.forward[0] + 0.005 && dot > 0.95,
+      `fwd.x l=${left.forward[0].toFixed(3)} r=${right.forward[0].toFixed(3)}`
+    );
+  }
+  const lidDrop = state.eyes ? state.eyes.lidDrop : null;
+  check(
+    `${tag}: upper lid lowered off the startled rest pose`,
+    typeof lidDrop === "number" && lidDrop >= 0.1 && lidDrop <= 0.27,
+    `Shape_EyeLidHeight=${lidDrop}`
+  );
   if (head) {
     const headCenter = center(head.box);
     Object.keys(meshes)
@@ -444,6 +499,21 @@ const main = async () => {
         JSON.stringify(state, null, 2)
       );
       console.log(`     screenshot ${file}`);
+      const eyesFrame =
+        state.meshes && state.meshes.Eyes_0 && state.meshes.Eyes_0.frame;
+      if (eyesFrame && insideFrame(eyesFrame, 0)) {
+        // 4x close-up of the eyes so a human can judge lids, iris and gaze
+        // without a device.
+        const clip = eyeClip(eyesFrame);
+        const closeUp = await cdp.send(
+          "Page.captureScreenshot",
+          { format: "png", clip },
+          sessionId
+        );
+        const eyesFile = path.join(OUT_DIR, `${entry.name}-eyes.png`);
+        fs.writeFileSync(eyesFile, Buffer.from(closeUp.data, "base64"));
+        console.log(`     close-up   ${eyesFile}`);
+      }
     }
   } finally {
     await cdp.close();

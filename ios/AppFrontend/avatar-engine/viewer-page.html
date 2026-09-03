@@ -45,6 +45,8 @@
   var eyeMats = [];
   var headBones = [];
   var headRests = [];
+  var eyeBones = [];
+  var eyeRests = [];
   var armBones = [];
   var armRests = [];
   var masterBones = {};
@@ -108,6 +110,18 @@
     return clamp01(v) * (amount == null ? 0.28 : amount);
   }
 
+  // Head_0's Shape_EyeLidHeight drops the upper lid (about 15mm at 1.0, the
+  // lower lid barely moves). At rest the BoZo lids open ~24deg above and
+  // ~32deg below the iris axis - a round, startled aperture that TestFlight
+  // 1.2 (12) read as a horror-doll stare. 0.16 (the default Eyes setting)
+  // brings the upper lid to about +14deg, so it rests on the top of the iris
+  // like a relaxed eye while the pupil stays clear; the Eyes slider opens it
+  // a little for bigger eyes. Stay under ~0.27, where the lid starts to
+  // cross the pupil, and far from 0.45, where it crosses the iris centre.
+  function upperLidDrop(eyeSize) {
+    return UPPER_LID_DROP - clamp01(eyeSize) * 0.08;
+  }
+
   function applyMeshLook(mesh, next) {
     var arms = (clamp01(next.upperArms) + clamp01(next.forearms)) * 0.5;
     var hips = clamp01(next.backAndHips);
@@ -116,10 +130,12 @@
     setMorph(mesh, "Shape_Stern", mild(next.jaw, 0.22));
     setMorph(mesh, "Shape_Sharpness", mild(next.chin, 0.18));
     setMorph(mesh, "Shape_EyesSquare", mild(next.faceWidth, 0.1));
+    setMorph(mesh, "Shape_EyeLidHeight", upperLidDrop(eye));
     setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16));
     setMorph(mesh, "Shape_MouthWide", mild(next.faceWidth, 0.14));
     setMorph(mesh, "Shape_MouthThin", (1 - clamp01(next.chin)) * 0.1);
-    setMorph(mesh, "Shape_RaiseBrows", 0.06 + eye * 0.08);
+    // Raised brows over wide lids read as shock; keep them nearly neutral.
+    setMorph(mesh, "Shape_RaiseBrows", 0.02 + eye * 0.04);
     setMorph(mesh, "Shape_LowerBrows", mild(next.jaw, 0.08));
     setMorph(mesh, "Shape_NoseTiltDown", mild(next.chin, 0.08));
     setMorph(mesh, "Shape_LashLength", 0.42);
@@ -469,20 +485,37 @@
     return mat;
   }
 
-  // Iris geometry, in the eyeball shader's normalised units (1.0 = the 0.061
-  // UV radius `p` is divided by below; the lid opening spans roughly 0.69 to
-  // either side of the iris centre and 0.39 above and below it). tintLook
-  // scales both radii by irisSize, 0.82..1.10 from the Eyes slider. 0.58 put
-  // the iris edge to edge across the opening with the lids clipping it top
-  // and bottom, and the 0.26 pupil read as a black disc - TestFlight 1.2 (11)
-  // "eyes too big". 0.40 leaves the iris about the height of the opening with
-  // sclera showing on both sides; the pupil keeps ~40% of the iris.
-  var IRIS_RADIUS = 0.40;
-  var PUPIL_RADIUS = 0.17;
+  // Eye shape and gaze, measured on bozo-male.glb (Eyes_0 is two 22.2mm
+  // spheres centred on the eyeRoot_l/r bones; the iris axis is the bone's
+  // local +Z). The eyeball shader works in normalised UV units: `p` below is
+  // (uv - centre) / 0.061, and d = 1.0 is the equator, so an angle from the
+  // iris axis of about 90deg * d. At rest the lids uncover -32deg..+24deg
+  // vertically and -36deg (nose) .. +59deg (temple) horizontally, i.e. a
+  // 0.35 / 0.26 tall and 0.40 / 0.66 wide aperture in these units.
+  //
+  // TestFlight 1.2 (11) shipped irisR 0.58: edge to edge, clipped top and
+  // bottom. 1.2 (12) shipped 0.40 / pupil 0.17: still spanned the whole
+  // aperture (36deg radius against a 56deg opening) with a black disc for a
+  // pupil, under lids that were still wide open, eyes parallel (wall-eyed
+  // from 1.7m) and aimed above the camera - "恐怖". The fix is three-part:
+  // drop the upper lid (UPPER_LID_DROP), converge both eyes on the camera
+  // (aimEyes, so the iris also settles onto the lower lid and there is no
+  // lower white), and paint a smaller iris with a pupil that keeps ~37% of
+  // it. tintLook scales both radii by irisSize, 0.82..1.10 from the Eyes
+  // slider, so the iris stays between 0.25 and 0.34 (23deg..31deg).
+  var IRIS_RADIUS = 0.31;
+  var PUPIL_RADIUS = 0.115;
+  var UPPER_LID_DROP = 0.20;
+  // Gaze is clamped to this many radians off the rest axis per eye, enough
+  // for the bust (6.6deg down) and full (9.4deg down) cameras plus
+  // convergence, not enough to roll the eye into the socket wall.
+  var MAX_GAZE_ANGLE = 0.24;
 
-  // GLSL appended after map_fragment: paints sclera, iris, pupil, limbal ring
-  // and two catchlights onto the Eyes_0 UVs. Everything but the sclera is
-  // sized from irisR so the eye stays coherent when the radius changes.
+  // GLSL appended after map_fragment: paints sclera, iris, pupil and limbal
+  // ring onto the Eyes_0 UVs, shades the eyeball under the upper lid so it
+  // sits in the socket instead of glowing, and puts one catchlight per eye
+  // at the same screen position (view-space normal, so both eyes match and
+  // it follows the gaze). Everything but the sclera is sized from irisR.
   function irisFragmentChunk() {
     return [
       "#include <map_fragment>",
@@ -491,20 +524,36 @@
       "float d = length(p);",
       "float irisR = " + IRIS_RADIUS.toFixed(3) + " * irisSize;",
       "float pupilR = " + PUPIL_RADIUS.toFixed(3) + " * irisSize;",
-      "float irisM = 1.0 - smoothstep(irisR, irisR + 0.05, d);",
-      "float pupilM = 1.0 - smoothstep(pupilR, pupilR + 0.03, d);",
-      "vec3 scleraCol = vec3(0.98, 0.99, 1.0);",
-      "vec3 irisCol = mix(irisColor * 0.42, irisColor + vec3(0.22, 0.22, 0.28), clamp(1.0 - 0.56 * d / irisR, 0.0, 1.0));",
-      "vec3 pupilCol = vec3(0.03, 0.02, 0.02);",
+      "float irisM = 1.0 - smoothstep(irisR - 0.012, irisR + 0.03, d);",
+      "float pupilM = 1.0 - smoothstep(pupilR - 0.01, pupilR + 0.03, d);",
+      // Off-white sclera, warmer toward the corners of the eye.
+      "vec3 scleraCol = mix(vec3(0.92, 0.905, 0.88), vec3(0.975, 0.965, 0.95), 1.0 - smoothstep(0.30, 0.85, d));",
+      // Upper-lid shadow: darkens the top of the eyeball (p.y is up) so the
+      // eye reads as recessed under the lid rather than a bright doll bead.
+      "float lidShade = smoothstep(-0.12, 0.30, p.y) * 0.26;",
+      "scleraCol *= 1.0 - lidShade;",
+      // Iris keeps the eye colour's hue: lighter around the pupil, darker
+      // toward the limbal ring.
+      "float irisT = clamp(d / irisR, 0.0, 1.0);",
+      "vec3 irisCol = mix(irisColor * 1.55 + vec3(0.10, 0.07, 0.04), irisColor * 0.72, smoothstep(0.22, 1.0, irisT));",
+      "irisCol *= 1.0 - lidShade * 0.8;",
+      "float rim = smoothstep(irisR * 0.78, irisR, d) * irisM;",
+      "irisCol = mix(irisCol, irisColor * 0.30, rim * 0.72);",
+      "vec3 pupilCol = vec3(0.05, 0.04, 0.04);",
       "vec3 col = mix(scleraCol, irisCol, irisM);",
       "col = mix(col, pupilCol, pupilM);",
-      "float spec = 1.0 - smoothstep(0.09 * irisR, 0.25 * irisR, length(p - vec2(-0.36, 0.50) * irisR));",
-      "float spec2 = 1.0 - smoothstep(0.05 * irisR, 0.14 * irisR, length(p - vec2(0.32, -0.22) * irisR));",
-      "col = mix(col, vec3(1.0), spec * 0.95);",
-      "col = mix(col, vec3(1.0), spec2 * 0.35);",
-      "float rim = smoothstep(irisR * 0.86, irisR, d) * irisM;",
-      "col = mix(col, irisColor * 0.22, rim * 0.55);",
-      "diffuseColor.rgb = col;"
+      // Catchlights from a fixed view-space direction (upper right on
+      // screen), identical on both eyes.
+      "vec3 vn = normalize(vNormal);",
+      "float spec = smoothstep(0.977, 0.992, dot(vn, normalize(vec3(0.20, 0.16, 1.0))));",
+      "float spec2 = smoothstep(0.993, 0.998, dot(vn, normalize(vec3(-0.22, -0.26, 1.0))));",
+      "col = mix(col, vec3(1.0), spec * 0.92);",
+      "col = mix(col, vec3(1.0), spec2 * 0.18);",
+      "diffuseColor.rgb = col;",
+      // The eyeball faces the dark purple ground of the hemisphere light, so
+      // lift it a little unlit (more on the sclera) instead of letting the
+      // lower white go steel grey.
+      "totalEmissiveRadiance += col * (0.10 + 0.16 * (1.0 - irisM));"
     ].join("\n");
   }
 
@@ -512,16 +561,18 @@
     var mat = new THREE.MeshPhysicalMaterial();
     if (oldMat && oldMat.map) mat.map = oldMat.map;
     mat.color.setRGB(1, 1, 1);
-    mat.roughness = 0.28;
+    mat.roughness = 0.3;
     mat.metalness = 0;
-    mat.clearcoat = 0.55;
-    mat.clearcoatRoughness = 0.18;
-    mat.envMapIntensity = 0.12;
+    mat.clearcoat = 0.45;
+    mat.clearcoatRoughness = 0.2;
+    // The lavender sky in makeEnvMap tinted the sclera blue-grey; keep just
+    // enough reflection for a wet look.
+    mat.envMapIntensity = 0.05;
     mat.morphTargets = true;
     mat.skinning = true;
-    // Head_0 carries a closed-eye cap that duplicates the eyeball's front
-    // surface; pull the eyeball forward in depth so the cap cannot z-fight
-    // skin speckles across the iris.
+    // Head_0 carries a skin-textured copy of both eyeballs (dished to ~0.7 r
+    // at the iris, flush with the sphere at the rim); pull the real eyeball
+    // forward in depth so the copy cannot z-fight skin speckles across it.
     mat.polygonOffset = true;
     mat.polygonOffsetFactor = -2;
     mat.polygonOffsetUnits = -4;
@@ -620,6 +671,42 @@
     if (!bone || !angle) return;
     _poseDelta.setFromAxisAngle(axis, angle);
     rotateBoneWorldQ(bone, _poseDelta);
+  }
+
+  var _gazeFull = new THREE.Quaternion();
+  var _gazeStep = new THREE.Quaternion();
+  var _gazeQ = new THREE.Quaternion();
+  var _gazePos = new THREE.Vector3();
+  var _gazeFwd = new THREE.Vector3();
+  var _gazeWant = new THREE.Vector3();
+
+  // Point `bone`'s local +Z (the iris axis of eyeRoot_l/r in bozo-male.glb)
+  // at `target` (world space), starting from its rest orientation `rest` and
+  // turning at most `maxAngle` radians. Returns the angle actually turned.
+  function aimBoneAt(bone, rest, target, maxAngle) {
+    if (!bone || !rest || !target) return 0;
+    bone.quaternion.copy(rest);
+    bone.updateWorldMatrix(true, false);
+    bone.getWorldPosition(_gazePos);
+    _gazeWant.subVectors(target, _gazePos);
+    if (_gazeWant.lengthSq() < 1e-8) return 0;
+    _gazeWant.normalize();
+    bone.getWorldQuaternion(_gazeQ);
+    _gazeFwd.set(0, 0, 1).applyQuaternion(_gazeQ).normalize();
+    _gazeFull.setFromUnitVectors(_gazeFwd, _gazeWant);
+    _gazeStep.identity();
+    _gazeStep.rotateTowards(_gazeFull, maxAngle);
+    rotateBoneWorldQ(bone, _gazeStep);
+    return Math.min(maxAngle, _gazeFwd.angleTo(_gazeWant));
+  }
+
+  // Both eyes converge on the camera every frame (after the idle head sway),
+  // so the irises meet the viewer instead of staring parallel past them.
+  function aimEyes(target) {
+    var i;
+    for (i = 0; i < eyeBones.length; i++) {
+      aimBoneAt(eyeBones[i], eyeRests[i], target, MAX_GAZE_ANGLE);
+    }
   }
 
   // Turn `bone` so the segment bone -> child points along `dir` (world space).
@@ -783,6 +870,7 @@
       headBones[i].rotation.x = headRests[i].x + Math.sin(clock * 0.9) * 0.012;
       headBones[i].rotation.y = headRests[i].y + Math.sin(clock * 0.45) * 0.035;
     }
+    if (camera) aimEyes(camera.position);
     renderer.render(scene, camera);
   }
 
@@ -849,6 +937,10 @@
                 y: bone.rotation.y,
                 z: bone.rotation.z
               });
+            }
+            if (boneName === "eyeRoot_l" || boneName === "eyeRoot_r") {
+              eyeBones.push(bone);
+              eyeRests.push(bone.quaternion.clone());
             }
             if (isPoseArmBone(boneName)) armBones.push(bone);
           });
@@ -1012,10 +1104,43 @@
       figure: boxOf(figure),
       figureFrame: boxToFrame(figure),
       camera: camera ? { fov: camera.fov, position: [camera.position.x, camera.position.y, camera.position.z] } : null,
+      eyes: eyeState(),
       visible: visible,
       meshes: meshes
     };
   };
+
+  // Gaze and lid state: where each eyeball sits, where its iris axis points,
+  // how far that is from the camera, and the Head_0 upper-lid morph weight.
+  function eyeState() {
+    var out = { lidDrop: null, gaze: {} };
+    morphMeshes.forEach(function (mesh) {
+      if ((mesh.name || "").indexOf("Head_") !== 0) return;
+      var idx = mesh.morphTargetDictionary["Shape_EyeLidHeight"];
+      if (typeof idx === "number") out.lidDrop = mesh.morphTargetInfluences[idx];
+    });
+    var pos = new THREE.Vector3();
+    var fwd = new THREE.Vector3();
+    var toCam = new THREE.Vector3();
+    var q = new THREE.Quaternion();
+    eyeBones.forEach(function (bone) {
+      bone.updateWorldMatrix(true, false);
+      bone.getWorldPosition(pos);
+      bone.getWorldQuaternion(q);
+      fwd.set(0, 0, 1).applyQuaternion(q).normalize();
+      var entry = {
+        position: [pos.x, pos.y, pos.z],
+        forward: [fwd.x, fwd.y, fwd.z],
+        offCameraDeg: null
+      };
+      if (camera) {
+        toCam.subVectors(camera.position, pos).normalize();
+        entry.offCameraDeg = (fwd.angleTo(toCam) * 180) / Math.PI;
+      }
+      out.gaze[rigName(bone)] = entry;
+    });
+    return out;
+  }
 
   // Pure rig logic, exposed so __tests__/avatar-viewer-rig.test.ts can run
   // this exact script under Node with the bundled three.min.js.
@@ -1026,6 +1151,10 @@
     FALLBACK_HEIGHT: FALLBACK_HEIGHT,
     IRIS_RADIUS: IRIS_RADIUS,
     PUPIL_RADIUS: PUPIL_RADIUS,
+    UPPER_LID_DROP: UPPER_LID_DROP,
+    MAX_GAZE_ANGLE: MAX_GAZE_ANGLE,
+    upperLidDrop: upperLidDrop,
+    aimBoneAt: aimBoneAt,
     irisFragmentChunk: irisFragmentChunk,
     figureMeshVisible: figureMeshVisible,
     nameHasExposedSkin: nameHasExposedSkin,
