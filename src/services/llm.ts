@@ -43,6 +43,10 @@ const messageForCode = (code: CompanionChatFailureCode): string => {
   }
 };
 
+// The copy a surface shows before it even asks (a call with no key saved).
+export const companionChatFailureMessage = (code: CompanionChatFailureCode) =>
+  messageForCode(code);
+
 export const companionChatErrorMessage = (error: unknown) => {
   if (error instanceof CompanionChatError) {
     return error.message;

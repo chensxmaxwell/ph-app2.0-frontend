@@ -48,6 +48,8 @@
 	<string>Pleasure House Requires the Set Up of Bluetooth Connection to Offer Better Experience</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Pleasure House Requires the Set Up of Bluetooth Connection to Offer Better Experience</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Pleasure House uses the front camera to show you on video calls with your companion.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string></string>
 	<key>NSMicrophoneUsageDescription</key>

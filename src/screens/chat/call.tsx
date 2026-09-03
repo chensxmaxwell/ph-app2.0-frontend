@@ -1,159 +1,91 @@
-import React, { useEffect, useRef, useState } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { colors } from "@common/styles/colors";
-import Minimize from "@images/minimize.svg";
-import PhoneDown from "@images/love/phone-down.svg";
-import { LookFace } from "../avatar/look-face";
-import { s } from "../avatar/scale";
 import { usePersonFace } from "../avatar/use-person-face";
+import { CallBody } from "../call/call-body";
+import { useVoiceCall } from "../call/use-voice-call";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
 
 type CallRoute = RouteProp<{ ChatCall: { threadId: string } }, "ChatCall">;
 
-const formatElapsed = (seconds: number) => {
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return `${minutes.toString().padStart(2, "0")}:${rest
-    .toString()
-    .padStart(2, "0")}`;
-};
-
+// Voice / video call from a Message thread. Minimize (top-left) keeps the
+// call flagged on the thread; hang-up clears it. Hangup vs minimize is
+// decided through a ref so the unmount cleanup never ends a minimized call.
 export const ChatCallScreen = () => {
   const navigation = useNavigation();
-  const insets = useSafeAreaInsets();
   const route = useRoute<CallRoute>();
-  const { getThread, setInCall, setListen, stopSpeaking } = useChat();
-  const thread = getThread(route.params.threadId);
-  const { face } = usePersonFace(route.params.threadId, thread?.kind);
+  const threadId = route.params.threadId;
+  const {
+    getThread,
+    setInCall,
+    setListen,
+    stopSpeaking,
+    recordCallExchange,
+  } = useChat();
+  const thread = getThread(threadId);
+  const { face } = usePersonFace(threadId, thread?.kind);
   const name = thread?.name ?? "Kevin";
-  const [connected, setConnected] = useState(false);
+  const messages = thread?.messages;
+  const history = useMemo(
+    () => (messages ?? []).map((item) => ({ from: item.from, text: item.text })),
+    [messages]
+  );
+  const call = useVoiceCall({
+    name,
+    personality: thread?.personality,
+    story: thread?.description,
+    history,
+    onExchange: (userText, reply) =>
+      recordCallExchange(threadId, userText, reply),
+  });
+  const [video, setVideo] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const endedRef = useRef(false);
 
+  // Once per thread: flag the call and switch off Listen (the thread reads
+  // replies aloud; the call speaks them itself). Store callbacks and the
+  // one-time `listen` check are read at mount on purpose.
   useEffect(() => {
-    setInCall(route.params.threadId);
+    setInCall(threadId);
     if (thread?.listen) {
       setListen(thread.id, false);
       stopSpeaking();
     }
-    const connect = setTimeout(() => setConnected(true), 1600);
     return () => {
-      clearTimeout(connect);
       if (endedRef.current) {
         setInCall(null);
       }
     };
-  }, [route.params.threadId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId]);
 
   useEffect(() => {
-    if (!connected) {
+    if (!call.connected) {
       return;
     }
     const timer = setInterval(() => {
       setElapsed((current) => current + 1);
     }, 1000);
     return () => clearInterval(timer);
-  }, [connected]);
+  }, [call.connected]);
 
   return (
     <ChatGradient>
-      <TouchableOpacity
-        onPress={() => navigation.goBack()}
-        hitSlop={8}
-        style={[styles.minimize, { top: insets.top + s(26) }]}
-      >
-        <Minimize width={s(35)} height={s(35)} />
-      </TouchableOpacity>
-      <View style={[styles.identity, { top: insets.top + s(26) }]}>
-        <Text style={styles.name}>{name}</Text>
-        {connected ? (
-          <Text style={styles.timer}>{formatElapsed(elapsed)}</Text>
-        ) : null}
-      </View>
-      <View style={styles.stage}>
-        <View style={styles.ring}>
-          <LookFace look={face.look} size={s(100)} fallbackSource={face.source} />
-        </View>
-        <Text style={styles.status}>
-          {connected ? "Connected" : `Calling ${name}`}
-        </Text>
-      </View>
-      <TouchableOpacity
-        onPress={() => {
+      <CallBody
+        name={name}
+        face={face}
+        call={call}
+        elapsed={elapsed}
+        video={video}
+        onToggleVideo={() => setVideo((current) => !current)}
+        onMinimize={() => navigation.goBack()}
+        onHangUp={() => {
           endedRef.current = true;
+          call.hangUp();
           setInCall(null);
           navigation.goBack();
         }}
-        style={[styles.hangup, { bottom: insets.bottom + s(26) }]}
-        activeOpacity={0.85}
-      >
-        <PhoneDown width={s(45.38)} height={s(16.88)} />
-      </TouchableOpacity>
+      />
     </ChatGradient>
   );
 };
-
-const styles = StyleSheet.create({
-  minimize: {
-    position: "absolute",
-    left: s(20),
-    width: s(35),
-    height: s(35),
-    zIndex: 2,
-  },
-  identity: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    alignItems: "center",
-  },
-  name: {
-    color: colors.white,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 24,
-    textAlign: "center",
-  },
-  timer: {
-    marginTop: s(24),
-    color: colors.grayLighter,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 24,
-  },
-  stage: {
-    position: "absolute",
-    top: s(241),
-    left: 0,
-    right: 0,
-    alignItems: "center",
-  },
-  ring: {
-    width: s(112),
-    height: s(112),
-    borderRadius: s(56),
-    borderWidth: 2,
-    borderColor: "#cbb7e8",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  status: {
-    marginTop: s(16),
-    color: colors.white,
-    fontFamily: "OpenSans-Bold",
-    fontSize: 20,
-    textAlign: "center",
-  },
-  hangup: {
-    position: "absolute",
-    alignSelf: "center",
-    left: s(144),
-    width: s(100),
-    height: s(100),
-    borderRadius: s(50),
-    backgroundColor: "rgba(249, 95, 110, 0.3)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-});
