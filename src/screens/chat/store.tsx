@@ -109,7 +109,10 @@ const DEFAULT_BOT_IDS: Record<string, string> = {
   amanda: "amanda",
 };
 
-const defaultBotIdForName = (name?: string) =>
+// A bot named after a seeded person shares that seed's thread id; the store
+// folds such threads together (`findSameBot`, `dedupeThreads`). Exported so
+// Home can pair a thread with its 3D companion record by the same rule.
+export const defaultBotIdForName = (name?: string) =>
   DEFAULT_BOT_IDS[(name ?? "").trim().toLowerCase()];
 
 const findSameBot = (

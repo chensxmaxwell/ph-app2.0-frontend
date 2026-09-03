@@ -6,7 +6,7 @@ import {
   isBypassUser,
   resolveProfileDisplayName,
 } from "../src/screens/profile/display-name";
-import { MOCK_HOME_COMPANIONS } from "../src/screens/home/mock-companions";
+import { seedThreads } from "../src/backend/chat-seed";
 import type { Companion } from "../src/store/companions";
 import type { ChatThread } from "../src/screens/chat/types";
 
@@ -106,7 +106,7 @@ describe("resolveLovePerson", () => {
   });
 
   it("binds Kevin, Chad, and Amanda to different threads", () => {
-    const names = MOCK_HOME_COMPANIONS.map((item) => {
+    const names = seedThreads().map((item) => {
       const person = resolveLovePerson({
         companionId: item.id,
         name: item.name,
