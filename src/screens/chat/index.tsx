@@ -28,6 +28,7 @@ import PlusIcon from "@images/message/plus.svg";
 import PencilIcon from "@images/message/pencil.svg";
 import PersonPlus from "@images/message/person-plus.svg";
 import { DESTRUCTIVE_RED, Dialog } from "./dialog";
+import { messageFriends } from "./friends";
 import { useChat } from "./store";
 import { formatChatListTime } from "./time";
 import { ChatThread } from "./types";
@@ -59,12 +60,8 @@ export const Chat = () => {
   const swipeRows = useRef(new Map<string, Swipeable>());
   const openRowId = useRef<string | null>(null);
 
-  const rows = useMemo(() => {
-    const visible = threads.filter((thread) => thread.request !== "refused");
-    return [...visible].sort(
-      (left, right) => Number(right.pinned) - Number(left.pinned)
-    );
-  }, [threads]);
+  // Same membership and order as Home "My Companions" (see ./friends.ts).
+  const rows = useMemo(() => messageFriends(threads), [threads]);
 
   const openThread = (threadId: string) => {
     setMenuOpen(false);
@@ -285,7 +282,7 @@ export const Chat = () => {
           <Dialog
             testID="message-delete-confirm"
             title={`Delete ${pendingDelete.name}?`}
-            body={`${pendingDelete.name} and this chat will be removed from Message.`}
+            body={`${pendingDelete.name} and this chat will be removed from Message and from My Companions on Home.`}
             primary={SWIPE_LABELS.deleteFriend}
             secondary="Cancel"
             destructive

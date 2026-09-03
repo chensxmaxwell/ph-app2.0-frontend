@@ -2,7 +2,6 @@ import Alarm from "@images/alarm.svg";
 import Heart from "@images/heart.svg";
 import { SCREENS } from "../../../src/common/constant";
 import { NavigationProp } from "@react-navigation/native";
-import { MOCK_HOME_COMPANIONS } from "./mock-companions";
 
 type HomeEvent = {
   type: string;
@@ -14,16 +13,9 @@ type HomeEvent = {
   params?: object;
 };
 
+// My Companions is not here: Home reads the Message friends list through
+// ./companions.ts so the two screens cannot disagree about who exists.
 export const useHome = () => {
-  const companions: chatBotType[] = MOCK_HOME_COMPANIONS.map((person) => ({
-    id: person.id,
-    name: person.name,
-    gender: "M",
-    birthdate: "1995-01-01",
-    photos: [],
-    tags: ["funny", "smart", "adventurous"],
-    language: "en",
-  }));
   // TODO* replace this mock data with real data
   const events: HomeEvent[] = [
     {
@@ -77,31 +69,9 @@ export const useHome = () => {
   };
 
   return {
-    companions,
     events,
     navigateToNestedScreen,
   };
-};
-
-type chatBotType = {
-  id: string;
-  name: string;
-  gender: string;
-  birthdate: string;
-  height?: string;
-  bodyType?: string;
-  photos: string[];
-  tags: string[];
-  description?: string;
-  personality?: string;
-  profilePhoto?: string;
-  examples?: exampleSchemaType[];
-  language: string;
-};
-
-type exampleSchemaType = {
-  user: string;
-  reply: string;
 };
 
 type NestedNavigationParams = {
