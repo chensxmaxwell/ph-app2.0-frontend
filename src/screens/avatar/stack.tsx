@@ -11,6 +11,7 @@ import {
   draftFromCompanion,
   toGenderOption,
 } from "./context";
+import { companionFace } from "./face";
 import { AvatarIdentityScreen } from "./identity";
 import { AvatarReadyScreen } from "./ready";
 import { AvatarAppearanceScreen } from "./appearance";
@@ -54,14 +55,22 @@ export const AvatarStack = () => {
   // Edits address the record when there is one, so the save updates it
   // instead of writing the thread only and leaving the record stale.
   const companionId = companion?.id ?? params.companionId ?? fallbackId;
+  // Edits open with the face the person wears today selected. Create always
+  // starts unpicked - also "Create avatar" for a chat-only bot, whose photo is
+  // then one tile among the others - so nobody finishes without choosing.
+  const wornFace =
+    mode !== "create" && person
+      ? companionFace({ thread: person.thread, companion }).kind
+      : null;
   const initialDraft = companion
-    ? draftFromCompanion(companion)
+    ? draftFromCompanion(companion, wornFace)
     : thread
     ? {
         ...DEFAULT_DRAFT,
         name: thread.name,
         birthday: thread.birthday ?? "",
         gender: toGenderOption(thread.gender ?? "Male"),
+        avatar: wornFace,
         story: thread.description ?? "",
       }
     : DEFAULT_DRAFT;

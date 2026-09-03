@@ -57,6 +57,8 @@ type ViewerRig = {
   PUPIL_RADIUS: number;
   UPPER_LID_DROP: number;
   MAX_GAZE_ANGLE: number;
+  EYE_SCALE: number;
+  applyEyeScale: (bones: unknown[], scale: number) => void;
   upperLidDrop: (eyeSize: number) => number;
   aimBoneAt: (
     bone: unknown,
@@ -266,6 +268,109 @@ describe("eyes", () => {
     // Out-of-range slider values clamp instead of flipping the lid open.
     expect(rig.upperLidDrop(-3)).toBe(rig.upperLidDrop(0));
     expect(rig.upperLidDrop(9)).toBe(rig.upperLidDrop(1));
+  });
+
+  it("scales the whole eyeball down in its socket by 25-35%, not just the painted iris", () => {
+    // TestFlight 1.2 (13): lowered lids, converged gaze and a 0.31 iris still
+    // read as too-large eyes (整个眼睛的缩小, not another pupil shrink). Eyes_0
+    // is two 22.2 mm-radius spheres on eyeRoot_l/r - 44 mm across on a 26 cm
+    // head. The eye bones are scaled so ball, Head_0 eye cap and the lids
+    // skinned to them shrink together around the eye centre.
+    expect(rig.EYE_SCALE).toBeGreaterThanOrEqual(0.65);
+    expect(rig.EYE_SCALE).toBeLessThanOrEqual(0.75);
+    // Not 1.0 by a rounding accident, and not a pinprick.
+    expect(rig.EYE_SCALE).not.toBeCloseTo(1, 1);
+  });
+
+  it("applyEyeScale shrinks skinned eyeball vertices about the eye bone origin, blends lid vertices by weight and leaves the head alone", () => {
+    const root = new THREE.Group();
+    const head = new THREE.Bone();
+    head.name = "head";
+    head.position.set(0, 1.6, 0);
+    const eye = new THREE.Bone();
+    eye.name = "eyeRoot_l";
+    eye.position.set(0.04, 0.07, 0.09);
+    head.add(eye);
+    root.add(head);
+    root.updateMatrixWorld(true);
+    const centre = eye.getWorldPosition(new THREE.Vector3());
+    const r = 0.0222;
+    // Vertex 0: on the eyeball surface, fully on the eye bone (Eyes_0 / the
+    // Head_0 cap). Vertex 1: a lid-margin vertex 1.2 r out, weighted 0.8 eye /
+    // 0.2 head like the BoZo lids. Vertex 2: brow skin on the head bone only.
+    const surface = centre.clone().add(new THREE.Vector3(0, 0, r));
+    const lid = centre.clone().add(new THREE.Vector3(0, r * 1.2, 0));
+    const brow = centre.clone().add(new THREE.Vector3(0, 0.03, 0.01));
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(
+        [...surface.toArray(), ...lid.toArray(), ...brow.toArray()],
+        3
+      )
+    );
+    geometry.setAttribute(
+      "skinIndex",
+      new THREE.Uint16BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0], 4)
+    );
+    geometry.setAttribute(
+      "skinWeight",
+      new THREE.Float32BufferAttribute(
+        [1, 0, 0, 0, 0.8, 0.2, 0, 0, 1, 0, 0, 0],
+        4
+      )
+    );
+    const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+    const bones = [head, eye];
+    const inverses = bones.map((b: Three) =>
+      new THREE.Matrix4().copy(b.matrixWorld).invert()
+    );
+    mesh.bind(new THREE.Skeleton(bones, inverses), new THREE.Matrix4());
+    root.add(mesh);
+
+    const skinned = (index: number) => {
+      root.updateMatrixWorld(true);
+      const out = new THREE.Vector3();
+      mesh.boneTransform(index, out);
+      return mesh.localToWorld(out);
+    };
+    expect(skinned(0).distanceTo(centre)).toBeCloseTo(r, 6);
+
+    rig.applyEyeScale([eye], rig.EYE_SCALE);
+
+    expect(eye.scale.x).toBeCloseTo(rig.EYE_SCALE, 9);
+    expect(eye.scale.y).toBeCloseTo(rig.EYE_SCALE, 9);
+    expect(eye.scale.z).toBeCloseTo(rig.EYE_SCALE, 9);
+    expect(head.scale.x).toBe(1);
+    // The eye stays centred in its socket...
+    expect(eye.getWorldPosition(new THREE.Vector3()).distanceTo(centre)).toBeLessThan(1e-9);
+    // ...the ball shrinks about that centre...
+    expect(skinned(0).distanceTo(centre)).toBeCloseTo(r * rig.EYE_SCALE, 6);
+    // ...the lid follows by its weight (linear blend skinning), so the rig's
+    // own eye weights become the shrink falloff...
+    const lidRadius = skinned(1).distanceTo(centre);
+    expect(lidRadius).toBeCloseTo(r * 1.2 * (1 - 0.8 * (1 - rig.EYE_SCALE)), 6);
+    // ...and stays outside the smaller ball rather than sinking into it.
+    expect(lidRadius).toBeGreaterThan(r * rig.EYE_SCALE);
+    // Brow skin on the head bone does not move (Float32 positions: sub-micron).
+    expect(skinned(2).distanceTo(brow)).toBeLessThan(1e-6);
+    // Applying again is idempotent (absolute scale, not multiplied per frame).
+    rig.applyEyeScale([eye], rig.EYE_SCALE);
+    expect(eye.scale.x).toBeCloseTo(rig.EYE_SCALE, 9);
+  });
+
+  it("aiming the eye keeps the eyeball scale", () => {
+    const eye = new THREE.Bone();
+    eye.position.set(0.04, 1.67, 0.09);
+    const rest = new THREE.Quaternion();
+    rig.applyEyeScale([eye], rig.EYE_SCALE);
+    eye.updateMatrixWorld(true);
+    rig.aimBoneAt(eye, rest, new THREE.Vector3(0.1, 1.4, 1.8), rig.MAX_GAZE_ANGLE);
+    expect(eye.scale.toArray()).toEqual([
+      rig.EYE_SCALE,
+      rig.EYE_SCALE,
+      rig.EYE_SCALE,
+    ]);
   });
 
   it("turns an eye bone's local +Z onto a world target, through a rotated parent, and clamps the turn", () => {

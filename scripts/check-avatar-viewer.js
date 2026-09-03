@@ -3,8 +3,9 @@
  * Renders assets/avatar-engine/viewer-page.html in headless Chrome (software
  * WebGL) and asserts what the 捏人 preview must show for every outfit: the
  * whole figure in frame, both hands drawn and on screen, the eyeball mesh
- * inside the head, both irises converged on the camera under a lowered upper
- * lid, hair on the head, one posed master skeleton. Screenshots (plus a 4x
+ * inside the head and scaled down with its bones, both irises converged on the
+ * camera under a lowered upper lid, hair on the head, one posed master
+ * skeleton. Screenshots (plus a 4x
  * close-up of the eyes) go to --out (default /tmp/ph-avatar-check) so a human
  * can eyeball the poses and the face.
  *
@@ -226,6 +227,12 @@ const evaluate = async (cdp, session, expression) => {
   return result.result.value;
 };
 
+// Eyes_0 in bozo-male.glb: two spheres of radius 22.2 mm (sphere fit, 0.04 mm
+// residual), centred on eyeRoot_l/r.
+const EYEBALL_DIAMETER = 0.0444;
+// Read from window.phViewerRig once the page is up.
+let eyeScale = NaN;
+
 const failures = [];
 const check = (name, condition, detail) => {
   const line = `${condition ? "ok  " : "FAIL"} ${name}${
@@ -379,6 +386,28 @@ const assertLook = (entry, state) => {
     typeof lidDrop === "number" && lidDrop >= 0.1 && lidDrop <= 0.27,
     `Shape_EyeLidHeight=${lidDrop}`
   );
+  // TestFlight 1.2 (13): the whole eye was still too big. The eye bones carry
+  // EYE_SCALE (0.65..0.75), and the Eyes_0 box - two 22.2 mm spheres - must
+  // be that much shorter than the unscaled 44.4 mm.
+  if (left && right) {
+    check(
+      `${tag}: eye bones scaled by EYE_SCALE (25-35% smaller eye)`,
+      eyeScale > 0.64 &&
+        eyeScale < 0.76 &&
+        Math.abs(left.scale - eyeScale) < 1e-6 &&
+        Math.abs(right.scale - eyeScale) < 1e-6,
+      `EYE_SCALE=${eyeScale} l=${left.scale} r=${right.scale}`
+    );
+  }
+  if (eyes && eyes.box) {
+    const height = eyes.box.max[1] - eyes.box.min[1];
+    const want = EYEBALL_DIAMETER * eyeScale;
+    check(
+      `${tag}: eyeballs shrunk with the bones`,
+      Math.abs(height - want) < 0.004 && height < EYEBALL_DIAMETER * 0.8,
+      `Eyes_0 height ${height.toFixed(4)} m, want ${want.toFixed(4)}`
+    );
+  }
   if (head) {
     const headCenter = center(head.box);
     Object.keys(meshes)
@@ -474,6 +503,16 @@ const main = async () => {
         "viewer-page.html has no phViewerState probe; nothing to assert"
       );
     }
+    eyeScale = await evaluate(
+      cdp,
+      sessionId,
+      "window.phViewerRig && window.phViewerRig.EYE_SCALE"
+    );
+    check(
+      "viewer exposes EYE_SCALE",
+      typeof eyeScale === "number",
+      String(eyeScale)
+    );
     for (const entry of LOOKS) {
       await evaluate(
         cdp,
