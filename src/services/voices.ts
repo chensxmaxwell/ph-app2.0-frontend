@@ -13,13 +13,21 @@ import type { ChatThread } from "../screens/chat/types";
  * Non-binary companions draw from both pools (there is no neutral Doubao
  * pool worth the name); the draw is still random and still persisted.
  *
- * The pools mix the Chinese 2.0 speakers (they read 中英混 on their own) with
- * the three American-English 2.0 speakers (Tim, Dacey, Stokie), all on the
- * same seed-tts-2.0 resource. Maxwell talks to the seeded people in English,
- * so Kevin and Amanda default to the English speakers (TestFlight 1.2 (15):
- * a Chinese speaker reading English was part of "the voice sounds bad").
+ * Volcengine's 2.0 speaker list (大模型语音合成 音色列表) tags one group of
+ * speakers 情感变化、指令遵循、ASMR — emotion that follows the text and spoken
+ * instructions (`context_texts`). That is the tier that reads like a person
+ * on a call; the rest are 视频配音 / 角色扮演 / 通用 / 多语种 voices. Only the
+ * expressive tier is drawn for new characters or used as a seed default; the
+ * standard tier stays in the catalogue so a persisted id always resolves and
+ * a future picker can offer it. Maxwell (after TestFlight 1.2 (15)): the most
+ * realistic voices on this stack, and cloud first whenever a speech key is
+ * saved — AVSpeechSynthesizer is only the no-key fallback.
  */
 export type VoiceGender = "female" | "male";
+
+// expressive: Volcengine marks the speaker 情感变化、指令遵循 (the flagship
+// conversational tier). standard: everything else in the 2.0 list.
+export type VoiceTier = "expressive" | "standard";
 
 export type Voice = {
   // The Doubao speaker id; also the persisted `voiceId`.
@@ -27,81 +35,135 @@ export type Voice = {
   // The console's name for the speaker, for logs and a future picker.
   label: string;
   gender: VoiceGender;
+  tier: VoiceTier;
 };
 
+// Expressive tier first, in Volcengine's own order; Vivi 2.0 heads it (the
+// only speaker also listed with 多语种 + 方言, the reference voice).
 export const FEMALE_VOICES: readonly Voice[] = [
-  { id: "zh_female_xiaohe_uranus_bigtts", label: "小何 2.0", gender: "female" },
-  { id: "zh_female_vv_uranus_bigtts", label: "Vivi 2.0", gender: "female" },
   {
-    id: "zh_female_shuangkuaisisi_uranus_bigtts",
-    label: "爽快思思 2.0",
+    id: "zh_female_vv_uranus_bigtts",
+    label: "Vivi 2.0",
     gender: "female",
+    tier: "expressive",
+  },
+  {
+    id: "zh_female_xiaohe_uranus_bigtts",
+    label: "小何 2.0",
+    gender: "female",
+    tier: "expressive",
   },
   {
     id: "zh_female_qingxinnvsheng_uranus_bigtts",
     label: "清新女声 2.0",
     gender: "female",
+    tier: "expressive",
   },
   {
-    id: "zh_female_meilinvyou_uranus_bigtts",
-    label: "魅力女友 2.0",
+    id: "zh_female_tianmeixiaoyuan_uranus_bigtts",
+    label: "甜美小源 2.0",
     gender: "female",
+    tier: "expressive",
+  },
+  {
+    id: "zh_female_tianmeitaozi_uranus_bigtts",
+    label: "甜美桃子 2.0",
+    gender: "female",
+    tier: "expressive",
+  },
+  {
+    id: "zh_female_shuangkuaisisi_uranus_bigtts",
+    label: "爽快思思 2.0",
+    gender: "female",
+    tier: "expressive",
   },
   {
     id: "zh_female_linjianvhai_uranus_bigtts",
     label: "邻家女孩 2.0",
     gender: "female",
+    tier: "expressive",
   },
   {
-    id: "zh_female_tianmeixiaoyuan_uranus_bigtts",
-    label: "甜美校园 2.0",
+    id: "zh_female_meilinvyou_uranus_bigtts",
+    label: "魅力女友 2.0",
     gender: "female",
+    tier: "standard",
   },
-  { id: "zh_female_cancan_uranus_bigtts", label: "灿灿 2.0", gender: "female" },
+  {
+    id: "zh_female_cancan_uranus_bigtts",
+    label: "知性灿灿 2.0",
+    gender: "female",
+    tier: "standard",
+  },
   {
     id: "en_female_dacey_uranus_bigtts",
     label: "Dacey (US English)",
     gender: "female",
+    tier: "standard",
   },
   {
     id: "en_female_stokie_uranus_bigtts",
     label: "Stokie (US English)",
     gender: "female",
+    tier: "standard",
   },
 ];
 
+// 云舟 2.0 heads the male tier: the male speaker with Vivi's feature set.
 export const MALE_VOICES: readonly Voice[] = [
-  { id: "zh_male_m191_uranus_bigtts", label: "云舟 2.0", gender: "male" },
-  { id: "zh_male_taocheng_uranus_bigtts", label: "小天 2.0", gender: "male" },
-  { id: "zh_male_liufei_uranus_bigtts", label: "刘飞 2.0", gender: "male" },
   {
-    id: "zh_male_ruyayichen_uranus_bigtts",
-    label: "儒雅逸辰 2.0",
+    id: "zh_male_m191_uranus_bigtts",
+    label: "云舟 2.0",
     gender: "male",
+    tier: "expressive",
   },
-  { id: "zh_male_dayi_uranus_bigtts", label: "大壹 2.0", gender: "male" },
+  {
+    id: "zh_male_liufei_uranus_bigtts",
+    label: "刘飞 2.0",
+    gender: "male",
+    tier: "expressive",
+  },
+  {
+    id: "zh_male_taocheng_uranus_bigtts",
+    label: "小天 2.0",
+    gender: "male",
+    tier: "expressive",
+  },
   {
     id: "zh_male_shaonianzixin_uranus_bigtts",
     label: "少年梓辛 2.0",
     gender: "male",
+    tier: "expressive",
+  },
+  {
+    id: "zh_male_ruyayichen_uranus_bigtts",
+    label: "儒雅逸辰 2.0",
+    gender: "male",
+    tier: "standard",
+  },
+  {
+    id: "zh_male_dayi_uranus_bigtts",
+    label: "大壹 2.0",
+    gender: "male",
+    tier: "standard",
   },
   {
     id: "en_male_tim_uranus_bigtts",
     label: "Tim (US English)",
     gender: "male",
+    tier: "standard",
   },
 ];
 
 export const VOICES: readonly Voice[] = [...FEMALE_VOICES, ...MALE_VOICES];
 
-// The seeded people's fixed voices. Kevin and Amanda speak American English
-// (Tim: clear, friendly mid-range; Dacey: warm, engaging). Chad, the direct
-// and competitive one, gets 刘飞 — the clear, energetic Chinese 2.0 male; Tim
-// is the only English 2.0 male and Kevin has him.
+// The seeded people's fixed voices: the two flagship 2.0 speakers for Amanda
+// and Kevin, and the next expressive male for Chad so he never shares
+// Kevin's voice.
 export const SEED_VOICES = {
-  kevin: "en_male_tim_uranus_bigtts",
+  kevin: "zh_male_m191_uranus_bigtts",
   chad: "zh_male_liufei_uranus_bigtts",
-  amanda: "en_female_dacey_uranus_bigtts",
+  amanda: "zh_female_vv_uranus_bigtts",
 } as const;
 
 // What the seeds used to default to. A seeded thread persisted with one of
@@ -111,9 +173,9 @@ export const RETIRED_SEED_VOICES: Record<
   keyof typeof SEED_VOICES,
   readonly string[]
 > = {
-  kevin: ["zh_male_m191_uranus_bigtts"],
+  kevin: ["en_male_tim_uranus_bigtts"],
   chad: ["zh_male_ruyayichen_uranus_bigtts"],
-  amanda: ["zh_female_xiaohe_uranus_bigtts"],
+  amanda: ["zh_female_xiaohe_uranus_bigtts", "en_female_dacey_uranus_bigtts"],
 };
 
 // The voice a seeded thread should carry: the current default when it has
@@ -136,7 +198,8 @@ export const refreshedSeedVoiceId = (
 export const voiceById = (id?: string): Voice | undefined =>
   id ? VOICES.find((voice) => voice.id === id) : undefined;
 
-export const voicePoolForGender = (gender?: string): readonly Voice[] => {
+// Every catalogued voice of a gender (Non-binary: all), any tier.
+export const voicesForGender = (gender?: string): readonly Voice[] => {
   switch (gender) {
     case "Female":
       return FEMALE_VOICES;
@@ -146,6 +209,10 @@ export const voicePoolForGender = (gender?: string): readonly Voice[] => {
       return VOICES;
   }
 };
+
+// What a new character may be given: the expressive tier of their gender.
+export const voicePoolForGender = (gender?: string): readonly Voice[] =>
+  voicesForGender(gender).filter((voice) => voice.tier === "expressive");
 
 // Draw one voice for a new character. `random` is Math.random unless a test
 // wants the draw pinned.
@@ -161,7 +228,8 @@ export const assignVoiceForGender = (
   return pool[index].id;
 };
 
-// Whether a stored voice still fits a (possibly edited) gender.
+// Whether a stored voice still fits a (possibly edited) gender. Any tier: a
+// voice a companion already has is theirs until the gender changes.
 export const voiceMatchesGender = (
   voiceId: string | undefined,
   gender: string | undefined
@@ -170,7 +238,7 @@ export const voiceMatchesGender = (
   if (!voice) {
     return false;
   }
-  return voicePoolForGender(gender).includes(voice);
+  return voicesForGender(gender).includes(voice);
 };
 
 // Keep a matching voice, otherwise draw a new one for the gender.

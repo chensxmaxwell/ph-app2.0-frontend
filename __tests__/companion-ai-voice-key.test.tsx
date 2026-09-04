@@ -11,19 +11,33 @@ import {
 } from "@jest/globals";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { writeSessionUser } from "../src/backend/session";
+import { nativePlayAudio, nativeSpeak } from "../src/native/ph-native";
 import { loadLlmConfig, saveLlmConfig } from "../src/services/llm-config";
 import { ttsCredentialsFromConfig } from "../src/services/tts-config";
+import { ttsSpeak } from "../src/services/tts";
+import { TtsHost } from "../src/services/TtsHost";
+import { SEED_VOICES } from "../src/services/voices";
 import { CompanionAiScreen } from "../src/screens/profile/CompanionAi";
 
 /**
  * The cloud voice needs a 豆包语音 (speech console) API key, which is not the
  * Ark key. Profile → Companion AI is where keys are pasted on the phone, so
- * it takes the voice key too and the TTS engine reads it back.
+ * it takes the voice key too and the TTS engine reads it back. With that key
+ * saved the happy path is Doubao Seed-TTS 2.0 through the native player;
+ * AVSpeechSynthesizer is only what a phone without a key gets.
  */
 
 jest.mock("@react-native-async-storage/async-storage", () =>
   require("@react-native-async-storage/async-storage/jest/async-storage-mock")
 );
+jest.mock("../src/native/ph-native", () => ({
+  nativeSpeak: jest.fn(async () => true),
+  nativeStopSpeaking: jest.fn(async () => undefined),
+  nativePlayAudio: jest.fn(async () => true),
+  nativeStartVoiceInput: jest.fn(),
+  nativeStopVoiceInput: jest.fn(),
+  nativeListenForUtterance: jest.fn(),
+}));
 jest.mock("react-native-linear-gradient", () => {
   const { View } = require("react-native");
   return { __esModule: true, default: View };
@@ -93,6 +107,83 @@ describe("Companion AI voice key", () => {
       apiKey: "ark",
       source: "ark",
     });
+  });
+
+  it("with the Voice key saved, a reply is Doubao Seed-TTS 2.0 in the person's speaker through the native player — never AVSpeech", async () => {
+    const playAudio = nativePlayAudio as jest.Mock<typeof nativePlayAudio>;
+    const speakOnDevice = nativeSpeak as jest.Mock<typeof nativeSpeak>;
+    playAudio.mockClear();
+    speakOnDevice.mockClear();
+    const originalFetch = global.fetch;
+    const fetchMock = jest.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({ code: 0, data: "QUJD" }) +
+        JSON.stringify({ code: 20000000, message: "OK", data: null }),
+    }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await saveLlmConfig({
+        apiKey: "ark-key",
+        baseUrl: "",
+        model: "",
+        ttsApiKey: "speech-key",
+      });
+      let tree: ReactTestRenderer;
+      act(() => {
+        tree = renderer.create(<TtsHost />);
+      });
+      trees.push(tree!);
+      await settle();
+
+      await act(async () => {
+        await ttsSpeak({
+          id: "k1",
+          text: "Hey you. Took you long enough.",
+          voiceId: SEED_VOICES.kevin,
+        });
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [
+        string,
+        { headers: Record<string, string>; body: string }
+      ];
+      expect(url).toBe(
+        "https://openspeech.bytedance.com/api/v3/tts/unidirectional"
+      );
+      expect(init.headers["X-Api-Key"]).toBe("speech-key");
+      expect(init.headers["X-Api-Resource-Id"]).toBe("seed-tts-2.0");
+      const body = JSON.parse(init.body) as {
+        req_params: { speaker: string; text: string };
+      };
+      expect(body.req_params.speaker).toBe("zh_male_m191_uranus_bigtts");
+      expect(body.req_params.text).toBe("Hey you. Took you long enough.");
+      expect(playAudio).toHaveBeenCalledWith(["QUJD"]);
+      expect(speakOnDevice).not.toHaveBeenCalled();
+
+      // No speech key at all: the phone's own voice, of Kevin's gender, and
+      // no Doubao request.
+      fetchMock.mockClear();
+      playAudio.mockClear();
+      await saveLlmConfig({ apiKey: "", baseUrl: "", model: "" });
+      await act(async () => {
+        await ttsSpeak({
+          id: "k2",
+          text: "Still here.",
+          voiceId: SEED_VOICES.kevin,
+        });
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(playAudio).not.toHaveBeenCalled();
+      expect(speakOnDevice).toHaveBeenCalledWith("Still here.", {
+        gender: "male",
+        language: "en-US",
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 
   it("the screen offers a Voice key field and Save persists it", async () => {
