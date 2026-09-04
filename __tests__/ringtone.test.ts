@@ -9,9 +9,9 @@ import {
 import { playAudioWithNative, stopNativeTts } from "../src/services/voice-input";
 import {
   clampRingDuration,
+  drawRingDuration,
   playRingback,
   RING_CADENCE_MS,
-  RING_DURATION_MS,
   RING_MAX_MS,
   RING_MIN_MS,
   RING_SAMPLE_RATE,
@@ -21,11 +21,15 @@ import {
 
 /**
  * Sync (and, in a sibling change, the calls) ring for a few seconds before
- * the companion greets — the way a WeChat call does. The tone is our own:
- * a dual-tone ring-back synthesized on the phone as a small PCM WAV and
+ * the companion greets — the way a WeChat call does: a different length
+ * every time, anywhere from two to five seconds (Maxwell). The tone is our
+ * own: a dual-tone ring-back synthesized on the phone as a small PCM WAV and
  * played through PHNative's AVAudioPlayer, the same player the cloud voice
  * uses. No ringtone file is bundled and nothing is copied from anyone.
  */
+
+// A ring length used where the tests need one fixed value.
+const FOUR_SECONDS = 4000;
 
 jest.mock("../src/services/voice-input", () => ({
   playAudioWithNative: jest.fn(),
@@ -79,20 +83,38 @@ afterEach(() => {
 });
 
 describe("the ring-back tone", () => {
-  it("rings for about four seconds, never under three or over five", () => {
-    expect(RING_DURATION_MS).toBeGreaterThanOrEqual(3500);
-    expect(RING_DURATION_MS).toBeLessThanOrEqual(4500);
-    expect(RING_MIN_MS).toBe(3000);
+  it("rings between two and five seconds, never shorter or longer", () => {
+    expect(RING_MIN_MS).toBe(2000);
     expect(RING_MAX_MS).toBe(5000);
-    expect(clampRingDuration(RING_DURATION_MS)).toBe(RING_DURATION_MS);
+    expect(clampRingDuration(FOUR_SECONDS)).toBe(FOUR_SECONDS);
     // The calls' 1.6 s connect delay would be too short a ring.
     expect(clampRingDuration(1600)).toBe(RING_MIN_MS);
     expect(clampRingDuration(9000)).toBe(RING_MAX_MS);
   });
 
+  it("draws a fresh length uniformly between two and five seconds, bounds included", () => {
+    // Pinned draws hit the bounds and the middle exactly.
+    expect(drawRingDuration(() => 0)).toBe(RING_MIN_MS);
+    expect(drawRingDuration(() => 0.5)).toBe(3500);
+    expect(drawRingDuration(() => 0.999999)).toBe(RING_MAX_MS);
+    // Real draws stay inside and spread across the whole range.
+    const draws = Array.from({ length: 1000 }, () => drawRingDuration());
+    draws.forEach((ms) => {
+      expect(Number.isInteger(ms)).toBe(true);
+      expect(ms).toBeGreaterThanOrEqual(RING_MIN_MS);
+      expect(ms).toBeLessThanOrEqual(RING_MAX_MS);
+    });
+    expect(Math.min(...draws)).toBeLessThan(2500);
+    expect(Math.max(...draws)).toBeGreaterThan(4500);
+    const mean = draws.reduce((sum, ms) => sum + ms, 0) / draws.length;
+    expect(mean).toBeGreaterThan(3200);
+    expect(mean).toBeLessThan(3800);
+    expect(new Set(draws).size).toBeGreaterThan(100);
+  });
+
   it("is a valid 8 kHz mono 16-bit PCM WAV exactly as long as the ring", () => {
-    const wav = bytesOf(ringbackToneWav(RING_DURATION_MS));
-    const dataBytes = (RING_DURATION_MS / 1000) * RING_SAMPLE_RATE * 2;
+    const wav = bytesOf(ringbackToneWav(FOUR_SECONDS));
+    const dataBytes = (FOUR_SECONDS / 1000) * RING_SAMPLE_RATE * 2;
 
     expect(wav.toString("ascii", 0, 4)).toBe("RIFF");
     expect(wav.readUInt32LE(4)).toBe(36 + dataBytes);
@@ -110,8 +132,8 @@ describe("the ring-back tone", () => {
     expect(wav.length).toBe(44 + dataBytes);
   });
 
-  it("has a ring cadence: two short bursts, then a pause, twice over — and ends on silence so the greeting never overlaps it", () => {
-    const samples = samplesOf(bytesOf(ringbackToneWav(RING_DURATION_MS)));
+  it("has a ring cadence: two short bursts, then a pause, twice over — and a four-second ring ends on silence", () => {
+    const samples = samplesOf(bytesOf(ringbackToneWav(FOUR_SECONDS)));
     const [on, off, onAgain, pause] = RING_CADENCE_MS;
     expect(on + off + onAgain + pause).toBe(2000);
 
@@ -122,12 +144,24 @@ describe("the ring-back tone", () => {
     expect(rms(window(samples, on + off + onAgain + 50, 2000))).toBe(0);
     // Second cycle, same shape; the ring closes on its pause.
     expect(rms(window(samples, 2050, 2000 + on - 50))).toBeGreaterThan(2000);
-    expect(rms(window(samples, 3050, RING_DURATION_MS))).toBe(0);
+    expect(rms(window(samples, 3050, FOUR_SECONDS))).toBe(0);
+  });
+
+  it("a ring that ends inside a burst fades out over its last moments instead of clicking", () => {
+    // 2.3 s ends 300 ms into the second cycle's first burst.
+    const samples = samplesOf(bytesOf(ringbackToneWav(2300)));
+    expect(samples.length).toBe(2.3 * RING_SAMPLE_RATE);
+    expect(rms(window(samples, 2100, 2250))).toBeGreaterThan(2000);
+    const tail = samples.slice(-8);
+    tail.forEach((value) => {
+      expect(Math.abs(value)).toBeLessThan(600);
+    });
+    expect(Math.abs(samples[samples.length - 1])).toBeLessThan(60);
   });
 
   it("is a dual tone of 440 and 480 Hz, well under full scale", () => {
     expect(RINGBACK_TONE_HZ).toEqual([440, 480]);
-    const samples = samplesOf(bytesOf(ringbackToneWav(RING_DURATION_MS)));
+    const samples = samplesOf(bytesOf(ringbackToneWav(FOUR_SECONDS)));
     const burst = window(samples, 40, 360);
 
     const low = power(burst, 440);
@@ -143,30 +177,27 @@ describe("the ring-back tone", () => {
     expect(peak).toBeGreaterThan(0.2 * 32767);
   });
 
-  it("is deterministic and clamps its own length", () => {
-    expect(ringbackToneWav(RING_DURATION_MS)).toBe(
-      ringbackToneWav(RING_DURATION_MS)
-    );
+  it("is deterministic for a length, and clamps its own length", () => {
+    expect(ringbackToneWav(FOUR_SECONDS)).toBe(ringbackToneWav(FOUR_SECONDS));
+    expect(ringbackToneWav(2300)).not.toBe(ringbackToneWav(FOUR_SECONDS));
     const long = bytesOf(ringbackToneWav(9000));
     expect(long.readUInt32LE(40)).toBe((RING_MAX_MS / 1000) * RING_SAMPLE_RATE * 2);
   });
 });
 
 describe("playRingback", () => {
-  it("plays the tone once through the native player and is done when the ring is over, cutting any tail", async () => {
-    const ring = playRingback({ durationMs: RING_DURATION_MS });
+  it("plays a tone exactly as long as the ring once through the native player and is done when the ring is over, cutting any tail", async () => {
+    const ring = playRingback({ durationMs: FOUR_SECONDS });
     let finished = false;
     ring.done.then(() => {
       finished = true;
     });
 
     expect(playMock).toHaveBeenCalledTimes(1);
-    expect(playMock.mock.calls[0][0]).toEqual([
-      ringbackToneWav(RING_DURATION_MS),
-    ]);
-    expect(ring.durationMs).toBe(RING_DURATION_MS);
+    expect(playMock.mock.calls[0][0]).toEqual([ringbackToneWav(FOUR_SECONDS)]);
+    expect(ring.durationMs).toBe(FOUR_SECONDS);
 
-    jest.advanceTimersByTime(RING_DURATION_MS - 10);
+    jest.advanceTimersByTime(FOUR_SECONDS - 10);
     await Promise.resolve();
     expect(finished).toBe(false);
     expect(stopMock).not.toHaveBeenCalled();
@@ -177,8 +208,15 @@ describe("playRingback", () => {
     expect(stopMock).toHaveBeenCalledTimes(1);
   });
 
+  it("with no length given it draws one between two and five seconds and plays a tone of that length", () => {
+    const ring = playRingback();
+    expect(ring.durationMs).toBeGreaterThanOrEqual(RING_MIN_MS);
+    expect(ring.durationMs).toBeLessThanOrEqual(RING_MAX_MS);
+    expect(playMock.mock.calls[0][0]).toEqual([ringbackToneWav(ring.durationMs)]);
+  });
+
   it("stop() silences the ring at once and settles done; a second stop and the timer are no-ops", async () => {
-    const ring = playRingback({ durationMs: RING_DURATION_MS });
+    const ring = playRingback({ durationMs: FOUR_SECONDS });
     let finished = false;
     ring.done.then(() => {
       finished = true;

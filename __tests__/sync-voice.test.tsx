@@ -24,7 +24,7 @@ import {
   saveLlmConfig,
 } from "../src/services/llm-config";
 import {
-  RING_DURATION_MS,
+  RING_MAX_MS,
   RING_MIN_MS,
   ringbackToneWav,
 } from "../src/services/ringtone";
@@ -115,6 +115,15 @@ jest.mock("../src/services/voice-input", () => ({
   stopNativeTts: jest.fn(),
   playAudioWithNative: jest.fn(),
 }));
+// Every fresh Sync draws its own ring length, anywhere from two to five
+// seconds. The draw is pinned here so the tests can count the seconds; the
+// tone, the player and the distribution itself are real (ringtone.test.ts).
+const RING_MS = 3500;
+const mockRingDraw = jest.fn(() => RING_MS);
+jest.mock("../src/services/ringtone", () => ({
+  ...(jest.requireActual("../src/services/ringtone") as object),
+  drawRingDuration: () => mockRingDraw(),
+}));
 // The mock motor under Sync (Control's HomeScreen context is not mounted
 // here). It keeps running beside the voice; it is not what these tests lock.
 const mockMotorStop = jest.fn();
@@ -201,11 +210,11 @@ const flush = async () => {
   }
 };
 const settle = () => act(flush);
-// Sync rings for RING_DURATION_MS before it reads as connected (a silent
-// 1.6 s connect, the calls' today, is over well before that).
+// Sync rings for its drawn length (RING_MS here) before it reads as
+// connected (a silent 1.6 s connect, the calls' today, is over well before).
 const connect = async () => {
   act(() => {
-    jest.advanceTimersByTime(RING_DURATION_MS + 100);
+    jest.advanceTimersByTime(RING_MS + 100);
   });
   await settle();
 };
@@ -300,6 +309,8 @@ beforeEach(async () => {
   openLove = null;
   mockNavigation = fakeNavigation();
   mockMotorStop.mockClear();
+  mockRingDraw.mockReset();
+  mockRingDraw.mockReturnValue(RING_MS);
   listenMock.mockReset();
   stopVoice.mockReset();
   ringPlay.mockReset();
@@ -564,12 +575,12 @@ describe("useVoiceCall as a mute switch (Sync's mic control)", () => {
 });
 
 describe("useVoiceCall with a ringtone", () => {
-  it("rings for RING_DURATION_MS before the companion greets — the tone plays once, the old 1.6 s connect is not enough", async () => {
-    await mountVoice({ connectDelayMs: RING_DURATION_MS, ringtone: true });
+  it("rings for the connect delay before the companion greets — the tone plays once, the old 1.6 s connect is not enough", async () => {
+    await mountVoice({ connectDelayMs: RING_MS, ringtone: true });
     expect(voice!.phase).toBe("connecting");
     expect(ringPlay).toHaveBeenCalledTimes(1);
     expect(ringPlay.mock.calls[0][0]).toEqual([
-      ringbackToneWav(RING_DURATION_MS),
+      ringbackToneWav(RING_MS),
     ]);
     expect(speakMock).not.toHaveBeenCalled();
 
@@ -581,7 +592,7 @@ describe("useVoiceCall with a ringtone", () => {
     expect(speakMock).not.toHaveBeenCalled();
 
     act(() => {
-      jest.advanceTimersByTime(RING_DURATION_MS - CALL_CONNECT_DELAY_MS);
+      jest.advanceTimersByTime(RING_MS - CALL_CONNECT_DELAY_MS);
     });
     await settle();
     // The ring is over: the player is silenced, then the greeting.
@@ -609,7 +620,7 @@ describe("useVoiceCall with a ringtone", () => {
 
   it("hang-up during the ring silences it at once and no greeting ever comes", async () => {
     await saveArkKey();
-    await mountVoice({ connectDelayMs: RING_DURATION_MS, ringtone: true });
+    await mountVoice({ connectDelayMs: RING_MS, ringtone: true });
     act(() => {
       jest.advanceTimersByTime(900);
     });
@@ -622,7 +633,7 @@ describe("useVoiceCall with a ringtone", () => {
     expect(nativeStop).toHaveBeenCalledTimes(1);
 
     act(() => {
-      jest.advanceTimersByTime(RING_DURATION_MS * 2);
+      jest.advanceTimersByTime(RING_MS * 2);
     });
     await settle();
     expect(global.fetch).not.toHaveBeenCalled();
@@ -633,7 +644,7 @@ describe("useVoiceCall with a ringtone", () => {
 
   it("unmount during the ring (minimize) silences it and nothing runs on after", async () => {
     await saveArkKey();
-    await mountVoice({ connectDelayMs: RING_DURATION_MS, ringtone: true });
+    await mountVoice({ connectDelayMs: RING_MS, ringtone: true });
     act(() => {
       jest.advanceTimersByTime(900);
     });
@@ -646,7 +657,7 @@ describe("useVoiceCall with a ringtone", () => {
     expect(nativeStop).toHaveBeenCalledTimes(1);
 
     act(() => {
-      jest.advanceTimersByTime(RING_DURATION_MS * 2);
+      jest.advanceTimersByTime(RING_MS * 2);
     });
     await settle();
     expect(global.fetch).not.toHaveBeenCalled();
@@ -743,7 +754,7 @@ const loveMessages = () => session?.chat?.messages ?? [];
 // The Sync clock runs from the moment the overlay opens (ring included), as
 // the Love call's does: what it reads after `connect()` plus `extraMs`.
 const clockAfter = (extraMs: number) => {
-  const seconds = Math.floor((RING_DURATION_MS + 100 + extraMs) / 1000);
+  const seconds = Math.floor((RING_MS + 100 + extraMs) / 1000);
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(
     seconds % 60
   ).padStart(2, "0")}`;
@@ -812,13 +823,13 @@ describe("Love Sync voice", () => {
     );
   });
 
-  it("rings for about four seconds before Chad greets: the ring-back tone plays once and Connecting… holds well past the calls' 1.6 s", async () => {
+  it("rings for a freshly drawn length before Chad greets: the ring-back tone plays once and Connecting… holds well past the calls' 1.6 s", async () => {
     await saveArkKey();
     const tree = await openLoveOriginSync();
+    // One draw for this Sync; the tone is exactly that long.
+    expect(mockRingDraw).toHaveBeenCalledTimes(1);
     expect(ringPlay).toHaveBeenCalledTimes(1);
-    expect(ringPlay.mock.calls[0][0]).toEqual([ringbackToneWav(RING_DURATION_MS)]);
-    expect(RING_DURATION_MS).toBeGreaterThanOrEqual(3000);
-    expect(RING_DURATION_MS).toBeLessThanOrEqual(5000);
+    expect(ringPlay.mock.calls[0][0]).toEqual([ringbackToneWav(RING_MS)]);
 
     act(() => {
       jest.advanceTimersByTime(CALL_CONNECT_DELAY_MS + 100);
@@ -831,7 +842,7 @@ describe("Love Sync voice", () => {
     expect(global.fetch).not.toHaveBeenCalled();
 
     act(() => {
-      jest.advanceTimersByTime(RING_DURATION_MS - CALL_CONNECT_DELAY_MS);
+      jest.advanceTimersByTime(RING_MS - CALL_CONNECT_DELAY_MS);
     });
     await settle();
     // Ring over → player silenced → the opener, spoken.
@@ -839,6 +850,57 @@ describe("Love Sync voice", () => {
     expect(speakMock).toHaveBeenCalledTimes(1);
     expect(texts(tree.root)).toContain("Chad is speaking");
     expect(ringPlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("every fresh Sync rings for its own draw, two to five seconds: a 2 s draw greets after two seconds, a 5 s draw only after five", async () => {
+    await saveArkKey();
+    expect(RING_MIN_MS).toBe(2000);
+    expect(RING_MAX_MS).toBe(5000);
+
+    mockRingDraw.mockReturnValueOnce(RING_MIN_MS);
+    const shortTree = await openLoveOriginSync();
+    expect(ringPlay.mock.calls[0][0]).toEqual([ringbackToneWav(RING_MIN_MS)]);
+    act(() => {
+      jest.advanceTimersByTime(RING_MIN_MS - 10);
+    });
+    await settle();
+    expect(texts(shortTree.root)).toContain(
+      syncStatusLabel({ phase: "connecting", name: "Chad" })
+    );
+    expect(speakMock).not.toHaveBeenCalled();
+    act(() => {
+      jest.advanceTimersByTime(20);
+    });
+    await settle();
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(texts(shortTree.root)).toContain("Chad is speaking");
+    // End this Sync (a Sync left running would be restored, not started).
+    press(touchable(shortTree.root, "love-sync-hangup"));
+    await settle();
+    act(() => {
+      trees.splice(0).forEach((tree) => tree.unmount());
+    });
+    await settle();
+    speakMock.mockClear();
+    ringPlay.mockClear();
+
+    mockRingDraw.mockReturnValueOnce(RING_MAX_MS);
+    const longTree = await openLoveOriginSync();
+    expect(ringPlay.mock.calls[0][0]).toEqual([ringbackToneWav(RING_MAX_MS)]);
+    act(() => {
+      jest.advanceTimersByTime(RING_MAX_MS - 10);
+    });
+    await settle();
+    expect(texts(longTree.root)).toContain(
+      syncStatusLabel({ phase: "connecting", name: "Chad" })
+    );
+    expect(speakMock).not.toHaveBeenCalled();
+    act(() => {
+      jest.advanceTimersByTime(20);
+    });
+    await settle();
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(mockRingDraw).toHaveBeenCalledTimes(2);
   });
 
   it("red X during the ring silences it, no greeting ever comes, and the Sync layer is cleaned up", async () => {
@@ -859,7 +921,7 @@ describe("Love Sync voice", () => {
     expect(mockNavigation.goBack).toHaveBeenCalledTimes(1);
 
     act(() => {
-      jest.advanceTimersByTime(RING_DURATION_MS * 2);
+      jest.advanceTimersByTime(RING_MS * 2);
     });
     await settle();
     expect(global.fetch).not.toHaveBeenCalled();
@@ -882,17 +944,20 @@ describe("Love Sync voice", () => {
     expect(nativeStop).toHaveBeenCalled();
     expect(session).toMatchObject({ layer: "sync", minimized: true });
     act(() => {
-      jest.advanceTimersByTime(RING_DURATION_MS * 2);
+      jest.advanceTimersByTime(RING_MS * 2);
     });
     await settle();
     expect(speakMock).not.toHaveBeenCalled();
     expect(global.fetch).not.toHaveBeenCalled();
 
     ringPlay.mockClear();
+    mockRingDraw.mockClear();
     act(() => {
       session!.restore();
     });
     await showLoveSync(tree, chad);
+    // Already on: no new draw, no ring.
+    expect(mockRingDraw).not.toHaveBeenCalled();
     expect(ringPlay).not.toHaveBeenCalled();
     expect(speakMock).not.toHaveBeenCalled();
     expect(listenMock).toHaveBeenCalledTimes(1);
@@ -1171,7 +1236,8 @@ describe("Love Sync voice", () => {
     });
     await showLoveSync(tree, { companionId: "kevin", name: "Kevin" });
 
-    // Already on: no ring-back, no ring, no opener.
+    // Already on: no draw, no ring-back, no opener.
+    expect(mockRingDraw).not.toHaveBeenCalled();
     expect(ringPlay).not.toHaveBeenCalled();
     expect(speakMock).not.toHaveBeenCalled();
     expect(global.fetch).not.toHaveBeenCalled();
@@ -1267,11 +1333,31 @@ describe("Control hub Sync voice", () => {
     );
   });
 
+  it("draws its own ring length like the Love overlay: a 2 s draw greets after two seconds", async () => {
+    await saveArkKey();
+    mockRingDraw.mockReturnValueOnce(RING_MIN_MS);
+    const tree = await openControlSync({ companionId: "amanda", name: "Amanda" });
+    expect(mockRingDraw).toHaveBeenCalledTimes(1);
+    expect(ringPlay.mock.calls[0][0]).toEqual([ringbackToneWav(RING_MIN_MS)]);
+    act(() => {
+      jest.advanceTimersByTime(RING_MIN_MS - 10);
+    });
+    await settle();
+    expect(speakMock).not.toHaveBeenCalled();
+    act(() => {
+      jest.advanceTimersByTime(20);
+    });
+    await settle();
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("Amanda is speaking");
+  });
+
   it("rings before Amanda greets; red X during the ring silences it, leaves the stack, and no greeting ever comes", async () => {
     await saveArkKey();
     const tree = await openControlSync({ companionId: "amanda", name: "Amanda" });
+    expect(mockRingDraw).toHaveBeenCalledTimes(1);
     expect(ringPlay).toHaveBeenCalledTimes(1);
-    expect(ringPlay.mock.calls[0][0]).toEqual([ringbackToneWav(RING_DURATION_MS)]);
+    expect(ringPlay.mock.calls[0][0]).toEqual([ringbackToneWav(RING_MS)]);
     act(() => {
       jest.advanceTimersByTime(CALL_CONNECT_DELAY_MS + 100);
     });
@@ -1287,7 +1373,7 @@ describe("Control hub Sync voice", () => {
     expect(mockMotorStop).toHaveBeenCalled();
     expect(homeNavigation.goBack).toHaveBeenCalledTimes(1);
     act(() => {
-      jest.advanceTimersByTime(RING_DURATION_MS * 2);
+      jest.advanceTimersByTime(RING_MS * 2);
     });
     await settle();
     expect(global.fetch).not.toHaveBeenCalled();
@@ -1309,7 +1395,7 @@ describe("Control hub Sync voice", () => {
     expect(nativeStop).toHaveBeenCalled();
     expect(session).toMatchObject({ layer: "sync", minimized: true, surface: "control" });
     act(() => {
-      jest.advanceTimersByTime(RING_DURATION_MS * 2);
+      jest.advanceTimersByTime(RING_MS * 2);
     });
     await settle();
     expect(speakMock).not.toHaveBeenCalled();

@@ -16,7 +16,7 @@ import Xmark from "@images/icons/xmark.svg";
 import Speaker from "@images/speaker.svg";
 import MicroPhoneUnmute from "@images/microphone-unmute.svg";
 import MicroPhoneMute from "@images/microphone-mute.svg";
-import { RING_DURATION_MS } from "../../services/ringtone";
+import { drawRingDuration } from "../../services/ringtone";
 import { voiceForPerson } from "../../services/voices";
 import { useCompanions } from "../../store/companions";
 import { useChat } from "../chat/store";
@@ -104,11 +104,12 @@ export const LoveSyncScreen = () => {
         .map((item) => ({ from: item.from, text: item.text })),
     [chatMessages]
   );
-  // A fresh Sync rings out loud for a few seconds before the greeting.
-  // Restored from the pill (or entered while the Control Sync's clock was
-  // already running): Sync has been on, no ring and no second greeting.
+  // A fresh Sync rings out loud before the greeting, for a length drawn
+  // once here — two to five seconds, different every time. Restored from the
+  // pill (or entered while the Control Sync's clock was already running):
+  // Sync has been on, no draw, no ring and no second greeting.
   const [connectDelayMs] = useState(() =>
-    syncStartedAt ? 0 : RING_DURATION_MS
+    syncStartedAt ? 0 : drawRingDuration()
   );
   const call = useVoiceCall({
     name,

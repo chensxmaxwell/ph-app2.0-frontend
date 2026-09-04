@@ -54,9 +54,10 @@ export type VoiceCallInput = {
   // the mic opens right away. Otherwise the call rings first and the
   // companion greets before anyone is asked to talk.
   connectDelayMs?: number;
-  // Ring out loud while connecting: the ring-back tone plays for the (3–5 s
+  // Ring out loud while connecting: the ring-back tone plays for the (2–5 s
   // clamped) connect delay and the greeting follows it. Off, connecting is
-  // the silent `connectDelayMs` wait. Sync passes `RING_DURATION_MS` + true;
+  // the silent `connectDelayMs` wait. Sync draws its delay once per start
+  // (`drawRingDuration`, a different length every time) and passes true;
   // the calls are meant to follow.
   ringtone?: boolean;
 };
