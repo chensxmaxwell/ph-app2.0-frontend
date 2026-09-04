@@ -48,6 +48,11 @@ export type ChatThread = {
   // thread because the thread is the one membership record (a seeded person
   // has no companion record) and dies with "Delete friend".
   avatar?: AvatarChoice;
+  // The Doubao speaker this person talks with on calls and in Listen (see
+  // src/services/voices.ts). Drawn from the gender's pool when the character
+  // is created; seeded people carry a fixed one. Optional so blobs from
+  // before voices existed still parse (they resolve through voiceForPerson).
+  voiceId?: string;
   messages: ChatBubble[];
 };
 
