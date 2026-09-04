@@ -20,6 +20,15 @@ export const CALL_CONNECT_DELAY_MS = 1600;
 export const LISTEN_SILENCE_MS = 1100;
 export const LISTEN_MAX_MS = 20000;
 export const LISTEN_IDLE_MS = 45000;
+// An empty listen that ends this soon after it opened did not run its idle
+// window: the recognizer gave up (iOS Speech with no network errors right
+// after it starts). Reopen after a pause, and stop after a few in a row
+// instead of tearing the audio engine down and up in a tight loop.
+export const LISTEN_FAST_EMPTY_MS = 1000;
+export const LISTEN_RETRY_DELAY_MS = 1500;
+export const LISTEN_MAX_FAST_EMPTIES = 3;
+export const LISTEN_UNRESPONSIVE_COPY =
+  "Voice input isn't responding. Tap the mic to try again.";
 
 export type CallTurn = { from: "me" | "them"; text: string };
 
@@ -107,6 +116,9 @@ export const useVoiceCall = ({
   // Bumped by every user action; an async step only applies its result when
   // the token it started with is still current.
   const turnRef = useRef(0);
+  // Empty listens that ended almost as soon as they opened, in a row.
+  const fastEmptiesRef = useRef(0);
+  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef({ name, personality, story, history, voiceId });
   inputRef.current = { name, personality, story, history, voiceId };
 
@@ -138,6 +150,7 @@ export const useVoiceCall = ({
         return;
       }
       setPhase("listening");
+      const openedAt = Date.now();
       listenForUtterance({
         silenceMs: LISTEN_SILENCE_MS,
         maxMs: LISTEN_MAX_MS,
@@ -157,9 +170,25 @@ export const useVoiceCall = ({
         }
         const userText = result.text.trim();
         if (!userText) {
-          listen(turn);
+          if (Date.now() - openedAt >= LISTEN_FAST_EMPTY_MS) {
+            fastEmptiesRef.current = 0;
+            listen(turn);
+            return;
+          }
+          fastEmptiesRef.current += 1;
+          if (fastEmptiesRef.current >= LISTEN_MAX_FAST_EMPTIES) {
+            fastEmptiesRef.current = 0;
+            setNotice(LISTEN_UNRESPONSIVE_COPY);
+            setPhase("ready");
+            return;
+          }
+          retryRef.current = setTimeout(() => {
+            retryRef.current = null;
+            listen(turn);
+          }, LISTEN_RETRY_DELAY_MS);
           return;
         }
+        fastEmptiesRef.current = 0;
         setHeard(userText);
         setNotice(null);
         setPhase("thinking");
@@ -295,6 +324,10 @@ export const useVoiceCall = ({
     return () => {
       aliveRef.current = false;
       turnRef.current += 1;
+      if (retryRef.current) {
+        clearTimeout(retryRef.current);
+        retryRef.current = null;
+      }
       if (phaseRef.current === "listening") {
         stopVoiceInput().catch(swallow);
       }
@@ -306,6 +339,11 @@ export const useVoiceCall = ({
       return;
     }
     const turn = (turnRef.current += 1);
+    if (retryRef.current) {
+      clearTimeout(retryRef.current);
+      retryRef.current = null;
+    }
+    fastEmptiesRef.current = 0;
     setNotice(null);
     if (mutedRef.current) {
       mutedRef.current = false;
@@ -342,6 +380,10 @@ export const useVoiceCall = ({
   const hangUp = useCallback(() => {
     aliveRef.current = false;
     turnRef.current += 1;
+    if (retryRef.current) {
+      clearTimeout(retryRef.current);
+      retryRef.current = null;
+    }
     if (phaseRef.current === "listening") {
       stopVoiceInput().catch(swallow);
     }

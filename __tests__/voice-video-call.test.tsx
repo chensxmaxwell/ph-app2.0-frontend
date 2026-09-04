@@ -55,7 +55,9 @@ import { DEFAULT_DRAFT } from "../src/screens/avatar/context";
 import {
   CALL_CONNECT_DELAY_MS,
   LISTEN_IDLE_MS,
+  LISTEN_RETRY_DELAY_MS,
   LISTEN_SILENCE_MS,
+  LISTEN_UNRESPONSIVE_COPY,
 } from "../src/screens/call/use-voice-call";
 import {
   CAMERA_START_TIMEOUT_MS,
@@ -607,7 +609,14 @@ describe("Message thread voice call", () => {
     await connectAndGreet();
     (global.fetch as jest.Mock).mockClear();
 
+    // The recognizer listened for its whole idle window and heard nothing.
+    act(() => {
+      jest.advanceTimersByTime(LISTEN_IDLE_MS);
+    });
     await say("", "idle");
+    act(() => {
+      jest.advanceTimersByTime(LISTEN_IDLE_MS);
+    });
     await say("   ");
 
     expect(global.fetch).not.toHaveBeenCalled();
@@ -615,6 +624,48 @@ describe("Message thread voice call", () => {
     expect(listenMock).toHaveBeenCalledTimes(3);
     expect(texts(tree.root)).toContain("Listening…");
     expect(texts(tree.root).join("\n")).not.toMatch(/Didn't catch that/);
+  });
+
+  it("a recognizer that gives up at once is retried with a pause, then the loop stops with a notice instead of hammering the mic", async () => {
+    // iOS Speech without a network errors out right after it starts; the
+    // native side hands that back as an empty listen. Reopening the mic in
+    // a tight loop would tear the audio engine down and up dozens of times
+    // a second.
+    await saveArkKey();
+    const tree = await mountMessageCall("kevin");
+    await connectAndGreet();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+
+    await say("", "idle");
+    // Not reopened immediately…
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    act(() => {
+      jest.advanceTimersByTime(LISTEN_RETRY_DELAY_MS + 10);
+    });
+    await settle();
+    // …but after a pause.
+    expect(listenMock).toHaveBeenCalledTimes(2);
+
+    await say("", "idle");
+    act(() => {
+      jest.advanceTimersByTime(LISTEN_RETRY_DELAY_MS + 10);
+    });
+    await settle();
+    expect(listenMock).toHaveBeenCalledTimes(3);
+
+    await say("", "idle");
+    act(() => {
+      jest.advanceTimersByTime(LISTEN_RETRY_DELAY_MS + 10);
+    });
+    await settle();
+    // Three instant give-ups in a row: stop and say so.
+    expect(listenMock).toHaveBeenCalledTimes(3);
+    expect(texts(tree.root)).toContain(LISTEN_UNRESPONSIVE_COPY);
+    expect(texts(tree.root)).toContain("Connected");
+    // A tap tries again.
+    press(micButton(tree.root));
+    await settle();
+    expect(listenMock).toHaveBeenCalledTimes(4);
   });
 
   it("tapping the mic while Kevin speaks interrupts him and listens right away", async () => {
