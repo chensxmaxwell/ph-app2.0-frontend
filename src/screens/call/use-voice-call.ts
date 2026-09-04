@@ -6,13 +6,22 @@ import {
   completeCompanionChat,
 } from "../../services/llm";
 import { hasLlmKey, loadLlmConfig } from "../../services/llm-config";
+import {
+  Ringback,
+  RINGBACK_DURATION_MS,
+  startRingback,
+} from "../../services/ringtone";
 import { ttsSpeak, ttsStop } from "../../services/tts";
 import { ttsCredentialsFromConfig } from "../../services/tts-config";
 import { listenForUtterance, stopVoiceInput } from "../../services/voice-input";
 import { localOpener, OPENER_INSTRUCTION } from "./opener";
 import { CallPhase, micButtonEnabled, voiceKeyHint } from "./status";
 
-export const CALL_CONNECT_DELAY_MS = 1600;
+// The call rings (`startRingback`, a WeChat-style ring-back of about four
+// seconds) before the companion picks up; this is that ring's length, and
+// the silent wait when the tone cannot be played (Maxwell, TestFlight
+// 1.2 (19)).
+export const CALL_CONNECT_DELAY_MS = RINGBACK_DURATION_MS;
 // The mic is inert while the companion's opener is on its way, so that wait
 // is bounded: past this, the canned line is spoken and the loop goes on.
 export const OPENER_TIMEOUT_MS = 6000;
@@ -50,8 +59,9 @@ export type VoiceCallInput = {
   voiceId?: string;
   // 0 when the call is already running (a Love call restored from the pill,
   // a Message call re-entered from the thread): no ring, no second opener,
-  // the mic opens right away. Otherwise the call rings first and the
-  // companion greets before anyone is asked to talk.
+  // the mic opens right away. Otherwise the ring-back tone plays first (or
+  // the line is held for this long when it cannot) and the companion greets
+  // before anyone is asked to talk.
   connectDelayMs?: number;
 };
 
@@ -100,9 +110,10 @@ const within = <T>(promise: Promise<T>, ms: number): Promise<T> =>
  * The conversation behind a voice or video call, hands-free. The loop is
  * still strictly sequential — PHNative's iOS Speech recognizer owns
  * AVAudioSession while the mic is open and the synthesizer needs it back for
- * the reply — but the turns take themselves: the companion greets, the mic
- * opens, the native side reports when the user has finished, the reply is
- * spoken, the mic opens again. No tap is ever needed to talk: the mic is
+ * the reply — but the turns take themselves: the call rings (a ring-back
+ * tone, `startRingback`), the companion greets, the mic opens, the native
+ * side reports when the user has finished, the reply is spoken, the mic
+ * opens again. No tap is ever needed to talk: the mic is
  * inert until the companion has greeted, and a recognizer that stalls is
  * reopened by the loop itself. The mic is never open while the companion is
  * talking (it would hear itself), so barge-in is a tap: stop the voice, open
@@ -151,6 +162,9 @@ export const useVoiceCall = ({
   const stallsRef = useRef(0);
   const stallNoticeRef = useRef<string | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The ring-back while the call is `connecting`; hang-up and minimize cut
+  // it so no tone outlives the screen.
+  const ringRef = useRef<Ringback | null>(null);
   const inputRef = useRef({ name, personality, story, history, voiceId });
   inputRef.current = { name, personality, story, history, voiceId };
 
@@ -372,14 +386,26 @@ export const useVoiceCall = ({
       listen(turn);
       return;
     }
-    const timer = setTimeout(() => {
-      if (!current(turn) || phaseRef.current !== "connecting") {
+    // Ring, then pick up: the tone runs its course (or the line is held for
+    // as long) before the companion's first word. Unmount while it rings
+    // cancels it — no orphan audio behind a minimized or closed screen.
+    const ring = startRingback({ fallbackMs: connectDelayMs });
+    ringRef.current = ring;
+    ring.finished.then((end) => {
+      if (ringRef.current === ring) {
+        ringRef.current = null;
+      }
+      if (
+        end === "cancelled" ||
+        !current(turn) ||
+        phaseRef.current !== "connecting"
+      ) {
         return;
       }
       setPhase("greeting");
       greetThenListen(turn).catch(swallow);
-    }, connectDelayMs);
-    return () => clearTimeout(timer);
+    });
+    return () => ring.cancel();
   }, [connectDelayMs, current, greetThenListen, listen]);
 
   // Unmount without hang-up (minimize): close the mic and stop the loop. A
@@ -447,6 +473,10 @@ export const useVoiceCall = ({
     if (retryRef.current) {
       clearTimeout(retryRef.current);
       retryRef.current = null;
+    }
+    if (ringRef.current) {
+      ringRef.current.cancel();
+      ringRef.current = null;
     }
     if (phaseRef.current === "listening") {
       stopVoiceInput().catch(swallow);

@@ -17,6 +17,11 @@ import {
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { nativePlayAudio, nativeStopSpeaking } from "../src/native/ph-native";
+import {
+  RINGBACK_DURATION_MS,
+  ringbackWavBase64,
+} from "../src/services/ringtone";
 import { SCREENS } from "../src/common/constant";
 import { writeSessionUser } from "../src/backend/session";
 import { saveCompanions } from "../src/backend/store";
@@ -113,6 +118,9 @@ jest.mock("../src/native/ph-native", () => ({
   bundledAvatarViewerUrl: () => "file:///avatar-engine/viewer-page.html",
   nativeSpeak: jest.fn(),
   nativeStopSpeaking: jest.fn(),
+  // The ring-back tone goes through PHNative's AVAudioPlayer path directly
+  // (not the TTS engine): this is the ring.
+  nativePlayAudio: jest.fn(),
   nativeStartVoiceInput: jest.fn(),
   nativeStopVoiceInput: jest.fn(),
   nativeListenForUtterance: jest.fn(),
@@ -178,8 +186,24 @@ jest.mock("@react-navigation/native", () => {
 
 const listenMock = listenForUtterance as jest.Mock<typeof listenForUtterance>;
 const stopVoice = stopVoiceInput as jest.Mock<typeof stopVoiceInput>;
+const ringMock = nativePlayAudio as jest.Mock<typeof nativePlayAudio>;
+const nativeStopMock = nativeStopSpeaking as jest.Mock<
+  typeof nativeStopSpeaking
+>;
 // The recognizer resolves the newest listen when the test "says" something.
 let pendingListen: ((result: UtteranceResult) => void) | null = null;
+// The native player reports the ring-back tone has finished when the test
+// says so (a ring the player could not play falls back to a silent wait of
+// the same length, which is what `connect()` advances through).
+let finishRing: ((played: boolean) => void) | null = null;
+const ringPlays = () => {
+  ringMock.mockImplementationOnce(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finishRing = resolve;
+      })
+  );
+};
 
 type ChatApi = ReturnType<typeof useChat>;
 type SessionApi = ReturnType<typeof useLoveSession>;
@@ -337,7 +361,9 @@ const isKevinPhoto = (uri: string) =>
   /(^|\/)avatar-ring\.png$/.test(uri);
 
 const stageFace = (root: ReactTestInstance) => {
-  const match = root.findAll((node) => node.props?.testID === "call-stage-face")[0];
+  const match = root.findAll(
+    (node) => node.props?.testID === "call-stage-face"
+  )[0];
   if (!match) {
     throw new Error("No call stage face (testID call-stage-face)");
   }
@@ -406,6 +432,13 @@ beforeEach(async () => {
   mockCameraAvailable = true;
   listenMock.mockReset();
   stopVoice.mockReset();
+  ringMock.mockReset();
+  nativeStopMock.mockReset();
+  nativeStopMock.mockResolvedValue(undefined);
+  // Unless a test makes the tone play, the player says it could not, and the
+  // call rings silently for RINGBACK_DURATION_MS.
+  ringMock.mockResolvedValue(false);
+  finishRing = null;
   pendingListen = null;
   listenMock.mockImplementation(
     () =>
@@ -448,6 +481,95 @@ afterEach(() => {
 });
 
 describe("Message thread voice call", () => {
+  it("rings a ring-back tone before Kevin greets: `Calling Kevin` with a closed mic until the tone has played, then the greeting", async () => {
+    // Maxwell, TestFlight 1.2 (19): a call has to ring like a phone call
+    // (WeChat-style, about four seconds) before the companion picks up.
+    await saveArkKey();
+    ringPlays();
+    const tree = await mountMessageCall("kevin");
+
+    // The tone is playing through the native player: nothing else yet.
+    expect(ringMock).toHaveBeenCalledTimes(1);
+    expect(ringMock.mock.calls[0][0]).toEqual([ringbackWavBase64()]);
+    expect(texts(tree.root)).toContain("Calling Kevin");
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).not.toHaveBeenCalled();
+    expect(micButton(tree.root).props.disabled).toBe(true);
+    // No clock while it rings: the call is not connected yet.
+    expect(texts(tree.root).some((copy) => /^\d\d:\d\d$/.test(copy))).toBe(
+      false
+    );
+    // A timer is not what ends the ring — the tone is.
+    act(() => {
+      jest.advanceTimersByTime(RINGBACK_DURATION_MS + 500);
+    });
+    await settle();
+    expect(texts(tree.root)).toContain("Calling Kevin");
+    expect(speakMock).not.toHaveBeenCalled();
+
+    act(() => {
+      finishRing?.(true);
+    });
+    await settle();
+
+    // Picked up: the opener is fetched and spoken, the clock runs.
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("Kevin is speaking");
+    expect(texts(tree.root)).toContain("00:00");
+    await finishSpeech();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    // The ring is the connect delay: one number, one meaning.
+    expect(CALL_CONNECT_DELAY_MS).toBe(RINGBACK_DURATION_MS);
+  });
+
+  it("hang-up during the ring stops the tone; nothing greets and the mic never opens", async () => {
+    await saveArkKey();
+    ringPlays();
+    const tree = await mountMessageCall("kevin");
+    expect(ringMock).toHaveBeenCalledTimes(1);
+
+    press(touchable(tree.root, "call-hangup"));
+    await settle();
+
+    expect(nativeStopMock).toHaveBeenCalled();
+    expect(chat!.inCallThreadId).toBeNull();
+    expect(mockNavigation.goBack).toHaveBeenCalledTimes(1);
+    // The player reports the tone over (stopped); the call is gone.
+    act(() => {
+      finishRing?.(true);
+    });
+    await settle();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).not.toHaveBeenCalled();
+  });
+
+  it("minimize during the ring stops the tone — no orphan audio — and leaves the call flagged", async () => {
+    ringPlays();
+    const tree = await mountMessageCall("kevin");
+    expect(ringMock).toHaveBeenCalledTimes(1);
+    expect(nativeStopMock).not.toHaveBeenCalled();
+
+    press(touchable(tree.root, "call-minimize"));
+    expect(mockNavigation.goBack).toHaveBeenCalledTimes(1);
+    expect(chat!.inCallThreadId).toBe("kevin");
+    // goBack takes the screen down.
+    act(() => {
+      tree.update(<Providers>{null}</Providers>);
+    });
+    await settle();
+
+    expect(nativeStopMock).toHaveBeenCalled();
+    act(() => {
+      finishRing?.(true);
+    });
+    await settle();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).not.toHaveBeenCalled();
+  });
+
   it("starts without an Ark key: greets with a local opener, shows the Companion AI settings copy and does not crash", async () => {
     const tree = await mountMessageCall("kevin");
     await connect();
@@ -988,6 +1110,7 @@ describe("Message thread voice call", () => {
 
     // Straight into the call: no ring, no opener, the mic already open.
     expect(texts(tree!.root)).not.toContain("Calling Kevin");
+    expect(ringMock).not.toHaveBeenCalled();
     expect(global.fetch).not.toHaveBeenCalled();
     expect(speakMock).not.toHaveBeenCalled();
     expect(listenMock).toHaveBeenCalledTimes(1);
@@ -1416,6 +1539,7 @@ describe("Message thread voice call", () => {
     // once, the clock where it was, the pill gone.
     speakMock.mockClear();
     listenMock.mockClear();
+    ringMock.mockClear();
     (global.fetch as jest.Mock).mockClear();
     press(pill());
     expect(mockNavigation.navigate).toHaveBeenCalledWith(SCREENS.CHAT_CALL, {
@@ -1431,6 +1555,7 @@ describe("Message thread voice call", () => {
     });
     await settle();
     expect(texts(tree.root)).not.toContain("Calling Kevin");
+    expect(ringMock).not.toHaveBeenCalled();
     expect(speakMock).not.toHaveBeenCalled();
     expect(global.fetch).not.toHaveBeenCalled();
     expect(listenMock).toHaveBeenCalledTimes(1);
@@ -1468,6 +1593,51 @@ describe("Message thread voice call", () => {
 });
 
 describe("Love voice call", () => {
+  it("rings the same ring-back tone before Chad greets", async () => {
+    await saveArkKey();
+    ringPlays();
+    const tree = await mountLoveCall("chad", "Chad");
+
+    expect(ringMock).toHaveBeenCalledTimes(1);
+    expect(ringMock.mock.calls[0][0]).toEqual([ringbackWavBase64()]);
+    expect(texts(tree.root)).toContain("Calling Chad");
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).not.toHaveBeenCalled();
+
+    act(() => {
+      finishRing?.(true);
+    });
+    await settle();
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(speakMock.mock.calls[0][0]).toMatchObject({
+      voiceId: SEED_VOICES.chad,
+    });
+    expect(texts(tree.root)).toContain("Chad is speaking");
+    await finishSpeech();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("hang-up while the Love call still rings stops the tone and lands back on the chat", async () => {
+    ringPlays();
+    const tree = await mountLoveCall("chad", "Chad");
+    expect(texts(tree.root)).toContain("Calling Chad");
+    expect(nativeStopMock).not.toHaveBeenCalled();
+
+    press(touchable(tree.root, "call-hangup"));
+    await settle();
+
+    expect(nativeStopMock).toHaveBeenCalled();
+    expect(session?.chat?.inCall).toBe(false);
+    expect(session?.layer).toBe("chat");
+    expect(mockNavigation.goBack).toHaveBeenCalledTimes(1);
+    act(() => {
+      finishRing?.(true);
+    });
+    await settle();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).not.toHaveBeenCalled();
+  });
+
   it("binds the call layer to Chad, shows his face, and hang-up returns to his chat", async () => {
     const tree = await mountLoveCall("chad", "Chad");
     await connect();
@@ -1566,6 +1736,7 @@ describe("Love voice call", () => {
     await settle();
 
     expect(texts(tree!.root)).not.toContain("Calling Chad");
+    expect(ringMock).not.toHaveBeenCalled();
     expect(speakMock).not.toHaveBeenCalled();
     expect(global.fetch).not.toHaveBeenCalled();
     // Whatever was still being said when the pill took over is cut before
@@ -1635,7 +1806,9 @@ describe("call status copy", () => {
     expect(callStatusLabel({ phase: "greeting", name: "Kevin" })).toBe(
       "Connected"
     );
-    expect(callStatusLabel({ phase: "ready", name: "Kevin" })).toBe("Connected");
+    expect(callStatusLabel({ phase: "ready", name: "Kevin" })).toBe(
+      "Connected"
+    );
     expect(callStatusLabel({ phase: "listening", name: "Kevin" })).toBe(
       "Listening…"
     );
@@ -1723,11 +1896,14 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
     "src/screens/call/video-stage.tsx",
     "src/screens/chat/call.tsx",
     "src/screens/love/call.tsx",
-  ])("%s resolves the person's face instead of faceSourceForId / call-face.png", (file) => {
-    const source = readFileSync(join(__dirname, "..", file), "utf8");
-    expect(source).not.toContain("faceSourceForId(");
-    expect(source).not.toContain("call-face.png");
-  });
+  ])(
+    "%s resolves the person's face instead of faceSourceForId / call-face.png",
+    (file) => {
+      const source = readFileSync(join(__dirname, "..", file), "utf8");
+      expect(source).not.toContain("faceSourceForId(");
+      expect(source).not.toContain("call-face.png");
+    }
+  );
 
   it("only asks UIManager-registered native views of requireNativeComponent (a missing view is a Release RCTFatal)", () => {
     const source = readFileSync(
@@ -1799,7 +1975,9 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
       "utf8"
     );
     expect(source).toContain("RCT_EXPORT_MODULE(PHCameraPreview)");
-    expect(source).toContain("automaticallyConfiguresApplicationAudioSession = NO");
+    expect(source).toContain(
+      "automaticallyConfiguresApplicationAudioSession = NO"
+    );
     expect(source).toContain("AVCaptureDevicePositionFront");
     expect(source).toContain("requestAccessForMediaType:AVMediaTypeVideo");
     // After voice input the shared session is left in Record (no output
@@ -1817,7 +1995,9 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
       join(__dirname, "../ios/AppFrontend/PHNative.mm"),
       "utf8"
     );
-    const camera = source.slice(source.indexOf("@implementation PHCameraPreviewView"));
+    const camera = source.slice(
+      source.indexOf("@implementation PHCameraPreviewView")
+    );
     // TestFlight 1.2 (15): the PiP was a black box with no copy at 00:30 —
     // JS had been told `running` (AVCaptureSessionDidStartRunning fired) and
     // yet nothing painted. The session running is not the layer painting.
