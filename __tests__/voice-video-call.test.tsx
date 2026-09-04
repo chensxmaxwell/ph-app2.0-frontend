@@ -26,6 +26,7 @@ import {
   saveLlmConfig,
 } from "../src/services/llm-config";
 import { configureTtsEngine } from "../src/services/tts";
+import { SEED_VOICES, voiceById } from "../src/services/voices";
 import { startVoiceInput, stopVoiceInput } from "../src/services/voice-input";
 import {
   Companion,
@@ -41,6 +42,7 @@ import {
 import { clearLoveSessionBoot } from "../src/screens/love/session-persist";
 import { ChatCallScreen } from "../src/screens/chat/call";
 import { LoveCallScreen } from "../src/screens/love/call";
+import { LoveChatScreen } from "../src/screens/love/chat";
 import { AvatarPreview } from "../src/screens/avatar/engine/AvatarPreview";
 import { useAvatarEngine } from "../src/screens/avatar/engine/AvatarEngineHost";
 import { InlineAvatarViewer } from "../src/screens/avatar/engine/InlineAvatarViewer";
@@ -434,7 +436,12 @@ describe("Message thread voice call", () => {
     expect(body.messages.length).toBeGreaterThan(2);
 
     expect(speakMock).toHaveBeenCalledTimes(1);
-    expect(speakMock.mock.calls[0][0]).toMatchObject({ text: "我在呢。" });
+    // Spoken in Kevin's own (male) voice, not the system default.
+    expect(speakMock.mock.calls[0][0]).toMatchObject({
+      text: "我在呢。",
+      voiceId: SEED_VOICES.kevin,
+    });
+    expect(voiceById(SEED_VOICES.kevin)?.gender).toBe("male");
     const copy = texts(tree.root);
     expect(copy).toContain("Kevin is speaking");
     expect(copy).toContain("你好 Kevin");
@@ -497,6 +504,11 @@ describe("Message thread voice call", () => {
     await connect();
     await holdAndRelease(tree.root);
     expect(texts(tree.root)).toContain("Amanda is speaking");
+    // Amanda answers in a woman's voice.
+    expect(speakMock.mock.calls[0][0]).toMatchObject({
+      voiceId: SEED_VOICES.amanda,
+    });
+    expect(voiceById(SEED_VOICES.amanda)?.gender).toBe("female");
 
     press(touchable(tree.root, "call-video-toggle"));
     await settle();
@@ -855,7 +867,11 @@ describe("Love voice call", () => {
       content: "Hey Chad",
     });
     expect(speakMock).toHaveBeenCalledTimes(1);
-    expect(speakMock.mock.calls[0][0]).toMatchObject({ text: "我在呢。" });
+    expect(speakMock.mock.calls[0][0]).toMatchObject({
+      text: "我在呢。",
+      voiceId: SEED_VOICES.chad,
+    });
+    expect(voiceById(SEED_VOICES.chad)?.gender).toBe("male");
     const bubbles = (session?.chat?.messages ?? []).filter(
       (item) => item.kind === "bubble"
     ) as { from: string; text: string }[];
@@ -887,6 +903,33 @@ describe("Love voice call", () => {
     expect(cameraHosts(tree.root)).toHaveLength(1);
     expect(imageUris(tree.root).filter(isKevinPhoto)).toEqual([]);
     expect(texts(tree.root)).toContain("Nova");
+  });
+});
+
+describe("Love chat Listen", () => {
+  it("reads Amanda's bubbles in her female voice", async () => {
+    mockNavigation = fakeNavigation();
+    mockRoute = {
+      name: String(SCREENS.LOVE_CHAT),
+      params: { companionId: "amanda", name: "Amanda" },
+    };
+    const tree = await mountCall(<LoveChatScreen />);
+    act(() => {
+      session!.patchChat({ listen: true });
+    });
+    await settle();
+
+    const listenButtons = tree.root
+      .findAllByType(TouchableOpacity)
+      .filter((node) => /^love-listen-/.test(String(node.props.testID)));
+    expect(listenButtons.length).toBeGreaterThan(0);
+    press(listenButtons[0]);
+    await settle();
+
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(speakMock.mock.calls[0][0]).toMatchObject({
+      voiceId: SEED_VOICES.amanda,
+    });
   });
 });
 
