@@ -10,6 +10,14 @@
  * the eyes) go to --out (default /tmp/ph-avatar-check) so a human can eyeball
  * the poses and the face.
  *
+ * A second pass renders the hoodie preset at 3x the CSS size (same framing,
+ * more pixels per eye) and reads the eye pixels back: the upper lid must rest
+ * on the iris at Size 0 / 0.5 / 1 (iris exposure and sclera share inside a
+ * band per Size), the pupil must stay clear, and the Outfit full-body camera
+ * and the Eyes bust camera must show the same lid weight (TestFlight craft
+ * screenshots: a wide stare in full, a resting lid in bust, from a
+ * slope-scaled polygon offset that let the eyeball rim through the lids).
+ *
  *   node scripts/check-avatar-viewer.js [--out DIR] [--chrome PATH]
  *
  * Needs Google Chrome / Chromium. Talks CDP over --remote-debugging-pipe, so
@@ -243,11 +251,31 @@ const evaluate = async (cdp, session, expression) => {
 // Eyes_0 in bozo-male.glb: two spheres of radius 22.2 mm (sphere fit, 0.04 mm
 // residual), centred on eyeRoot_l/r.
 const EYEBALL_DIAMETER = 0.0444;
+const EYEBALL_RADIUS = EYEBALL_DIAMETER / 2;
 // TestFlight 1.2 (14) shipped a fixed eye-bone scale; the default look must
-// now sit clearly under it.
+// now sit clearly under it, and Size 1 must not go past it.
 const PREVIOUS_FIXED_EYE_SCALE = 0.7;
 // Rendered Eyes_0 height per look name, for the Size min/max spread check.
 const eyeHeights = {};
+
+// Pixel pass: the hoodie preset (Maxwell's craft walk) at Size 0 / 0.5 / 1
+// from the Outfit full-body camera and the Eyes bust camera, at 3x CSS size.
+const PIXEL_SCALE = 3;
+const PIXEL_PRESET = PRESETS[2];
+const PIXEL_SIZES = [0, 0.5, 1];
+// Per Size: the share of the projected iris disc left uncovered by the lids
+// and the sclera share of the opening, measured on the render. Before this
+// model the lid covered 0-8% of the iris (exposure 0.92-1.00) and the
+// full-body view showed 45-61% sclera; a resting adult lid covers 15-25%.
+const EYE_BANDS = {
+  0: { irisExposure: [0.55, 0.82], scleraShare: [0.1, 0.32] },
+  0.5: { irisExposure: [0.65, 0.88], scleraShare: [0.12, 0.36] },
+  1: { irisExposure: [0.72, 0.93], scleraShare: [0.15, 0.4] },
+};
+// Full vs bust: same lid weight, same iris share, within measurement noise
+// (head sway plus the 3x full-body eye being ~16 px in radius).
+const PARITY_IRIS_EXPOSURE = 0.1;
+const PARITY_SCLERA_SHARE = 0.08;
 
 const failures = [];
 const check = (name, condition, detail) => {
@@ -396,10 +424,12 @@ const assertLook = (entry, state, wantScale) => {
       `fwd.x l=${left.forward[0].toFixed(3)} r=${right.forward[0].toFixed(3)}`
     );
   }
+  // Calibrated on the render: 0.16-0.20 (1.2 (14)) left the iris 91-97%
+  // uncovered - a stare; the lid reaches the pupil at ~0.34.
   const lidDrop = state.eyes ? state.eyes.lidDrop : null;
   check(
-    `${tag}: upper lid lowered off the startled rest pose`,
-    typeof lidDrop === "number" && lidDrop >= 0.1 && lidDrop <= 0.27,
+    `${tag}: upper lid rests on the iris, off the pupil`,
+    typeof lidDrop === "number" && lidDrop >= 0.2 && lidDrop <= 0.31,
     `Shape_EyeLidHeight=${lidDrop}`
   );
   // TestFlight 1.2 (13): the whole eye was still too big, so the eye bones
@@ -454,6 +484,274 @@ const assertLook = (entry, state, wantScale) => {
     `${tag}: only the selected outfit is drawn`,
     wrongOutfit.length === 0,
     wrongOutfit.join(",")
+  );
+};
+
+// Decode a PNG (base64) inside the page - an Image drawn onto a 2D canvas -
+// and return its RGBA bytes; Node has no PNG decoder of its own.
+const pixelsOf = async (cdp, session, pngBase64) =>
+  evaluate(
+    cdp,
+    session,
+    `new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () {
+        var c = document.createElement("canvas");
+        c.width = img.width; c.height = img.height;
+        var ctx = c.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+        var d = ctx.getImageData(0, 0, c.width, c.height).data;
+        resolve({ width: c.width, height: c.height, data: Array.prototype.slice.call(d) });
+      };
+      img.onerror = function () { reject(new Error("png decode failed")); };
+      img.src = "data:image/png;base64,${pngBase64}";
+    })`
+  );
+
+// Classify the pixels of one eye. `cx`/`cy` is the eyeball centre in the
+// clip, `r` its radius in px, `rIris` the painted iris radius in px. Sclera
+// is bright and neutral; lid skin is warm and, for the hoodie preset's skin
+// tone, lum >= 124 in these renders while the brown iris's light inner ring
+// tops out near 100; anything else inside the iris disc (iris, pupil,
+// catchlight, lash line on the margin) counts as visible iris.
+const measureEye = (png, cx, cy, r, rIris, rPupil) => {
+  const { width, height, data } = png;
+  let sclera = 0;
+  let irisVisible = 0;
+  let pupilTopDark = 0;
+  let pupilTopSamples = 0;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const dx = x + 0.5 - cx;
+      const dy = y + 0.5 - cy;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 1.4 * r) continue;
+      const i = (y * width + x) * 4;
+      const R = data[i];
+      const G = data[i + 1];
+      const B = data[i + 2];
+      const mx = Math.max(R, G, B);
+      const mn = Math.min(R, G, B);
+      const lum = 0.299 * R + 0.587 * G + 0.114 * B;
+      const neutral = mx - mn < 24;
+      const isSclera = neutral && lum > 120;
+      const isSkin = !neutral && R > B + 30 && lum >= 112;
+      if (dist <= rIris * 1.04) {
+        if (!isSkin) irisVisible += 1;
+        // The upper part of the pupil on the centre line must still be
+        // pupil (dark): the lid has not come down over the pupil.
+        if (
+          Math.abs(dx) <= 0.1 * r &&
+          dy > -rPupil * 0.85 &&
+          dy < -rPupil * 0.45
+        ) {
+          pupilTopSamples += 1;
+          if (lum < 90) pupilTopDark += 1;
+        }
+      } else if (isSclera) {
+        sclera += 1;
+      }
+    }
+  }
+  return {
+    irisExposure: irisVisible / (Math.PI * rIris * rIris),
+    scleraShare: sclera / Math.max(1, sclera + irisVisible),
+    // A pupil under ~4 px (the full-body eye at Size 0) has a 2-pixel sample
+    // window that antialiasing decides; the lid position is camera-independent
+    // (see the parity checks), so the bust view carries this assertion.
+    pupilClear:
+      rPupil < 4
+        ? null
+        : pupilTopSamples > 0 && pupilTopDark / pupilTopSamples > 0.6,
+  };
+};
+
+const within = (value, [lo, hi]) => value >= lo && value <= hi;
+
+// Park the viewer's requestAnimationFrame loop so the idle breathing / head
+// sway cannot move the eye between the probe and the capture (a 3x
+// SwiftShader frame takes seconds). `stepFrames` then runs the parked
+// animate() callback by hand: one call = one rendered frame.
+const freezeAnimation = async (cdp, session) => {
+  await evaluate(
+    cdp,
+    session,
+    `window.__phRealRaf = window.__phRealRaf || window.requestAnimationFrame.bind(window);
+     window.__phParked = null;
+     window.requestAnimationFrame = function (cb) { window.__phParked = cb; return 0; };
+     true`
+  );
+  // The frame already scheduled with the real rAF fires once more and parks.
+  const started = Date.now();
+  while (Date.now() - started < 10000) {
+    if (await evaluate(cdp, session, "!!window.__phParked")) return;
+    await sleep(50);
+  }
+  throw new Error("viewer animation loop never parked");
+};
+
+const stepFrames = (cdp, session, count) =>
+  evaluate(
+    cdp,
+    session,
+    `(function () {
+      for (var i = 0; i < ${count}; i++) {
+        var cb = window.__phParked; window.__phParked = null;
+        if (cb) cb(performance.now());
+      }
+      return !!window.__phParked;
+    })()`
+  );
+
+const resumeAnimation = (cdp, session) =>
+  evaluate(
+    cdp,
+    session,
+    `(function () {
+      window.requestAnimationFrame = window.__phRealRaf;
+      var cb = window.__phParked; window.__phParked = null;
+      if (cb) window.requestAnimationFrame(cb);
+      return true;
+    })()`
+  );
+
+const pixelPass = async (cdp, session) => {
+  const width = WIDTH * PIXEL_SCALE;
+  const height = HEIGHT * PIXEL_SCALE;
+  await cdp.send(
+    "Emulation.setDeviceMetricsOverride",
+    { width, height, deviceScaleFactor: 1, mobile: true },
+    session
+  );
+  // Let the viewer pick up the new size before parking the loop.
+  await evaluate(
+    cdp,
+    session,
+    "new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(function () { setTimeout(r, 80); }); }); })"
+  );
+  await freezeAnimation(cdp, session);
+  const irisRadius = await evaluate(
+    cdp,
+    session,
+    "[window.phViewerRig.IRIS_RADIUS, window.phViewerRig.PUPIL_RADIUS]"
+  );
+  const [IRIS_RADIUS, PUPIL_RADIUS] = irisRadius;
+  const results = {};
+  for (const eyeSize of PIXEL_SIZES) {
+    for (const viewMode of ["full", "bust"]) {
+      const look = { ...PIXEL_PRESET, eyeSize, viewMode, revealBody: false };
+      const tag = `pixels outfit2-${viewMode}-size${eyeSize}`;
+      await evaluate(
+        cdp,
+        session,
+        `window.applyLook(${JSON.stringify(look)}); true`
+      );
+      const stillParked = await stepFrames(cdp, session, 2);
+      check(`${tag}: rendered two frames with the animation parked`, stillParked);
+      const state = await evaluate(cdp, session, "window.phViewerState()");
+      const irisSize = await evaluate(
+        cdp,
+        session,
+        `window.phViewerRig.irisSizeFor(${eyeSize})`
+      );
+      const eyes = [];
+      for (const bone of ["eyeRoot_l", "eyeRoot_r"]) {
+        const gaze = state.eyes.gaze[bone];
+        if (!gaze || !gaze.screen) continue;
+        const r = EYEBALL_RADIUS * gaze.scale * gaze.screen.pxPerMetre;
+        const rIris = r * Math.sin((IRIS_RADIUS * irisSize * Math.PI) / 2);
+        const rPupil = r * Math.sin((PUPIL_RADIUS * irisSize * Math.PI) / 2);
+        const half = 1.6 * r;
+        const clip = {
+          x: gaze.screen.x - half,
+          y: gaze.screen.y - half,
+          width: 2 * half,
+          height: 2 * half,
+          scale: 1,
+        };
+        const shot = await cdp.send(
+          "Page.captureScreenshot",
+          { format: "png", clip },
+          session
+        );
+        const png = await pixelsOf(cdp, session, shot.data);
+        const scaleX = png.width / clip.width;
+        const scaleY = png.height / clip.height;
+        eyes.push(
+          measureEye(
+            png,
+            (gaze.screen.x - clip.x) * scaleX,
+            (gaze.screen.y - clip.y) * scaleY,
+            r * scaleX,
+            rIris * scaleX,
+            rPupil * scaleX
+          )
+        );
+        if (bone === "eyeRoot_l") {
+          fs.writeFileSync(
+            path.join(OUT_DIR, `pixels-outfit2-${viewMode}-size${eyeSize}.png`),
+            Buffer.from(shot.data, "base64")
+          );
+        }
+      }
+      check(`${tag}: both eyes located on screen`, eyes.length === 2);
+      if (eyes.length !== 2) continue;
+      const measurable = eyes.every((eye) => eye.pupilClear !== null);
+      const avg = {
+        irisExposure: (eyes[0].irisExposure + eyes[1].irisExposure) / 2,
+        scleraShare: (eyes[0].scleraShare + eyes[1].scleraShare) / 2,
+        pupilClear: measurable ? eyes[0].pupilClear && eyes[1].pupilClear : null,
+      };
+      results[`${viewMode}-${eyeSize}`] = avg;
+      const band = EYE_BANDS[eyeSize];
+      check(
+        `${tag}: upper lid rests on the iris (exposure in band)`,
+        within(avg.irisExposure, band.irisExposure),
+        `irisExposure=${avg.irisExposure.toFixed(3)} want ${band.irisExposure.join("..")}`
+      );
+      check(
+        `${tag}: iris, not sclera, carries the eye (sclera share in band)`,
+        within(avg.scleraShare, band.scleraShare),
+        `scleraShare=${avg.scleraShare.toFixed(3)} want ${band.scleraShare.join("..")}`
+      );
+      if (viewMode === "bust") {
+        check(
+          `${tag}: lid stays above the pupil`,
+          avg.pupilClear === true,
+          avg.pupilClear === null ? "pupil under 4 px, not measurable" : ""
+        );
+      }
+    }
+    const full = results[`full-${eyeSize}`];
+    const bust = results[`bust-${eyeSize}`];
+    if (full && bust) {
+      check(
+        `pixels size${eyeSize}: Outfit full-body and Eyes bust show the same lid weight`,
+        Math.abs(full.irisExposure - bust.irisExposure) <= PARITY_IRIS_EXPOSURE,
+        `irisExposure full=${full.irisExposure.toFixed(3)} bust=${bust.irisExposure.toFixed(3)}`
+      );
+      check(
+        `pixels size${eyeSize}: Outfit full-body and Eyes bust show the same sclera share`,
+        Math.abs(full.scleraShare - bust.scleraShare) <= PARITY_SCLERA_SHARE,
+        `scleraShare full=${full.scleraShare.toFixed(3)} bust=${bust.scleraShare.toFixed(3)}`
+      );
+    }
+  }
+  // Size must still read as a monotone change in the eye, not just the lid.
+  const small = results["bust-0"];
+  const large = results["bust-1"];
+  if (small && large) {
+    check(
+      "pixels: small eyes carry more iris than large eyes (sclera share grows with Size)",
+      small.scleraShare < large.scleraShare,
+      `Size 0 ${small.scleraShare.toFixed(3)} vs Size 1 ${large.scleraShare.toFixed(3)}`
+    );
+  }
+  await resumeAnimation(cdp, session);
+  await cdp.send(
+    "Emulation.setDeviceMetricsOverride",
+    { width: WIDTH, height: HEIGHT, deviceScaleFactor: 1, mobile: true },
+    session
   );
 };
 
@@ -544,9 +842,15 @@ const main = async () => {
         Math.abs(exposedDefault - scaleDefault) < 1e-9,
       `eyeScaleFor(0.5)=${scaleDefault} EYE_SCALE=${exposedDefault}`
     );
+    // A beauty band, not a pinprick-to-saucer range: Size 0 stays a modest
+    // small eye (>= 0.45) and Size 1 tops out at the 1.2 (14) eye; the lid
+    // and iris carry the rest of the small/large character.
     check(
-      "Eyes Size min -> max spans a visible whole-eye scale range",
-      scaleMin <= 0.5 && scaleMax - scaleMin >= 0.25 && scaleMax <= 0.85,
+      "Eyes Size min -> max spans a visible whole-eye beauty band",
+      scaleMin >= 0.45 &&
+        scaleMin <= 0.5 &&
+        scaleMax - scaleMin >= 0.22 &&
+        scaleMax <= PREVIOUS_FIXED_EYE_SCALE + 1e-9,
       `min=${scaleMin} max=${scaleMax}`
     );
     for (const entry of LOOKS) {
@@ -596,19 +900,20 @@ const main = async () => {
       }
     }
     // The complaint on 1.2 (14): Size min and max "barely differ" (Eyes_0
-    // 31.2 -> 31.7 mm). The rendered eyeball at Size 1 must be at least half
-    // again as tall as at Size 0.
+    // 31.2 -> 31.7 mm). The rendered eyeball at Size 1 must still be about
+    // half again as tall as at Size 0 (0.46 -> 0.70 is 1.52x nominal).
     const minHeight = eyeHeights[EYES_MIN_LOOK];
     const maxHeight = eyeHeights[EYES_MAX_LOOK];
     check(
       "Eyes Size max renders a clearly bigger eyeball than Size min",
       typeof minHeight === "number" &&
         typeof maxHeight === "number" &&
-        maxHeight / minHeight >= 1.5,
+        maxHeight / minHeight >= 1.45,
       `Eyes_0 height min ${(minHeight * 1000).toFixed(1)} mm, max ${(
         maxHeight * 1000
       ).toFixed(1)} mm`
     );
+    await pixelPass(cdp, sessionId);
   } finally {
     await cdp.close();
     server.close();
