@@ -3,11 +3,12 @@
  * Renders assets/avatar-engine/viewer-page.html in headless Chrome (software
  * WebGL) and asserts what the 捏人 preview must show for every outfit: the
  * whole figure in frame, both hands drawn and on screen, the eyeball mesh
- * inside the head and scaled down with its bones, both irises converged on the
- * camera under a lowered upper lid, hair on the head, one posed master
- * skeleton. Screenshots (plus a 4x
- * close-up of the eyes) go to --out (default /tmp/ph-avatar-check) so a human
- * can eyeball the poses and the face.
+ * inside the head and scaled down with its bones by the look's Eyes Size
+ * (eyeScaleFor: min clearly smaller than max, default under the old fixed
+ * 0.70), both irises converged on the camera under a lowered upper lid, hair
+ * on the head, one posed master skeleton. Screenshots (plus a 4x close-up of
+ * the eyes) go to --out (default /tmp/ph-avatar-check) so a human can eyeball
+ * the poses and the face.
  *
  *   node scripts/check-avatar-viewer.js [--out DIR] [--chrome PATH]
  *
@@ -123,6 +124,18 @@ LOOKS.push({
   name: "outfit0-body-reveal",
   look: { ...PRESETS[0], viewMode: "full", revealBody: true },
 });
+// The Eyes tab's Size slider at both ends, on the jacket preset TestFlight
+// 1.2 (14) was walked with: the two renders must differ visibly.
+const EYES_MIN_LOOK = "outfit1-bust-eyes-min";
+const EYES_MAX_LOOK = "outfit1-bust-eyes-max";
+LOOKS.push({
+  name: EYES_MIN_LOOK,
+  look: { ...PRESETS[1], eyeSize: 0, viewMode: "bust", revealBody: false },
+});
+LOOKS.push({
+  name: EYES_MAX_LOOK,
+  look: { ...PRESETS[1], eyeSize: 1, viewMode: "bust", revealBody: false },
+});
 
 const findChrome = () =>
   CHROME_CANDIDATES.find((candidate) => fs.existsSync(candidate));
@@ -230,8 +243,11 @@ const evaluate = async (cdp, session, expression) => {
 // Eyes_0 in bozo-male.glb: two spheres of radius 22.2 mm (sphere fit, 0.04 mm
 // residual), centred on eyeRoot_l/r.
 const EYEBALL_DIAMETER = 0.0444;
-// Read from window.phViewerRig once the page is up.
-let eyeScale = NaN;
+// TestFlight 1.2 (14) shipped a fixed eye-bone scale; the default look must
+// now sit clearly under it.
+const PREVIOUS_FIXED_EYE_SCALE = 0.7;
+// Rendered Eyes_0 height per look name, for the Size min/max spread check.
+const eyeHeights = {};
 
 const failures = [];
 const check = (name, condition, detail) => {
@@ -275,7 +291,7 @@ const eyeClip = (frame) => {
 };
 const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
-const assertLook = (entry, state) => {
+const assertLook = (entry, state, wantScale) => {
   const tag = entry.name;
   const full = entry.look.viewMode !== "bust";
   const meshes = state.meshes || {};
@@ -386,25 +402,28 @@ const assertLook = (entry, state) => {
     typeof lidDrop === "number" && lidDrop >= 0.1 && lidDrop <= 0.27,
     `Shape_EyeLidHeight=${lidDrop}`
   );
-  // TestFlight 1.2 (13): the whole eye was still too big. The eye bones carry
-  // EYE_SCALE (0.65..0.75), and the Eyes_0 box - two 22.2 mm spheres - must
-  // be that much shorter than the unscaled 44.4 mm.
+  // TestFlight 1.2 (13): the whole eye was still too big, so the eye bones
+  // are scaled. 1.2 (14): a fixed 0.70 at every Size, so the slider did
+  // nothing visible. The bones must carry eyeScaleFor(look.eyeSize), and the
+  // Eyes_0 box - two 22.2 mm spheres - must be that fraction of 44.4 mm.
   if (left && right) {
     check(
-      `${tag}: eye bones scaled by EYE_SCALE (25-35% smaller eye)`,
-      eyeScale > 0.64 &&
-        eyeScale < 0.76 &&
-        Math.abs(left.scale - eyeScale) < 1e-6 &&
-        Math.abs(right.scale - eyeScale) < 1e-6,
-      `EYE_SCALE=${eyeScale} l=${left.scale} r=${right.scale}`
+      `${tag}: eye bones scaled by eyeScaleFor(eyeSize=${entry.look.eyeSize})`,
+      typeof wantScale === "number" &&
+        wantScale > 0.3 &&
+        wantScale < 0.9 &&
+        Math.abs(left.scale - wantScale) < 1e-6 &&
+        Math.abs(right.scale - wantScale) < 1e-6,
+      `want=${wantScale} l=${left.scale} r=${right.scale}`
     );
   }
   if (eyes && eyes.box) {
     const height = eyes.box.max[1] - eyes.box.min[1];
-    const want = EYEBALL_DIAMETER * eyeScale;
+    const want = EYEBALL_DIAMETER * wantScale;
+    eyeHeights[tag] = height;
     check(
       `${tag}: eyeballs shrunk with the bones`,
-      Math.abs(height - want) < 0.004 && height < EYEBALL_DIAMETER * 0.8,
+      Math.abs(height - want) < 0.002 && height < EYEBALL_DIAMETER * 0.85,
       `Eyes_0 height ${height.toFixed(4)} m, want ${want.toFixed(4)}`
     );
   }
@@ -503,15 +522,32 @@ const main = async () => {
         "viewer-page.html has no phViewerState probe; nothing to assert"
       );
     }
-    eyeScale = await evaluate(
+    const eyeScaleRange = await evaluate(
       cdp,
       sessionId,
-      "window.phViewerRig && window.phViewerRig.EYE_SCALE"
+      "window.phViewerRig && typeof window.phViewerRig.eyeScaleFor === 'function' && [window.phViewerRig.eyeScaleFor(0), window.phViewerRig.eyeScaleFor(0.5), window.phViewerRig.eyeScaleFor(1), window.phViewerRig.EYE_SCALE]"
     );
     check(
-      "viewer exposes EYE_SCALE",
-      typeof eyeScale === "number",
-      String(eyeScale)
+      "viewer exposes eyeScaleFor and EYE_SCALE",
+      Array.isArray(eyeScaleRange) &&
+        eyeScaleRange.every((v) => typeof v === "number"),
+      JSON.stringify(eyeScaleRange)
+    );
+    if (!Array.isArray(eyeScaleRange)) {
+      throw new Error("viewer-page.html has no eyeScaleFor; nothing to assert");
+    }
+    const [scaleMin, scaleDefault, scaleMax, exposedDefault] = eyeScaleRange;
+    check(
+      `default Eyes Size scales the eye under the 1.2 (14) fixed ${PREVIOUS_FIXED_EYE_SCALE}`,
+      scaleDefault <= PREVIOUS_FIXED_EYE_SCALE - 0.05 &&
+        scaleDefault >= 0.5 &&
+        Math.abs(exposedDefault - scaleDefault) < 1e-9,
+      `eyeScaleFor(0.5)=${scaleDefault} EYE_SCALE=${exposedDefault}`
+    );
+    check(
+      "Eyes Size min -> max spans a visible whole-eye scale range",
+      scaleMin <= 0.5 && scaleMax - scaleMin >= 0.25 && scaleMax <= 0.85,
+      `min=${scaleMin} max=${scaleMax}`
     );
     for (const entry of LOOKS) {
       await evaluate(
@@ -525,7 +561,12 @@ const main = async () => {
         "new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(function () { setTimeout(r, 80); }); }); })"
       );
       const state = await evaluate(cdp, sessionId, "window.phViewerState()");
-      assertLook(entry, state);
+      const wantScale = await evaluate(
+        cdp,
+        sessionId,
+        `window.phViewerRig.eyeScaleFor(${JSON.stringify(entry.look.eyeSize)})`
+      );
+      assertLook(entry, state, wantScale);
       const shot = await cdp.send(
         "Page.captureScreenshot",
         { format: "png" },
@@ -554,6 +595,20 @@ const main = async () => {
         console.log(`     close-up   ${eyesFile}`);
       }
     }
+    // The complaint on 1.2 (14): Size min and max "barely differ" (Eyes_0
+    // 31.2 -> 31.7 mm). The rendered eyeball at Size 1 must be at least half
+    // again as tall as at Size 0.
+    const minHeight = eyeHeights[EYES_MIN_LOOK];
+    const maxHeight = eyeHeights[EYES_MAX_LOOK];
+    check(
+      "Eyes Size max renders a clearly bigger eyeball than Size min",
+      typeof minHeight === "number" &&
+        typeof maxHeight === "number" &&
+        maxHeight / minHeight >= 1.5,
+      `Eyes_0 height min ${(minHeight * 1000).toFixed(1)} mm, max ${(
+        maxHeight * 1000
+      ).toFixed(1)} mm`
+    );
   } finally {
     await cdp.close();
     server.close();
