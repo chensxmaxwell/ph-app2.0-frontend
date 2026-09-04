@@ -9,6 +9,7 @@ import {
   useNavigation,
   useRoute,
 } from "@react-navigation/native";
+import { voiceForPerson } from "../../services/voices";
 import { useCompanions } from "../../store/companions";
 import { useChat } from "../chat/store";
 import { usePersonFace } from "../avatar/use-person-face";
@@ -48,6 +49,8 @@ export const LoveCallScreen = () => {
     clearLayerTimer,
   } = useLoveSession();
   const {
+    companion,
+    thread,
     companionId: partnerId,
     name,
     personality,
@@ -79,6 +82,7 @@ export const LoveCallScreen = () => {
     personality,
     story,
     history,
+    voiceId: voiceForPerson({ id: partnerId, thread, companion }).id,
     connectDelayMs,
     onExchange: (userText, reply) =>
       patchChat((current) => ({

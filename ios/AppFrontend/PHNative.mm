@@ -4,12 +4,14 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Speech/Speech.h>
 
-@interface PHNative : NSObject <RCTBridgeModule, AVSpeechSynthesizerDelegate>
+@interface PHNative : NSObject <RCTBridgeModule, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate>
 @end
 
 @interface PHNative ()
 @property (nonatomic, strong) AVSpeechSynthesizer *synthesizer;
 @property (nonatomic, copy) RCTPromiseResolveBlock speakResolve;
+@property (nonatomic, strong) AVAudioPlayer *audioPlayer;
+@property (nonatomic, copy) RCTPromiseResolveBlock playResolve;
 @property (nonatomic, strong) SFSpeechRecognizer *recognizer;
 @property (nonatomic, strong) SFSpeechAudioBufferRecognitionRequest *speechRequest;
 @property (nonatomic, strong) SFSpeechRecognitionTask *speechTask;
@@ -88,11 +90,19 @@ RCT_EXPORT_MODULE();
 // output route: the next AVSpeechSynthesizer utterance would be silent. A
 // call is hold → recognize → speak, so before speaking move the session to a
 // playback category (through the speaker, ducking other apps) and activate it.
+// The launch default (SoloAmbient) follows the ring/silent switch, so a
+// Listen tap on a muted phone was silent too: any category that is not
+// already playback-capable is moved to Playback here.
 - (void)ensurePlaybackAudioSession
 {
   @try {
     AVAudioSession *session = [AVAudioSession sharedInstance];
-    if ([session.category isEqualToString:AVAudioSessionCategoryRecord]) {
+    NSString *category = session.category;
+    BOOL playbackCapable =
+        [category isEqualToString:AVAudioSessionCategoryPlayback] ||
+        [category isEqualToString:AVAudioSessionCategoryPlayAndRecord] ||
+        [category isEqualToString:AVAudioSessionCategoryMultiRoute];
+    if (!playbackCapable) {
       [session setCategory:AVAudioSessionCategoryPlayback
                       mode:AVAudioSessionModeDefault
                    options:AVAudioSessionCategoryOptionDuckOthers
@@ -103,8 +113,105 @@ RCT_EXPORT_MODULE();
   }
 }
 
+- (void)finishPendingSpeak
+{
+  if (self.speakResolve) {
+    RCTPromiseResolveBlock pending = self.speakResolve;
+    self.speakResolve = nil;
+    pending(@YES);
+  }
+}
+
+- (void)finishPendingPlay:(BOOL)played
+{
+  if (self.playResolve) {
+    RCTPromiseResolveBlock pending = self.playResolve;
+    self.playResolve = nil;
+    pending(played ? @YES : @NO);
+  }
+}
+
+// Stops the cloud-voice player (if any) and settles its promise.
+- (void)stopAudioPlayer
+{
+  @try {
+    if (self.audioPlayer) {
+      [self.audioPlayer stop];
+      self.audioPlayer.delegate = nil;
+      self.audioPlayer = nil;
+    }
+  } @catch (__unused NSException *exception) {
+  }
+  [self finishPendingPlay:YES];
+}
+
+static NSString *PHStringOption(NSDictionary *options, NSString *key)
+{
+  id value = [options isKindOfClass:[NSDictionary class]] ? options[key] : nil;
+  return [value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0
+             ? (NSString *)value
+             : nil;
+}
+
+// The on-device fallback voice. An exact identifier wins; otherwise the best
+// installed voice of the wanted gender for the language (exact locale first,
+// then the same language, higher quality first); otherwise the language's
+// default. Without a gender match the system default is what iOS has —
+// Chinese ships Ting-Ting / Yu-shu (female) and Li-mu (male).
+- (AVSpeechSynthesisVoice *)voiceForOptions:(NSDictionary *)options
+{
+  NSString *identifier = PHStringOption(options, @"voiceIdentifier");
+  if (identifier) {
+    AVSpeechSynthesisVoice *exact = [AVSpeechSynthesisVoice voiceWithIdentifier:identifier];
+    if (exact) {
+      return exact;
+    }
+  }
+  NSString *language = PHStringOption(options, @"language");
+  if (!language) {
+    language = [AVSpeechSynthesisVoice currentLanguageCode];
+  }
+  NSString *gender = [PHStringOption(options, @"gender") lowercaseString];
+  AVSpeechSynthesisVoiceGender wanted = AVSpeechSynthesisVoiceGenderUnspecified;
+  if ([gender isEqualToString:@"female"]) {
+    wanted = AVSpeechSynthesisVoiceGenderFemale;
+  } else if ([gender isEqualToString:@"male"]) {
+    wanted = AVSpeechSynthesisVoiceGenderMale;
+  }
+  if (wanted != AVSpeechSynthesisVoiceGenderUnspecified) {
+    NSString *primary = [[language componentsSeparatedByString:@"-"] firstObject];
+    AVSpeechSynthesisVoice *best = nil;
+    NSInteger bestScore = -1;
+    for (AVSpeechSynthesisVoice *voice in [AVSpeechSynthesisVoice speechVoices]) {
+      if (voice.gender != wanted) {
+        continue;
+      }
+      NSInteger score = -1;
+      if ([voice.language caseInsensitiveCompare:language] == NSOrderedSame) {
+        score = 20;
+      } else if ([[[voice.language componentsSeparatedByString:@"-"] firstObject]
+                     caseInsensitiveCompare:primary] == NSOrderedSame) {
+        score = 10;
+      }
+      if (score < 0) {
+        continue;
+      }
+      score += (NSInteger)voice.quality;
+      if (score > bestScore) {
+        bestScore = score;
+        best = voice;
+      }
+    }
+    if (best) {
+      return best;
+    }
+  }
+  return [AVSpeechSynthesisVoice voiceWithLanguage:language];
+}
+
 RCT_REMAP_METHOD(speak,
                  speak:(NSString *)text
+                 options:(NSDictionary *)options
                  resolver:(RCTPromiseResolveBlock)resolve
                  rejecter:(RCTPromiseRejectBlock)reject)
 {
@@ -115,11 +222,8 @@ RCT_REMAP_METHOD(speak,
         self.synthesizer.delegate = self;
       }
       [self ensurePlaybackAudioSession];
-      if (self.speakResolve) {
-        RCTPromiseResolveBlock pending = self.speakResolve;
-        self.speakResolve = nil;
-        pending(@YES);
-      }
+      [self stopAudioPlayer];
+      [self finishPendingSpeak];
       [self.synthesizer stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
       NSString *utteranceText = [text isKindOfClass:[NSString class]] ? text : @"";
       if (utteranceText.length == 0) {
@@ -129,6 +233,10 @@ RCT_REMAP_METHOD(speak,
       self.speakResolve = resolve;
       AVSpeechUtterance *utterance =
           [AVSpeechUtterance speechUtteranceWithString:utteranceText];
+      AVSpeechSynthesisVoice *voice = [self voiceForOptions:options];
+      if (voice) {
+        utterance.voice = voice;
+      }
       [self.synthesizer speakUtterance:utterance];
     } @catch (__unused NSException *exception) {
       resolve(@NO);
@@ -145,33 +253,91 @@ RCT_REMAP_METHOD(stopSpeaking,
       [self.synthesizer stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
     } @catch (__unused NSException *exception) {
     }
-    if (self.speakResolve) {
-      RCTPromiseResolveBlock pending = self.speakResolve;
-      self.speakResolve = nil;
-      pending(@YES);
-    }
+    [self stopAudioPlayer];
+    [self finishPendingSpeak];
     resolve(@YES);
   });
 }
 
-- (void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer
- didFinishSpeechUtterance:(AVSpeechUtterance *)utterance
+// The cloud voice: base64 MP3 pieces from Doubao TTS, decoded and joined
+// here (JS has no byte buffers to concatenate them with), played with
+// AVAudioPlayer on the playback session. Resolves YES when playback ends
+// (or is stopped), NO when there was nothing playable.
+RCT_REMAP_METHOD(playAudio,
+                 playAudio:(NSArray *)chunks
+                 resolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject)
 {
-  if (self.speakResolve) {
-    RCTPromiseResolveBlock pending = self.speakResolve;
-    self.speakResolve = nil;
-    pending(@YES);
-  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    @try {
+      NSMutableData *data = [NSMutableData new];
+      if ([chunks isKindOfClass:[NSArray class]]) {
+        for (id chunk in chunks) {
+          if (![chunk isKindOfClass:[NSString class]]) {
+            continue;
+          }
+          NSData *piece = [[NSData alloc]
+              initWithBase64EncodedString:(NSString *)chunk
+                                  options:NSDataBase64DecodingIgnoreUnknownCharacters];
+          if (piece.length) {
+            [data appendData:piece];
+          }
+        }
+      }
+      if (data.length == 0) {
+        resolve(@NO);
+        return;
+      }
+      [self ensurePlaybackAudioSession];
+      [self.synthesizer stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+      [self finishPendingSpeak];
+      [self stopAudioPlayer];
+      NSError *error = nil;
+      AVAudioPlayer *player = [[AVAudioPlayer alloc] initWithData:data error:&error];
+      if (!player || error) {
+        resolve(@NO);
+        return;
+      }
+      player.delegate = self;
+      self.audioPlayer = player;
+      self.playResolve = resolve;
+      if (![player play]) {
+        self.audioPlayer = nil;
+        self.playResolve = nil;
+        resolve(@NO);
+      }
+    } @catch (__unused NSException *exception) {
+      resolve(@NO);
+    }
+  });
 }
 
-- (void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer
-  didCancelSpeechUtterance:(AVSpeechUtterance *)utterance
+- (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)player successfully:(__unused BOOL)flag
 {
-  if (self.speakResolve) {
-    RCTPromiseResolveBlock pending = self.speakResolve;
-    self.speakResolve = nil;
-    pending(@YES);
+  if (player == self.audioPlayer) {
+    self.audioPlayer = nil;
   }
+  [self finishPendingPlay:YES];
+}
+
+- (void)audioPlayerDecodeErrorDidOccur:(AVAudioPlayer *)player error:(__unused NSError *)error
+{
+  if (player == self.audioPlayer) {
+    self.audioPlayer = nil;
+  }
+  [self finishPendingPlay:NO];
+}
+
+- (void)speechSynthesizer:(__unused AVSpeechSynthesizer *)synthesizer
+ didFinishSpeechUtterance:(__unused AVSpeechUtterance *)utterance
+{
+  [self finishPendingSpeak];
+}
+
+- (void)speechSynthesizer:(__unused AVSpeechSynthesizer *)synthesizer
+  didCancelSpeechUtterance:(__unused AVSpeechUtterance *)utterance
+{
+  [self finishPendingSpeak];
 }
 
 RCT_REMAP_METHOD(startVoiceInput,
@@ -420,6 +586,12 @@ RCT_REMAP_METHOD(syncAlarms,
 // app's AVAudioSession, so the speech recognizer and the synthesizer keep
 // the session to themselves. Runs while attached to a window, stops when
 // detached. JS gates on UIManager having "PHCameraPreview" before rendering.
+//
+// Status events: `authorized` (permission granted, session configured),
+// `running` (the session started delivering — only this clears the PiP
+// copy), `interrupted` (system paused the camera), `denied`, `unavailable`
+// (no camera / runtime error, with the reason). TestFlight 1.2 (14) showed
+// an empty dark PiP with nothing to say why; every state now reports.
 @interface PHCameraPreviewView : UIView
 @property (nonatomic, copy) NSString *position;
 @property (nonatomic, copy) RCTDirectEventBlock onStatusChange;
@@ -440,6 +612,12 @@ RCT_REMAP_METHOD(syncAlarms,
     _position = @"front";
     _sessionQueue = dispatch_queue_create("house.pleasure.camera-preview",
                                           DISPATCH_QUEUE_SERIAL);
+    // Back from Settings after allowing the camera, or from a system
+    // interruption: try again without the JS side remounting the view.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(applicationDidBecomeActive:)
+                                                 name:UIApplicationDidBecomeActiveNotification
+                                               object:nil];
   }
   return self;
 }
@@ -458,6 +636,57 @@ RCT_REMAP_METHOD(syncAlarms,
   } else {
     [self stopPreview];
   }
+}
+
+- (void)applicationDidBecomeActive:(__unused NSNotification *)note
+{
+  if (self.window) {
+    [self startPreview];
+  }
+}
+
+- (void)observeSession:(AVCaptureSession *)session
+{
+  NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+  [center addObserver:self
+             selector:@selector(sessionDidStartRunning:)
+                 name:AVCaptureSessionDidStartRunningNotification
+               object:session];
+  [center addObserver:self
+             selector:@selector(sessionRuntimeError:)
+                 name:AVCaptureSessionRuntimeErrorNotification
+               object:session];
+  [center addObserver:self
+             selector:@selector(sessionWasInterrupted:)
+                 name:AVCaptureSessionWasInterruptedNotification
+               object:session];
+  [center addObserver:self
+             selector:@selector(sessionInterruptionEnded:)
+                 name:AVCaptureSessionInterruptionEndedNotification
+               object:session];
+}
+
+- (void)sessionDidStartRunning:(__unused NSNotification *)note
+{
+  [self emitStatus:@"running" message:@""];
+}
+
+- (void)sessionRuntimeError:(NSNotification *)note
+{
+  NSError *error = note.userInfo[AVCaptureSessionErrorKey];
+  NSString *reason = [error isKindOfClass:[NSError class]] ? error.localizedDescription : nil;
+  [self emitStatus:@"unavailable"
+           message:reason.length ? reason : @"The camera could not start."];
+}
+
+- (void)sessionWasInterrupted:(__unused NSNotification *)note
+{
+  [self emitStatus:@"interrupted" message:@"Camera paused by the system."];
+}
+
+- (void)sessionInterruptionEnded:(__unused NSNotification *)note
+{
+  [self emitStatus:@"running" message:@""];
 }
 
 - (void)emitStatus:(NSString *)status message:(NSString *)message
@@ -570,6 +799,9 @@ RCT_REMAP_METHOD(syncAlarms,
     [self.layer addSublayer:layer];
     _previewLayer = layer;
     _session = session;
+    [self observeSession:session];
+    // `running` is posted by the session itself once frames flow; a session
+    // that fails to start posts a runtime error instead of staying black.
     dispatch_async(_sessionQueue, ^{
       [session startRunning];
     });
@@ -594,6 +826,7 @@ RCT_REMAP_METHOD(syncAlarms,
 
 - (void)dealloc
 {
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
   [self stopPreview];
 }
 

@@ -86,7 +86,31 @@ export const CompanionAiScreen = () => {
           autoCapitalize="none"
           autoCorrect={false}
         />
-        <TouchableOpacity style={styles.save} onPress={save}>
+        <Text style={styles.label}>Voice key (豆包语音)</Text>
+        <TextInput
+          testID="companion-ai-tts-key"
+          value={config.ttsApiKey ?? ""}
+          onChangeText={(ttsApiKey) =>
+            setConfig((current) => ({ ...current, ttsApiKey }))
+          }
+          style={styles.input}
+          placeholder="Doubao speech API key"
+          placeholderTextColor={colors.grayLighter}
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+        />
+        <Text style={styles.fieldHint}>
+          Calls and Listen speak with Doubao Seed-TTS 2.0 voices. The speech
+          console issues its own API key (豆包语音 → API Key 管理); the Ark key
+          above is not accepted there. Without one, replies use an on-device
+          voice of the companion's gender.
+        </Text>
+        <TouchableOpacity
+          testID="companion-ai-save"
+          style={styles.save}
+          onPress={save}
+        >
           <Text style={styles.saveText}>Save</Text>
         </TouchableOpacity>
         {status ? <Text style={styles.status}>{status}</Text> : null}
@@ -143,6 +167,13 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     color: colors.white,
     fontFamily: "Quicksand-Bold",
+  },
+  fieldHint: {
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 4,
   },
   save: {
     marginTop: 24,

@@ -11,6 +11,10 @@ export type LlmConfig = {
   apiKey: string;
   baseUrl: string;
   model: string;
+  // 豆包语音 (speech console) API key for cloud TTS; the speech console issues
+  // its own key, separate from the Ark key above. Optional: blobs saved
+  // before voices existed have none.
+  ttsApiKey?: string;
 };
 
 const envString = (value: unknown) =>
@@ -51,6 +55,8 @@ const parseStored = (raw: string, defaults: LlmConfig): LlmConfig => {
     apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey : defaults.apiKey,
     baseUrl: parsed.baseUrl || defaults.baseUrl,
     model: parsed.model || defaults.model,
+    ttsApiKey:
+      typeof parsed.ttsApiKey === "string" ? parsed.ttsApiKey : undefined,
   };
 };
 
@@ -90,6 +96,7 @@ export const saveLlmConfig = async (
       apiKey: next.apiKey,
       baseUrl: next.baseUrl.trim() || ARK_BASE_URL,
       model: next.model.trim() || ARK_MODEL,
+      ttsApiKey: next.ttsApiKey?.trim() || undefined,
     })
   );
 };

@@ -1,4 +1,5 @@
 import { ChatThread, DirectoryPerson } from "../screens/chat/types";
+import { SEED_VOICES } from "../services/voices";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -38,6 +39,7 @@ export const seedThreads = (now: number = Date.now()): ChatThread[] => {
       synced: false,
       request: "none",
       gender: "Male",
+      voiceId: SEED_VOICES.kevin,
       birthday: "05/25/1976",
       description:
         "Kevin is playful, attentive, and a little mischievous. He notices the small things and keeps the conversation close.",
@@ -86,6 +88,7 @@ export const seedThreads = (now: number = Date.now()): ChatThread[] => {
       synced: false,
       request: "none",
       gender: "Male",
+      voiceId: SEED_VOICES.chad,
       birthday: "13th April 2001",
       description: "Chad is direct, confident, and a little competitive.",
       personality: "Direct, confident, a little competitive.",
@@ -133,6 +136,7 @@ export const seedThreads = (now: number = Date.now()): ChatThread[] => {
       synced: false,
       request: "none",
       gender: "Female",
+      voiceId: SEED_VOICES.amanda,
       birthday: "13th April 2001",
       description:
         "Amanda likes late-night talks and getting straight to what you want.",

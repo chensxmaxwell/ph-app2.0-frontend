@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
+import { voiceForPerson } from "../../services/voices";
 import { usePersonFace } from "../avatar/use-person-face";
 import { CallBody } from "../call/call-body";
 import { useVoiceCall } from "../call/use-voice-call";
@@ -35,6 +36,7 @@ export const ChatCallScreen = () => {
     personality: thread?.personality,
     story: thread?.description,
     history,
+    voiceId: voiceForPerson({ id: threadId, thread }).id,
     onExchange: (userText, reply) =>
       recordCallExchange(threadId, userText, reply),
   });

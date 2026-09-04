@@ -12,11 +12,12 @@ import { colors } from "@common/styles/colors";
 import Minimize from "@images/minimize.svg";
 import PhoneDown from "@images/love/phone-down.svg";
 import MicroPhoneUnmute from "@images/microphone-unmute.svg";
+import PhoneUp from "@images/message/phone.svg";
 import type { CompanionFace } from "../avatar/face";
 import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
 import { CameraIcon } from "./camera-icon";
-import { callStatusLabel, holdButtonLabel } from "./status";
+import { callStatusLabel, holdButtonLabel, modeToggle } from "./status";
 import type { VoiceCall } from "./use-voice-call";
 import { VideoStage } from "./video-stage";
 
@@ -140,6 +141,7 @@ export const CallBody = ({
   const insets = useSafeAreaInsets();
   const speaking = call.phase === "speaking";
   const holding = call.phase === "listening";
+  const toggle = modeToggle(video);
 
   return (
     <View style={styles.root}>
@@ -221,9 +223,15 @@ export const CallBody = ({
             style={[styles.round, video && styles.roundOn]}
             activeOpacity={0.85}
           >
-            <CameraIcon size={s(35)} off={!video} />
+            <View testID={`call-mode-icon-${toggle.target}`}>
+              {toggle.target === "video" ? (
+                <CameraIcon size={s(35)} />
+              ) : (
+                <PhoneUp width={s(35)} height={s(35)} />
+              )}
+            </View>
           </TouchableOpacity>
-          <Text style={styles.controlLabel}>{video ? "Voice" : "Video"}</Text>
+          <Text style={styles.controlLabel}>{toggle.label}</Text>
         </View>
       </View>
     </View>

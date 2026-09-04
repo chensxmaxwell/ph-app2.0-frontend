@@ -51,6 +51,7 @@ import {
 import { useLoveSession } from "./session";
 import { LoveChatItem, LoveMode } from "./types";
 import { ttsSpeak, ttsStop } from "../../services/tts";
+import { voiceForPerson } from "../../services/voices";
 import { sanitizeComposerText } from "../../services/dictation-text";
 import { clearComposerAfterSubmit } from "../../services/composer-submit";
 
@@ -157,7 +158,12 @@ const Dialog = ({
   </View>
 );
 
-const renderChatItem = (item: LoveChatItem, name: string, listen: boolean) => {
+const renderChatItem = (
+  item: LoveChatItem,
+  name: string,
+  listen: boolean,
+  voiceId: string
+) => {
   switch (item.kind) {
     case "sync":
       return (
@@ -188,7 +194,10 @@ const renderChatItem = (item: LoveChatItem, name: string, listen: boolean) => {
           </View>
           {listen ? (
             <TouchableOpacity
-              onPress={() => ttsSpeak({ id: item.id, text: item.text })}
+              testID={`love-listen-${item.id}`}
+              onPress={() =>
+                ttsSpeak({ id: item.id, text: item.text, voiceId })
+              }
               hitSlop={8}
               style={styles.listenHit}
             >
@@ -214,6 +223,7 @@ export const LoveChatScreen = () => {
     useLoveSession();
   const {
     companion,
+    thread,
     companionId: partnerId,
     name,
     personality,
@@ -232,6 +242,8 @@ export const LoveChatScreen = () => {
   // Changing it happens in the wizard (create, or Edit persona) and in Chat
   // settings, not from this overlay.
   const { face } = usePersonFace(partnerId);
+  // Listen reads this person's bubbles in their own voice.
+  const voiceId = voiceForPerson({ id: partnerId, thread, companion }).id;
 
   const [draft, setDraft] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -416,7 +428,7 @@ export const LoveChatScreen = () => {
           ],
         }));
         if (listenRef.current) {
-          ttsSpeak({ id: replyId, text: reply });
+          ttsSpeak({ id: replyId, text: reply, voiceId });
         }
       })
       .catch((error) => {
@@ -571,7 +583,9 @@ export const LoveChatScreen = () => {
               contentContainerStyle={styles.messages}
               keyboardShouldPersistTaps="handled"
             >
-              {messages.map((item) => renderChatItem(item, name, listen))}
+              {messages.map((item) =>
+                renderChatItem(item, name, listen, voiceId)
+              )}
               {sendError ? (
                 <View style={styles.notice}>
                   <Text style={styles.noticeText}>{sendError}</Text>

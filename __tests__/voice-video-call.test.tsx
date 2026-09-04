@@ -1,5 +1,5 @@
 import React, { ReactNode } from "react";
-import { Image, Text, TouchableOpacity } from "react-native";
+import { Image, StyleSheet, Text, TouchableOpacity } from "react-native";
 import Svg from "react-native-svg";
 import renderer, {
   act,
@@ -26,6 +26,7 @@ import {
   saveLlmConfig,
 } from "../src/services/llm-config";
 import { configureTtsEngine } from "../src/services/tts";
+import { SEED_VOICES, voiceById } from "../src/services/voices";
 import { startVoiceInput, stopVoiceInput } from "../src/services/voice-input";
 import {
   Companion,
@@ -41,10 +42,21 @@ import {
 import { clearLoveSessionBoot } from "../src/screens/love/session-persist";
 import { ChatCallScreen } from "../src/screens/chat/call";
 import { LoveCallScreen } from "../src/screens/love/call";
+import { LoveChatScreen } from "../src/screens/love/chat";
 import { AvatarPreview } from "../src/screens/avatar/engine/AvatarPreview";
+import { useAvatarEngine } from "../src/screens/avatar/engine/AvatarEngineHost";
+import { InlineAvatarViewer } from "../src/screens/avatar/engine/InlineAvatarViewer";
 import { DEFAULT_DRAFT } from "../src/screens/avatar/context";
 import { CALL_CONNECT_DELAY_MS } from "../src/screens/call/use-voice-call";
-import { callStatusLabel, holdButtonLabel } from "../src/screens/call/status";
+import {
+  CAMERA_START_TIMEOUT_MS,
+  CAMERA_STARTING_COPY,
+} from "../src/screens/call/camera-preview";
+import {
+  callStatusLabel,
+  holdButtonLabel,
+  modeToggle,
+} from "../src/screens/call/status";
 
 /**
  * The phone icon on a Message thread and on Love chat used to open a timer
@@ -144,11 +156,14 @@ const stopVoice = stopVoiceInput as jest.Mock<typeof stopVoiceInput>;
 
 type ChatApi = ReturnType<typeof useChat>;
 type SessionApi = ReturnType<typeof useLoveSession>;
+type EngineApi = ReturnType<typeof useAvatarEngine>;
 let chat: ChatApi | null = null;
 let session: SessionApi | null = null;
+let engine: EngineApi | null = null;
 const Probe = () => {
   chat = useChat();
   session = useLoveSession();
+  engine = useAvatarEngine();
   return null;
 };
 
@@ -279,6 +294,9 @@ const stageFace = (root: ReactTestInstance) => {
 const cameraHosts = (root: ReactTestInstance) =>
   root.findAll((node) => String(node.type) === "PHCameraPreview");
 
+const webViews = (root: ReactTestInstance) =>
+  root.findAll((node) => String(node.type) === "MockWebView");
+
 const arkReply = (content: string) => ({
   ok: true,
   status: 200,
@@ -331,6 +349,7 @@ beforeEach(async () => {
   });
   chat = null;
   session = null;
+  engine = null;
   mockCameraAvailable = true;
   startVoice.mockReset();
   stopVoice.mockReset();
@@ -417,7 +436,12 @@ describe("Message thread voice call", () => {
     expect(body.messages.length).toBeGreaterThan(2);
 
     expect(speakMock).toHaveBeenCalledTimes(1);
-    expect(speakMock.mock.calls[0][0]).toMatchObject({ text: "我在呢。" });
+    // Spoken in Kevin's own (male) voice, not the system default.
+    expect(speakMock.mock.calls[0][0]).toMatchObject({
+      text: "我在呢。",
+      voiceId: SEED_VOICES.kevin,
+    });
+    expect(voiceById(SEED_VOICES.kevin)?.gender).toBe("male");
     const copy = texts(tree.root);
     expect(copy).toContain("Kevin is speaking");
     expect(copy).toContain("你好 Kevin");
@@ -480,6 +504,11 @@ describe("Message thread voice call", () => {
     await connect();
     await holdAndRelease(tree.root);
     expect(texts(tree.root)).toContain("Amanda is speaking");
+    // Amanda answers in a woman's voice.
+    expect(speakMock.mock.calls[0][0]).toMatchObject({
+      voiceId: SEED_VOICES.amanda,
+    });
+    expect(voiceById(SEED_VOICES.amanda)?.gender).toBe("female");
 
     press(touchable(tree.root, "call-video-toggle"));
     await settle();
@@ -506,6 +535,57 @@ describe("Message thread voice call", () => {
     expect(texts(tree.root)).toContain("Amanda is speaking");
   });
 
+  it("the mode toggle's icon and label agree: a camera to go to Video, a handset to go back to Voice", async () => {
+    // TestFlight 1.2 (14): in video mode the control showed a camera glyph
+    // under the word "Voice". Icon and label both name the target mode.
+    const tree = await mountMessageCall("amanda");
+    await connect();
+    const toggle = () => touchable(tree.root, "call-video-toggle");
+    // A View matches as both the composite and its host node: dedupe.
+    const iconIds = () =>
+      Array.from(
+        new Set(
+          toggle()
+            .findAll((node) =>
+              /^call-mode-icon-/.test(String(node.props?.testID))
+            )
+            .map((node) => String(node.props.testID))
+        )
+      );
+    const labelOf = () =>
+      texts(tree.root).filter((copy) => copy === "Video" || copy === "Voice");
+
+    expect(labelOf()).toEqual(["Video"]);
+    expect(iconIds()).toEqual(["call-mode-icon-video"]);
+
+    press(toggle());
+    await settle();
+    expect(labelOf()).toEqual(["Voice"]);
+    expect(iconIds()).toEqual(["call-mode-icon-voice"]);
+
+    press(toggle());
+    await settle();
+    expect(labelOf()).toEqual(["Video"]);
+    expect(iconIds()).toEqual(["call-mode-icon-video"]);
+  });
+
+  it("the portrait fills the video stage instead of drawing at the asset's own size", async () => {
+    // TestFlight 1.2 (14): Amanda's photo (girl.png, 786×676) sat at the
+    // stage's top-left at its intrinsic size — only hair, one eye and an ear
+    // were inside the rounded stage. RN's Image keeps the require()d asset's
+    // width/height unless the style sets its own, and absoluteFill does not.
+    const tree = await mountMessageCall("amanda");
+    await connect();
+    press(touchable(tree.root, "call-video-toggle"));
+    await settle();
+
+    const [portrait] = stageFace(tree.root).findAllByType(Image);
+    const style = StyleSheet.flatten(portrait.props.style);
+    expect(style.width).toBe("100%");
+    expect(style.height).toBe("100%");
+    expect(portrait.props.resizeMode).toBe("cover");
+  });
+
   it("video mode draws a crafted companion's 3D look on the stage, never a stock portrait", async () => {
     // A Kevin crafted in the wizard folds onto the seeded thread (one id).
     await saveCompanions("demo", {
@@ -519,14 +599,125 @@ describe("Message thread voice call", () => {
     await settle();
 
     const stage = stageFace(tree.root);
-    const preview = stage.findAllByType(AvatarPreview);
-    expect(preview).toHaveLength(1);
-    expect(preview[0].props.look).toEqual(
+    const viewer = stage.findAllByType(InlineAvatarViewer);
+    expect(viewer).toHaveLength(1);
+    expect(viewer[0].props.look).toEqual(
       lookFromCompanion({ ...nova, id: "kevin", name: "Kevin" })
     );
-    expect(preview[0].props.viewMode).toBe("bust");
+    expect(viewer[0].props.viewMode).toBe("bust");
+    // The call is a transparentModal, presented by UIKit above the RN root
+    // view where AvatarEngineHost floats its WebView, so a floated 3D face
+    // is invisible on a call: the stage hosts its own viewer WebView, inside
+    // its rounded, clipped box, and attaches no slot to the floating engine.
+    expect(webViews(stage)).toHaveLength(1);
+    expect(tree.root.findAllByType(AvatarPreview)).toHaveLength(0);
+    expect(engine?.slot ?? null).toBeNull();
+    // The vector face stands in until the viewer reports ready.
     expect(stage.findAllByType(Svg).length).toBeGreaterThan(0);
     expect(imageUris(tree.root).filter(isKevinPhoto)).toEqual([]);
+  });
+
+  it("the stage viewer drops the vector stand-in once the page is ready and offers Retry on error", async () => {
+    await saveCompanions("demo", {
+      companions: [{ ...nova, id: "kevin", name: "Kevin" }],
+      activeCompanionId: null,
+    });
+    const tree = await mountMessageCall("kevin");
+    await connect();
+    press(touchable(tree.root, "call-video-toggle"));
+    await settle();
+
+    const stage = stageFace(tree.root);
+    expect(stage.findAllByType(Svg).length).toBeGreaterThan(0);
+    act(() => {
+      webViews(stage)[0].props.onMessage({ nativeEvent: { data: "ready" } });
+    });
+    expect(stage.findAllByType(Svg)).toHaveLength(0);
+    expect(texts(stage)).not.toContain("Retry");
+
+    act(() => {
+      webViews(stage)[0].props.onMessage({
+        nativeEvent: { data: "error:WebGL is unavailable" },
+      });
+    });
+    const copy = texts(stage).join("\n");
+    expect(copy).toMatch(/Couldn’t load 3D preview/);
+    expect(copy).toMatch(/WebGL is unavailable/);
+    press(touchable(stage, "call-stage-retry"));
+    expect(stage.findAllByType(Svg).length).toBeGreaterThan(0);
+    expect(texts(stage)).not.toContain("Retry");
+  });
+
+  it("the PiP is never a bare box: it says the camera is starting until the native view reports frames", async () => {
+    // TestFlight 1.2 (14): the PiP was an empty dark rectangle. The native
+    // view now reports `running` once AVCaptureSession delivers, and until
+    // then (or on any other state) the PiP carries copy.
+    const tree = await mountMessageCall("chad");
+    await connect();
+    press(touchable(tree.root, "call-video-toggle"));
+    await settle();
+
+    const pip = () =>
+      tree.root.findAll((node) => node.props?.testID === "call-camera-pip")[0];
+    expect(cameraHosts(pip())).toHaveLength(1);
+    expect(texts(pip())).toContain(CAMERA_STARTING_COPY);
+
+    act(() => {
+      cameraHosts(pip())[0].props.onStatusChange({
+        nativeEvent: { status: "authorized", message: "" },
+      });
+    });
+    expect(texts(pip())).toContain(CAMERA_STARTING_COPY);
+
+    act(() => {
+      cameraHosts(pip())[0].props.onStatusChange({
+        nativeEvent: { status: "running", message: "" },
+      });
+    });
+    expect(texts(pip())).toEqual([]);
+    expect(cameraHosts(pip())).toHaveLength(1);
+
+    act(() => {
+      cameraHosts(pip())[0].props.onStatusChange({
+        nativeEvent: { status: "interrupted", message: "" },
+      });
+    });
+    expect(texts(pip()).join("\n")).toMatch(/Camera paused/);
+    act(() => {
+      cameraHosts(pip())[0].props.onStatusChange({
+        nativeEvent: { status: "running", message: "" },
+      });
+    });
+    expect(texts(pip())).toEqual([]);
+  });
+
+  it("a camera that never starts says so and Retry remounts the native view", async () => {
+    const tree = await mountMessageCall("chad");
+    await connect();
+    press(touchable(tree.root, "call-video-toggle"));
+    await settle();
+    const pip = () =>
+      tree.root.findAll((node) => node.props?.testID === "call-camera-pip")[0];
+    const [first] = cameraHosts(pip());
+
+    act(() => {
+      jest.advanceTimersByTime(CAMERA_START_TIMEOUT_MS + 50);
+    });
+    expect(texts(pip()).join("\n")).toMatch(/Camera didn't start/);
+    expect(texts(pip())).toContain("Retry");
+
+    press(touchable(pip(), "call-camera-retry"));
+    await settle();
+    expect(texts(pip())).toContain(CAMERA_STARTING_COPY);
+    expect(cameraHosts(pip())).toHaveLength(1);
+    expect(cameraHosts(pip())[0]).not.toBe(first);
+    // A view that comes up after the retry clears the copy.
+    act(() => {
+      cameraHosts(pip())[0].props.onStatusChange({
+        nativeEvent: { status: "running", message: "" },
+      });
+    });
+    expect(texts(pip())).toEqual([]);
   });
 
   it("shows the camera permission copy when the front camera is denied", async () => {
@@ -676,7 +867,11 @@ describe("Love voice call", () => {
       content: "Hey Chad",
     });
     expect(speakMock).toHaveBeenCalledTimes(1);
-    expect(speakMock.mock.calls[0][0]).toMatchObject({ text: "我在呢。" });
+    expect(speakMock.mock.calls[0][0]).toMatchObject({
+      text: "我在呢。",
+      voiceId: SEED_VOICES.chad,
+    });
+    expect(voiceById(SEED_VOICES.chad)?.gender).toBe("male");
     const bubbles = (session?.chat?.messages ?? []).filter(
       (item) => item.kind === "bubble"
     ) as { from: string; text: string }[];
@@ -699,12 +894,42 @@ describe("Love voice call", () => {
     await settle();
 
     const stage = stageFace(tree.root);
-    const preview = stage.findAllByType(AvatarPreview);
-    expect(preview).toHaveLength(1);
-    expect(preview[0].props.look).toEqual(lookFromCompanion(nova));
+    const viewer = stage.findAllByType(InlineAvatarViewer);
+    expect(viewer).toHaveLength(1);
+    expect(viewer[0].props.look).toEqual(lookFromCompanion(nova));
+    expect(viewer[0].props.viewMode).toBe("bust");
+    expect(webViews(stage)).toHaveLength(1);
+    expect(engine?.slot ?? null).toBeNull();
     expect(cameraHosts(tree.root)).toHaveLength(1);
     expect(imageUris(tree.root).filter(isKevinPhoto)).toEqual([]);
     expect(texts(tree.root)).toContain("Nova");
+  });
+});
+
+describe("Love chat Listen", () => {
+  it("reads Amanda's bubbles in her female voice", async () => {
+    mockNavigation = fakeNavigation();
+    mockRoute = {
+      name: String(SCREENS.LOVE_CHAT),
+      params: { companionId: "amanda", name: "Amanda" },
+    };
+    const tree = await mountCall(<LoveChatScreen />);
+    act(() => {
+      session!.patchChat({ listen: true });
+    });
+    await settle();
+
+    const listenButtons = tree.root
+      .findAllByType(TouchableOpacity)
+      .filter((node) => /^love-listen-/.test(String(node.props.testID)));
+    expect(listenButtons.length).toBeGreaterThan(0);
+    press(listenButtons[0]);
+    await settle();
+
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(speakMock.mock.calls[0][0]).toMatchObject({
+      voiceId: SEED_VOICES.amanda,
+    });
   });
 });
 
@@ -723,6 +948,11 @@ describe("call status copy", () => {
     expect(callStatusLabel({ phase: "speaking", name: "Kevin" })).toBe(
       "Kevin is speaking"
     );
+  });
+
+  it("the mode toggle names the mode it switches to", () => {
+    expect(modeToggle(false)).toEqual({ target: "video", label: "Video" });
+    expect(modeToggle(true)).toEqual({ target: "voice", label: "Voice" });
   });
 
   it("labels the hold button by phase", () => {
@@ -774,5 +1004,25 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
       source.indexOf("RCT_REMAP_METHOD(stopSpeaking,")
     );
     expect(speak).toContain("ensurePlaybackAudioSession");
+  });
+
+  it("PHCameraPreview reports running / interrupted / failed from the capture session and restarts after Settings", () => {
+    const source = readFileSync(
+      join(__dirname, "../ios/AppFrontend/PHNative.mm"),
+      "utf8"
+    );
+    const camera = source.slice(source.indexOf("@implementation PHCameraPreviewView"));
+    // `running` is what clears the PiP copy: it must come from the session
+    // actually starting, not from having configured it.
+    expect(camera).toContain("AVCaptureSessionDidStartRunningNotification");
+    expect(camera).toContain('emitStatus:@"running"');
+    expect(camera).toContain("AVCaptureSessionRuntimeErrorNotification");
+    expect(camera).toContain("AVCaptureSessionWasInterruptedNotification");
+    expect(camera).toContain("AVCaptureSessionInterruptionEndedNotification");
+    expect(camera).toContain('emitStatus:@"interrupted"');
+    // Coming back from Settings after granting access starts the preview
+    // without a remount.
+    expect(camera).toContain("UIApplicationDidBecomeActiveNotification");
+    expect(camera).toContain("removeObserver:self");
   });
 });

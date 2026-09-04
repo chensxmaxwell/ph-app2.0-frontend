@@ -1,4 +1,5 @@
 import { useNavigation } from "@react-navigation/native";
+import { voiceIdForGender } from "../../services/voices";
 import { threadIdForCompanion } from "../chat/person";
 import { useChat } from "../chat/store";
 import { useCompanions } from "../../store/companions";
@@ -8,20 +9,27 @@ import { companionFromDraft } from "./persist";
 export const useSaveCompanion = () => {
   const { draft, baseline, companionId, mode } = useAvatarWizard();
   const { companions, upsertCompanion } = useCompanions();
-  const { updateBot, upsertCompanionThread, setAvatar } = useChat();
+  const { threads, updateBot, upsertCompanionThread, setAvatar } = useChat();
 
   return () => {
     const drafted = companionFromDraft(companionId, draft);
     // A new companion named after a seeded bot (Kevin / Chad / Amanda) takes
     // that seed's id, so its record and the Message thread it folds into
     // share one id instead of pairing by name forever.
-    const companion =
-      mode === "create"
-        ? { ...drafted, id: threadIdForCompanion(drafted) }
-        : drafted;
-    const hasCompanionRecord = companions.some(
-      (item) => item.id === companionId
+    const id = mode === "create" ? threadIdForCompanion(drafted) : drafted.id;
+    const existingRecord = companions.find((item) => item.id === companionId);
+    const existingThread = threads.find(
+      (thread) => thread.id === id || thread.id === threadIdForCompanion(drafted)
     );
+    // The voice is part of who this person is: a new character draws one at
+    // random from their gender's pool; an edit keeps the stored voice unless
+    // the gender changed and it no longer fits.
+    const voiceId = voiceIdForGender(
+      existingThread?.voiceId ?? existingRecord?.voiceId,
+      drafted.gender
+    );
+    const companion = { ...drafted, id, voiceId };
+    const hasCompanionRecord = existingRecord !== undefined;
 
     // Edit persona on a chat-only bot (seeded Kevin / Amanda, or a bot whose
     // avatar was never crafted): persona lives on the thread. Minting a
@@ -40,6 +48,7 @@ export const useSaveCompanion = () => {
         personality: personalityTouched
           ? companion.personalities.join(", ")
           : undefined,
+        voiceId,
       });
       if (draft.avatar) {
         setAvatar(companionId, draft.avatar);

@@ -7,4 +7,9 @@ declare module "@env" {
   export const LLM_API_KEY: string;
   export const LLM_BASE_URL: string;
   export const LLM_MODEL: string;
+  // 豆包语音 (Doubao speech console) credentials for cloud TTS. The new
+  // console issues one API key; older apps have an APP ID + Access Token.
+  export const TTS_API_KEY: string;
+  export const TTS_APP_ID: string;
+  export const TTS_ACCESS_TOKEN: string;
 }
