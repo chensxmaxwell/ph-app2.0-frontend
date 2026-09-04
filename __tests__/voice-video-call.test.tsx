@@ -1,5 +1,5 @@
 import React, { ReactNode } from "react";
-import { Image, Text, TouchableOpacity } from "react-native";
+import { Image, StyleSheet, Text, TouchableOpacity } from "react-native";
 import Svg from "react-native-svg";
 import renderer, {
   act,
@@ -504,6 +504,23 @@ describe("Message thread voice call", () => {
     expect(cameraHosts(tree.root)).toHaveLength(0);
     expect(texts(tree.root)).toContain("Hi Amanda");
     expect(texts(tree.root)).toContain("Amanda is speaking");
+  });
+
+  it("the portrait fills the video stage instead of drawing at the asset's own size", async () => {
+    // TestFlight 1.2 (14): Amanda's photo (girl.png, 786×676) sat at the
+    // stage's top-left at its intrinsic size — only hair, one eye and an ear
+    // were inside the rounded stage. RN's Image keeps the require()d asset's
+    // width/height unless the style sets its own, and absoluteFill does not.
+    const tree = await mountMessageCall("amanda");
+    await connect();
+    press(touchable(tree.root, "call-video-toggle"));
+    await settle();
+
+    const [portrait] = stageFace(tree.root).findAllByType(Image);
+    const style = StyleSheet.flatten(portrait.props.style);
+    expect(style.width).toBe("100%");
+    expect(style.height).toBe("100%");
+    expect(portrait.props.resizeMode).toBe("cover");
   });
 
   it("video mode draws a crafted companion's 3D look on the stage, never a stock portrait", async () => {

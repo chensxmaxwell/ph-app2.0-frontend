@@ -65,7 +65,7 @@ export const VideoStage = ({ face, speaking, children }: VideoStageProps) => {
           <Image
             source={face.source}
             resizeMode="cover"
-            style={StyleSheet.absoluteFillObject}
+            style={styles.portrait}
           />
         )}
       </View>
@@ -102,5 +102,14 @@ const styles = StyleSheet.create({
   },
   stageSpeaking: {
     borderColor: "#cbb7e8",
+  },
+  // RN's Image keeps a require()d asset's own width/height unless the style
+  // sets them; absoluteFill alone drew Amanda's 786×676 photo from the
+  // stage's top-left corner (TestFlight 1.2 (14)). Percent sizes fill the
+  // stage so `cover` centres the face.
+  portrait: {
+    ...StyleSheet.absoluteFillObject,
+    width: "100%",
+    height: "100%",
   },
 });
