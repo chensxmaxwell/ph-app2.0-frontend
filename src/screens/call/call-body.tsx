@@ -17,6 +17,7 @@ import type { CompanionFace } from "../avatar/face";
 import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
 import { CameraIcon } from "./camera-icon";
+import { CallCaptions } from "./captions";
 import {
   callStatusLabel,
   micButtonEnabled,
@@ -54,39 +55,12 @@ const Captions = ({
   call: VoiceCall;
   centered: boolean;
 }) => (
-  <View style={[styles.captions, centered && styles.captionsCentered]}>
-    <Text testID="call-status" style={styles.status}>
-      {callStatusLabel({ phase: call.phase, name })}
-    </Text>
-    {call.heard ? (
-      <View style={styles.captionBlock}>
-        <Text style={styles.captionWho}>You</Text>
-        <Text testID="call-heard" style={styles.captionText} numberOfLines={3}>
-          {call.heard}
-        </Text>
-      </View>
-    ) : null}
-    {call.reply ? (
-      <View style={styles.captionBlock}>
-        <Text style={styles.captionWho}>{name}</Text>
-        <Text testID="call-reply" style={styles.captionText} numberOfLines={4}>
-          {call.reply}
-        </Text>
-      </View>
-    ) : null}
-    {call.notice ? (
-      <View style={styles.notice}>
-        <Text testID="call-notice" style={styles.noticeText}>
-          {call.notice}
-        </Text>
-      </View>
-    ) : null}
-    {call.voiceHint ? (
-      <Text testID="call-voice-hint" style={styles.hint}>
-        {call.voiceHint}
-      </Text>
-    ) : null}
-  </View>
+  <CallCaptions
+    name={name}
+    status={callStatusLabel({ phase: call.phase, name })}
+    call={call}
+    centered={centered}
+  />
 );
 
 const SpeakingRing = ({
@@ -307,56 +281,6 @@ const styles = StyleSheet.create({
   ringSpeaking: {
     borderWidth: 3,
     backgroundColor: "rgba(204, 160, 221, 0.25)",
-  },
-  captions: {
-    marginTop: s(16),
-    gap: s(10),
-    paddingHorizontal: s(24),
-    width: "100%",
-  },
-  captionsCentered: {
-    alignItems: "center",
-  },
-  status: {
-    color: colors.white,
-    fontFamily: "OpenSans-Bold",
-    fontSize: 20,
-  },
-  captionBlock: {
-    gap: s(2),
-  },
-  captionWho: {
-    color: colors.grayLighter,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 11,
-  },
-  captionText: {
-    color: colors.white,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 14,
-    lineHeight: 19,
-  },
-  notice: {
-    maxWidth: s(300),
-    paddingHorizontal: s(16),
-    paddingVertical: s(12),
-    borderRadius: s(16),
-    backgroundColor: "rgba(255, 255, 255, 0.08)",
-  },
-  noticeText: {
-    color: colors.grayLighter,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 13,
-    textAlign: "center",
-  },
-  hint: {
-    maxWidth: s(300),
-    color: colors.grayLighter,
-    fontFamily: "Quicksand-Bold",
-    fontSize: 11,
-    lineHeight: 15,
-    textAlign: "center",
-    opacity: 0.8,
   },
   controls: {
     position: "absolute",

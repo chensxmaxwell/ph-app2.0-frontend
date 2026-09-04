@@ -421,3 +421,23 @@ describe("startRingback", () => {
     expect(stopMock).not.toHaveBeenCalled();
   });
 });
+
+
+describe("Sync aliases on the shared ringtone helper", () => {
+  it("drawRingDuration / RING_MIN_MS mirror pickRingbackDuration", () => {
+    expect(RING_MIN_MS).toBe(RINGBACK_MIN_MS);
+    expect(RING_MAX_MS).toBe(RINGBACK_MAX_MS);
+    expect(drawRingDuration(() => 0)).toBe(pickRingbackDuration(() => 0));
+    expect(clampRingDuration(1600)).toBe(RINGBACK_MIN_MS);
+    expect(clampRingDuration(9000)).toBe(RINGBACK_MAX_MS);
+  });
+
+  it("playRingback wraps startRingback with stop/done", async () => {
+    jest.useFakeTimers();
+    const ring = playRingback({ durationMs: 2500 });
+    expect(ring.durationMs).toBe(2500);
+    ring.stop();
+    await expect(ring.done).resolves.toBeUndefined();
+    jest.useRealTimers();
+  });
+});

@@ -213,3 +213,35 @@ export const startRingback = ({
     },
   };
 };
+
+
+// Sync (#38) names for the same helper: one shared ringtone, two call sites.
+export const RING_MIN_MS = RINGBACK_MIN_MS;
+export const RING_MAX_MS = RINGBACK_MAX_MS;
+
+export const clampRingDuration = (ms: number): number =>
+  Math.min(RINGBACK_MAX_MS, Math.max(RINGBACK_MIN_MS, Math.round(ms)));
+
+export const drawRingDuration = (
+  random: () => number = Math.random
+): number => pickRingbackDuration(random);
+
+// Sync's play/stop shape on top of startRingback (cancel → stop, finished → done).
+export const playRingback = ({
+  durationMs,
+}: { durationMs?: number } = {}): {
+  durationMs: number;
+  done: Promise<void>;
+  stop: () => void;
+} => {
+  const length =
+    durationMs === undefined
+      ? pickRingbackDuration()
+      : clampRingDuration(durationMs);
+  const ring = startRingback({ durationMs: length });
+  return {
+    durationMs: ring.durationMs,
+    done: ring.finished.then(() => undefined),
+    stop: () => ring.cancel(),
+  };
+};

@@ -6,7 +6,11 @@ import {
   completeCompanionChat,
 } from "../../services/llm";
 import { hasLlmKey, loadLlmConfig } from "../../services/llm-config";
-import { Ringback, startRingback } from "../../services/ringtone";
+import {
+  clampRingDuration,
+  Ringback,
+  startRingback,
+} from "../../services/ringtone";
 import { ttsSpeak, ttsStop } from "../../services/tts";
 import {
   isCloudVoiceConfigured,
@@ -16,6 +20,7 @@ import { listenForUtterance, stopVoiceInput } from "../../services/voice-input";
 import { localOpener, OPENER_INSTRUCTION } from "./opener";
 import { CallPhase, micButtonEnabled, voiceKeyHint } from "./status";
 
+export const CALL_CONNECT_DELAY_MS = 1600;
 // The mic is inert while the companion's opener is on its way, so that wait
 // is bounded: past this, the canned line is spoken and the loop goes on.
 export const OPENER_TIMEOUT_MS = 6000;
@@ -58,6 +63,14 @@ export type VoiceCallInput = {
   // (or the line is held for as long when the tone cannot be played) — and
   // the companion greets before anyone is asked to talk.
   ring?: boolean;
+  // Sync draws its delay once per start (`drawRingDuration`) and passes it
+  // here with `ringtone: true`. 0 means a restored Sync: no ring, no second
+  // opener. When omitted, Message/Love calls use `ring` + a fresh draw.
+  connectDelayMs?: number;
+  // Ring out loud while connecting for Sync's drawn length. Off, a positive
+  // `connectDelayMs` is a silent wait (legacy). Message/Love ignore this and
+  // ring through `ring` + `startRingback`.
+  ringtone?: boolean;
 };
 
 export type VoiceCall = {
@@ -77,6 +90,18 @@ export type VoiceCall = {
   // The one mic control: interrupt while the companion speaks, mute while
   // listening, open the mic again otherwise.
   pressMic: () => void;
+  // The mic as a plain switch (Sync's mute control). Muting is about the
+  // user's mic only: an open mic closes and the loop stops; a line the
+  // companion is saying finishes, and the mic just does not open after it.
+  // Unmuting opens the mic again — at once if the loop had stopped, after
+  // the current line otherwise. Works in every phase, including the ring.
+  setMuted: (muted: boolean) => void;
+  // Whether the companion's replies are played aloud. Off, every reply (the
+  // opener too) stays on screen as text and the mic opens right after it;
+  // a line being said when it goes off is cut. This is a silence switch, not
+  // an earpiece route — see the handoff.
+  speakerOn: boolean;
+  setSpeakerOn: (on: boolean) => void;
   hangUp: () => void;
 };
 
@@ -105,10 +130,9 @@ const within = <T>(promise: Promise<T>, ms: number): Promise<T> =>
  * The conversation behind a voice or video call, hands-free. The loop is
  * still strictly sequential — PHNative's iOS Speech recognizer owns
  * AVAudioSession while the mic is open and the synthesizer needs it back for
- * the reply — but the turns take themselves: the call rings (a ring-back
- * tone, `startRingback`), the companion greets, the mic opens, the native
- * side reports when the user has finished, the reply is spoken, the mic
- * opens again. No tap is ever needed to talk: the mic is
+ * the reply — but the turns take themselves: the companion greets, the mic
+ * opens, the native side reports when the user has finished, the reply is
+ * spoken, the mic opens again. No tap is ever needed to talk: the mic is
  * inert until the companion has greeted, and a recognizer that stalls is
  * reopened by the loop itself. The mic is never open while the companion is
  * talking (it would hear itself), so barge-in is a tap: stop the voice, open
@@ -119,7 +143,15 @@ const within = <T>(promise: Promise<T>, ms: number): Promise<T> =>
  * result if the token it started with is still current, so a tap, mute or
  * hang-up cancels whatever was in flight. Hang-up silences everything.
  * Unmount without hang-up (minimize) closes the mic and stops the loop; a
- * restored call mounts a fresh hook with `ring: false`.
+ * restored call mounts a fresh hook with `ring: false` / `connectDelayMs` 0.
+ *
+ * Sync runs the same loop (the companion is meant to talk while it drives
+ * the toy; with no product yet, the talk is what Sync is) but its controls
+ * are switches, not the call's one mic button: `setMuted` shuts or opens the
+ * user's mic in any phase without ever cutting the companion off, and
+ * `setSpeakerOn(false)` silences the companion's voice — replies stay on
+ * screen as text and the mic opens right after each — without closing the
+ * mic.
  */
 export const useVoiceCall = ({
   name,
@@ -128,11 +160,15 @@ export const useVoiceCall = ({
   history,
   voiceId,
   ring = true,
+  connectDelayMs,
+  ringtone = false,
 }: VoiceCallInput): VoiceCall => {
   // A call already in progress is listening from its first frame; a tap is
-  // never what opens the mic.
+  // never what opens the mic. Sync passes connectDelayMs 0 when restored;
+  // Message/Love pass ring: false.
+  const skipConnect = ring === false || connectDelayMs === 0;
   const [phase, setPhase] = useState<CallPhase>(
-    ring ? "connecting" : "listening"
+    skipConnect ? "listening" : "connecting"
   );
   const [keyMissing, setKeyMissing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -140,12 +176,14 @@ export const useVoiceCall = ({
   const [heard, setHeard] = useState<string | null>(null);
   const [reply, setReply] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<CallTurn[]>([]);
-  const [muted, setMuted] = useState(false);
+  const [muted, setMutedState] = useState(false);
+  const [speakerOn, setSpeakerOnState] = useState(true);
 
   const aliveRef = useRef(true);
   const phaseRef = useRef<CallPhase>(phase);
   phaseRef.current = phase;
   const mutedRef = useRef(false);
+  const speakerRef = useRef(true);
   // The transcript the next reply is grounded in, readable from inside an
   // async step without waiting for a render.
   const transcriptRef = useRef<CallTurn[]>([]);
@@ -157,8 +195,7 @@ export const useVoiceCall = ({
   const stallsRef = useRef(0);
   const stallNoticeRef = useRef<string | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // The ring-back while the call is `connecting`; hang-up and minimize cut
-  // it so no tone outlives the screen.
+  // The ring-back playing while connecting, so hang-up can silence it.
   const ringRef = useRef<Ringback | null>(null);
   const inputRef = useRef({ name, personality, story, history, voiceId });
   inputRef.current = { name, personality, story, history, voiceId };
@@ -174,9 +211,13 @@ export const useVoiceCall = ({
   }, []);
 
   // A call reply asks the cloud for its expressive rendering of the voice.
+  // With the speaker off the line is only shown; the loop moves on at once.
   const speak = useCallback(async (text: string) => {
     setReply(text);
     setPhase("speaking");
+    if (!speakerRef.current) {
+      return;
+    }
     await ttsSpeak({
       id: `call-${Date.now()}`,
       text,
@@ -201,7 +242,14 @@ export const useVoiceCall = ({
   // something only the user can fix.
   const listen = useCallback(
     (turn: number) => {
-      if (!current(turn) || mutedRef.current) {
+      if (!current(turn)) {
+        return;
+      }
+      if (mutedRef.current) {
+        // The user muted while the companion was greeting, thinking or
+        // speaking: the line was finished, the mic stays shut, the loop
+        // stops here until they unmute.
+        setPhase("ready");
         return;
       }
       // The listen ended without running: reopen after a pause, slower and
@@ -372,7 +420,7 @@ export const useVoiceCall = ({
 
   useEffect(() => {
     const turn = turnRef.current;
-    if (!ring) {
+    if (skipConnect) {
       // Already on the call: cut whatever was still being said when the
       // screen went away (the mic must never hear the companion), then
       // listen.
@@ -380,31 +428,52 @@ export const useVoiceCall = ({
       listen(turn);
       return;
     }
-    // Ring, then pick up: the tone runs its drawn 2–5 s (or the line is
-    // held for as long) before the companion's first word. Unmount while it
-    // rings cancels it — no orphan audio behind a minimized or closed
-    // screen.
+    const connected = () => {
+      if (!current(turn) || phaseRef.current !== "connecting") {
+        return;
+      }
+      setPhase("greeting");
+      greetThenListen(turn).catch(swallow);
+    };
+    // Sync with ringtone: play the shared tone for the drawn (clamped) length.
+    // Sync without ringtone (legacy tests): silent connectDelayMs wait.
+    // Message/Love (`ring` default): fresh draw inside startRingback.
+    if (ringtone && connectDelayMs != null && connectDelayMs > 0) {
+      const ringback = startRingback({
+        durationMs: clampRingDuration(connectDelayMs),
+      });
+      ringRef.current = ringback;
+      ringback.finished.then((end) => {
+        if (ringRef.current === ringback) {
+          ringRef.current = null;
+        }
+        if (end === "cancelled" || !current(turn)) {
+          return;
+        }
+        connected();
+      });
+      return () => ringback.cancel();
+    }
+    if (connectDelayMs != null && connectDelayMs > 0) {
+      const timer = setTimeout(connected, connectDelayMs);
+      return () => clearTimeout(timer);
+    }
     const ringback = startRingback();
     ringRef.current = ringback;
     ringback.finished.then((end) => {
       if (ringRef.current === ringback) {
         ringRef.current = null;
       }
-      if (
-        end === "cancelled" ||
-        !current(turn) ||
-        phaseRef.current !== "connecting"
-      ) {
+      if (end === "cancelled" || !current(turn)) {
         return;
       }
-      setPhase("greeting");
-      greetThenListen(turn).catch(swallow);
+      connected();
     });
     return () => ringback.cancel();
-  }, [ring, current, greetThenListen, listen]);
+  }, [skipConnect, connectDelayMs, current, greetThenListen, listen, ringtone]);
 
   // Unmount without hang-up (minimize): close the mic and stop the loop. A
-  // reply already being spoken finishes on its own.
+  // reply already being spoken finishes on its own; a ring does not.
   useEffect(() => {
     return () => {
       aliveRef.current = false;
@@ -413,6 +482,8 @@ export const useVoiceCall = ({
         clearTimeout(retryRef.current);
         retryRef.current = null;
       }
+      ringRef.current?.cancel();
+      ringRef.current = null;
       if (phaseRef.current === "listening") {
         stopVoiceInput().catch(swallow);
       }
@@ -432,7 +503,7 @@ export const useVoiceCall = ({
     setNotice(null);
     if (mutedRef.current) {
       mutedRef.current = false;
-      setMuted(false);
+      setMutedState(false);
       if (phaseRef.current === "speaking") {
         ttsStop().catch(swallow);
       }
@@ -442,7 +513,7 @@ export const useVoiceCall = ({
     switch (phaseRef.current) {
       case "listening":
         mutedRef.current = true;
-        setMuted(true);
+        setMutedState(true);
         stopVoiceInput().catch(swallow);
         setPhase("ready");
         return;
@@ -462,6 +533,53 @@ export const useVoiceCall = ({
     }
   }, [listen, recovered]);
 
+  const setMuted = useCallback(
+    (next: boolean) => {
+      if (!aliveRef.current || mutedRef.current === next) {
+        return;
+      }
+      mutedRef.current = next;
+      setMutedState(next);
+      if (next) {
+        // An open mic (or one the loop is about to reopen after a stall)
+        // closes now; any other phase runs its line out and `listen` then
+        // stops the loop by itself.
+        if (phaseRef.current === "listening") {
+          turnRef.current += 1;
+          if (retryRef.current) {
+            clearTimeout(retryRef.current);
+            retryRef.current = null;
+          }
+          stopVoiceInput().catch(swallow);
+          setPhase("ready");
+        }
+        return;
+      }
+      // Unmuted: a stopped loop opens the mic now; a loop still greeting,
+      // thinking or speaking opens it on its own after the line.
+      if (phaseRef.current === "ready") {
+        const turn = (turnRef.current += 1);
+        recovered();
+        setNotice(null);
+        listen(turn);
+      }
+    },
+    [listen, recovered]
+  );
+
+  const setSpeakerOn = useCallback((next: boolean) => {
+    if (speakerRef.current === next) {
+      return;
+    }
+    speakerRef.current = next;
+    setSpeakerOnState(next);
+    if (!next && phaseRef.current === "speaking") {
+      // The line being said is cut; its speak() settles and the loop goes
+      // on to listen.
+      ttsStop().catch(swallow);
+    }
+  }, []);
+
   const hangUp = useCallback(() => {
     aliveRef.current = false;
     turnRef.current += 1;
@@ -469,10 +587,8 @@ export const useVoiceCall = ({
       clearTimeout(retryRef.current);
       retryRef.current = null;
     }
-    if (ringRef.current) {
-      ringRef.current.cancel();
-      ringRef.current = null;
-    }
+    ringRef.current?.cancel();
+    ringRef.current = null;
     if (phaseRef.current === "listening") {
       stopVoiceInput().catch(swallow);
     }
@@ -491,6 +607,9 @@ export const useVoiceCall = ({
     transcript,
     muted,
     pressMic,
+    setMuted,
+    speakerOn,
+    setSpeakerOn,
     hangUp,
   };
 };

@@ -43,6 +43,18 @@ export const callStatusLabel = ({
   }
 };
 
+// Sync runs the same loop, but nobody is being called: the session is on
+// and the voice joins it, so the ring reads as the voice connecting. Every
+// other phase reads as on a call.
+export const syncStatusLabel = ({
+  phase,
+  name,
+}: {
+  phase: CallPhase;
+  name: string;
+}): string =>
+  phase === "connecting" ? "Connecting…" : callStatusLabel({ phase, name });
+
 export type CallMode = "voice" | "video";
 
 // The third control switches modes. It is named after where it goes, not
