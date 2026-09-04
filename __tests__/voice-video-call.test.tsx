@@ -19,7 +19,8 @@ import { join } from "path";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { nativePlayAudio, nativeStopSpeaking } from "../src/native/ph-native";
 import {
-  RINGBACK_DURATION_MS,
+  RINGBACK_MAX_MS,
+  RINGBACK_MIN_MS,
   ringbackWavBase64,
 } from "../src/services/ringtone";
 import { SCREENS } from "../src/common/constant";
@@ -59,7 +60,6 @@ import { useAvatarEngine } from "../src/screens/avatar/engine/AvatarEngineHost";
 import { InlineAvatarViewer } from "../src/screens/avatar/engine/InlineAvatarViewer";
 import { DEFAULT_DRAFT } from "../src/screens/avatar/context";
 import {
-  CALL_CONNECT_DELAY_MS,
   LISTEN_IDLE_MS,
   LISTEN_RECOVER_DELAY_MS,
   LISTEN_RETRY_DELAY_MS,
@@ -235,10 +235,11 @@ const flush = async () => {
   }
 };
 const settle = () => act(flush);
-// The call rings for CALL_CONNECT_DELAY_MS before it reads as connected.
+// The call rings for a length drawn between 2 and 5 s before it reads as
+// connected; the longest draw is what this advances through.
 const connect = async () => {
   act(() => {
-    jest.advanceTimersByTime(CALL_CONNECT_DELAY_MS + 100);
+    jest.advanceTimersByTime(RINGBACK_MAX_MS + 100);
   });
   await settle();
 };
@@ -247,34 +248,54 @@ const trees: ReactTestRenderer[] = [];
 
 // The stores hydrate at app launch, long before anyone taps the phone icon:
 // mount the providers first, let them settle, then push the call overlay.
-const mountCall = async (screen: ReactNode) => {
+// `ringDraw` pins Math.random for the screen's mount only, so the ring's
+// length is known (0 → the shortest ring, 1 → the longest).
+const mountCall = async (screen: ReactNode, ringDraw?: number) => {
   let tree: ReactTestRenderer;
   act(() => {
     tree = renderer.create(<Providers>{null}</Providers>);
   });
   trees.push(tree!);
   await settle();
-  act(() => {
-    tree.update(<Providers>{screen}</Providers>);
-  });
-  await settle();
+  const random =
+    ringDraw === undefined
+      ? null
+      : jest.spyOn(Math, "random").mockReturnValue(ringDraw);
+  try {
+    act(() => {
+      tree.update(<Providers>{screen}</Providers>);
+    });
+    await settle();
+  } finally {
+    random?.mockRestore();
+  }
   return tree!;
 };
 
-const mountMessageCall = async (threadId: string) => {
+const mountMessageCall = async (threadId: string, ringDraw?: number) => {
   mockNavigation = fakeNavigation();
   mockRoute = { name: String(SCREENS.CHAT_CALL), params: { threadId } };
-  return mountCall(<ChatCallScreen />);
+  return mountCall(<ChatCallScreen />, ringDraw);
 };
 
-const mountLoveCall = async (companionId: string, name: string) => {
+const mountLoveCall = async (
+  companionId: string,
+  name: string,
+  ringDraw?: number
+) => {
   mockNavigation = fakeNavigation();
   mockRoute = {
     name: String(SCREENS.LOVE_CALL),
     params: { companionId, name },
   };
-  return mountCall(<LoveCallScreen />);
+  return mountCall(<LoveCallScreen />, ringDraw);
 };
+
+// The ring a draw of `fraction` produces, as the native player receives it.
+const ringOf = (fraction: number) =>
+  ringbackWavBase64(
+    Math.round(RINGBACK_MIN_MS + fraction * (RINGBACK_MAX_MS - RINGBACK_MIN_MS))
+  );
 
 const texts = (root: ReactTestInstance) =>
   root
@@ -434,7 +455,7 @@ beforeEach(async () => {
   nativeStopMock.mockReset();
   nativeStopMock.mockResolvedValue(undefined);
   // Unless a test makes the tone play, the player says it could not, and the
-  // call rings silently for RINGBACK_DURATION_MS.
+  // call rings silently for the drawn length.
   ringMock.mockResolvedValue(false);
   finishRing = null;
   pendingListen = null;
@@ -481,14 +502,15 @@ afterEach(() => {
 describe("Message thread voice call", () => {
   it("rings a ring-back tone before Kevin greets: `Calling Kevin` with a closed mic until the tone has played, then the greeting", async () => {
     // Maxwell, TestFlight 1.2 (19): a call has to ring like a phone call
-    // (WeChat-style, about four seconds) before the companion picks up.
+    // (WeChat-style) before the companion picks up.
     await saveArkKey();
     ringPlays();
-    const tree = await mountMessageCall("kevin");
+    // This connect draws a 3.5 s ring.
+    const tree = await mountMessageCall("kevin", 0.5);
 
     // The tone is playing through the native player: nothing else yet.
     expect(ringMock).toHaveBeenCalledTimes(1);
-    expect(ringMock.mock.calls[0][0]).toEqual([ringbackWavBase64()]);
+    expect(ringMock.mock.calls[0][0]).toEqual([ringOf(0.5)]);
     expect(texts(tree.root)).toContain("Calling Kevin");
     expect(global.fetch).not.toHaveBeenCalled();
     expect(speakMock).not.toHaveBeenCalled();
@@ -500,7 +522,7 @@ describe("Message thread voice call", () => {
     );
     // A timer is not what ends the ring — the tone is.
     act(() => {
-      jest.advanceTimersByTime(RINGBACK_DURATION_MS + 500);
+      jest.advanceTimersByTime(3500 + 500);
     });
     await settle();
     expect(texts(tree.root)).toContain("Calling Kevin");
@@ -518,8 +540,46 @@ describe("Message thread voice call", () => {
     expect(texts(tree.root)).toContain("00:00");
     await finishSpeech();
     expect(listenMock).toHaveBeenCalledTimes(1);
-    // The ring is the connect delay: one number, one meaning.
-    expect(CALL_CONNECT_DELAY_MS).toBe(RINGBACK_DURATION_MS);
+  });
+
+  it("every connect draws its own ring length, uniform between 2 and 5 s: one call rings the shortest, the next the longest", async () => {
+    // Maxwell's follow-up: not a fixed beat — a fresh 2–5 s draw per call.
+    ringPlays();
+    const short = await mountMessageCall("kevin", 0);
+    expect(ringMock).toHaveBeenCalledTimes(1);
+    expect(ringMock.mock.calls[0][0]).toEqual([ringOf(0)]);
+    expect(ringMock.mock.calls[0][0]).toEqual([
+      ringbackWavBase64(RINGBACK_MIN_MS),
+    ]);
+    // With the tone playing, the shortest ring is over only when the
+    // player says so — but a player that cannot play holds the line for
+    // exactly the drawn length, no more.
+    press(touchable(short.root, "call-hangup"));
+    await settle();
+    act(() => {
+      trees.splice(0).forEach((item) => item.unmount());
+    });
+
+    ringMock.mockClear();
+    const long = await mountMessageCall("kevin", 1);
+    expect(ringMock).toHaveBeenCalledTimes(1);
+    expect(ringMock.mock.calls[0][0]).toEqual([ringOf(1)]);
+    expect(ringMock.mock.calls[0][0]).toEqual([
+      ringbackWavBase64(RINGBACK_MAX_MS),
+    ]);
+    expect(ringOf(1)).not.toEqual(ringOf(0));
+    // The silent fallback (this player said it could not play) rings for
+    // the drawn 5 s: not connected at 4.9 s, connected at 5.1 s.
+    act(() => {
+      jest.advanceTimersByTime(RINGBACK_MAX_MS - 100);
+    });
+    await settle();
+    expect(texts(long.root)).toContain("Calling Kevin");
+    act(() => {
+      jest.advanceTimersByTime(200);
+    });
+    await settle();
+    expect(texts(long.root)).toContain("Kevin is speaking");
   });
 
   it("hang-up during the ring stops the tone; nothing greets and the mic never opens", async () => {
@@ -1066,7 +1126,7 @@ describe("Message thread voice call", () => {
       const call = useVoiceCall({
         name: "Chad",
         history: [],
-        connectDelayMs: 0,
+        ring: false,
       });
       phases.push(call.phase);
       return null;
@@ -1591,13 +1651,14 @@ describe("Message thread voice call", () => {
 });
 
 describe("Love voice call", () => {
-  it("rings the same ring-back tone before Chad greets", async () => {
+  it("rings the same ring-back tone, drawn the same way, before Chad greets", async () => {
     await saveArkKey();
     ringPlays();
-    const tree = await mountLoveCall("chad", "Chad");
+    // This connect draws a 2.75 s ring.
+    const tree = await mountLoveCall("chad", "Chad", 0.25);
 
     expect(ringMock).toHaveBeenCalledTimes(1);
-    expect(ringMock.mock.calls[0][0]).toEqual([ringbackWavBase64()]);
+    expect(ringMock.mock.calls[0][0]).toEqual([ringOf(0.25)]);
     expect(texts(tree.root)).toContain("Calling Chad");
     expect(speakMock).not.toHaveBeenCalled();
     expect(listenMock).not.toHaveBeenCalled();

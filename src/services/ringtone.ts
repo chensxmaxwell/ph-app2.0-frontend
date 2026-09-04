@@ -3,38 +3,46 @@ import { nativePlayAudio, nativeStopSpeaking } from "../native/ph-native";
 /**
  * The ring-back a call plays before the companion picks up (Maxwell,
  * TestFlight 1.2 (19): a call has to ring like a phone call, WeChat-style,
- * for a few seconds before the greeting).
+ * before the greeting — and, his follow-up, for a length drawn fresh on
+ * every connect, uniformly between 2 and 5 seconds, the way a person picks
+ * up when they pick up).
  *
- * The tone is synthesized here — the classic dual ring-back, 440 + 480 Hz,
- * a public signalling standard — in two soft bursts with a quiet tail, so
- * pick-up reads as a beat. No ringtone file is bundled and nothing is
- * borrowed from WeChat. It is played through PHNative's AVAudioPlayer path
- * (`playAudio`), which moves AVAudioSession to Playback first, so it sounds
- * through the speaker with the ring/silent switch on and stops through the
- * same `stopSpeaking` the call already uses.
+ * The tone is synthesized here, to exactly the drawn length — the classic
+ * dual ring-back, 440 + 480 Hz, a public signalling standard, on a 1 s on /
+ * 0.6 s off cadence, faded out where the pick-up lands so it never clicks.
+ * No ringtone file is bundled and nothing is borrowed from WeChat. It is
+ * played through PHNative's AVAudioPlayer path (`playAudio`), which moves
+ * AVAudioSession to Playback first, so it sounds through the speaker with
+ * the ring/silent switch on and stops through the same `stopSpeaking` the
+ * call already uses.
  *
  * One helper for every call surface: Message and Love ring through
  * `startRingback` today; Sync can ring and cancel the same way.
  */
 
-export const RINGBACK_DURATION_MS = 4000;
-// A player that never reports back must not hold the call: past this the
-// ring is over whatever the player says.
-export const RINGBACK_MAX_WAIT_MS = RINGBACK_DURATION_MS + 2000;
+// The draw: uniform, whole milliseconds, both ends included.
+export const RINGBACK_MIN_MS = 2000;
+export const RINGBACK_MAX_MS = 5000;
+// A player that never reports back must not hold the call: this far past
+// the drawn length the ring is over whatever the player says.
+export const RINGBACK_GRACE_MS = 2000;
 export const RINGBACK_SAMPLE_RATE = 16000;
 export const RINGBACK_TONES_HZ: readonly number[] = [440, 480];
 // Peak amplitude, full scale 1.0: a ring-back sits well under the voice.
 export const RINGBACK_GAIN = 0.35;
-// Each burst eases in and out so it never clicks.
+// Each burst eases in and out so it never clicks — including the burst the
+// pick-up cuts short.
 export const RINGBACK_FADE_MS = 15;
+// The cadence: a ring, a pause, a ring, … until the call is answered.
+export const RINGBACK_BURST_MS = 1000;
+export const RINGBACK_GAP_MS = 600;
 
-export type RingBurst = { atMs: number; forMs: number };
-
-// Two rings, then quiet until the companion's first word.
-export const RINGBACK_CADENCE: readonly RingBurst[] = [
-  { atMs: 0, forMs: 1000 },
-  { atMs: 1600, forMs: 1000 },
-];
+// How long this connect rings. `random` is Math.random unless a test hands
+// in its own.
+export const pickRingbackDuration = (
+  random: () => number = Math.random
+): number =>
+  Math.round(RINGBACK_MIN_MS + random() * (RINGBACK_MAX_MS - RINGBACK_MIN_MS));
 
 const WAV_HEADER_BYTES = 44;
 
@@ -47,9 +55,11 @@ const writeAscii = (bytes: Uint8Array, at: number, text: string) => {
 const toSamples = (ms: number) =>
   Math.round((ms / 1000) * RINGBACK_SAMPLE_RATE);
 
-// The whole ring as a 16-bit mono PCM WAV.
-export const ringbackWav = (): Uint8Array => {
-  const total = toSamples(RINGBACK_DURATION_MS);
+// A ring of `durationMs` as a 16-bit mono PCM WAV: bursts on the cadence
+// from the first sample, the last one cut — and faded — where the call is
+// picked up.
+export const ringbackWav = (durationMs: number): Uint8Array => {
+  const total = toSamples(durationMs);
   const dataBytes = total * 2;
   const bytes = new Uint8Array(WAV_HEADER_BYTES + dataBytes);
   const view = new DataView(bytes.buffer);
@@ -68,10 +78,11 @@ export const ringbackWav = (): Uint8Array => {
   view.setUint32(40, dataBytes, true);
 
   const fade = Math.max(1, toSamples(RINGBACK_FADE_MS));
+  const burst = toSamples(RINGBACK_BURST_MS);
+  const period = burst + toSamples(RINGBACK_GAP_MS);
   const perTone = RINGBACK_GAIN / RINGBACK_TONES_HZ.length;
-  RINGBACK_CADENCE.forEach(({ atMs, forMs }) => {
-    const start = toSamples(atMs);
-    const count = Math.min(toSamples(forMs), total - start);
+  for (let start = 0; start < total; start += period) {
+    const count = Math.min(burst, total - start);
     for (let index = 0; index < count; index += 1) {
       const envelope = Math.max(
         0,
@@ -88,7 +99,7 @@ export const ringbackWav = (): Uint8Array => {
         true
       );
     }
-  });
+  }
   return bytes;
 };
 
@@ -113,20 +124,18 @@ export const bytesToBase64 = (bytes: Uint8Array): string => {
   return parts.join("");
 };
 
-let encoded: string | null = null;
-
-export const ringbackWavBase64 = (): string => {
-  if (encoded === null) {
-    encoded = bytesToBase64(ringbackWav());
-  }
-  return encoded;
-};
+// Every connect draws its own length, so the tone is made for the call at
+// hand (a few ms of arithmetic) rather than kept.
+export const ringbackWavBase64 = (durationMs: number): string =>
+  bytesToBase64(ringbackWav(durationMs));
 
 // How a ring ended: the tone played through, the tone could not be played
 // and the line was held for its length instead, or the caller cancelled.
 export type RingbackEnd = "played" | "silent" | "cancelled";
 
 export type Ringback = {
+  // How long this ring lasts (the draw, or what the caller fixed).
+  durationMs: number;
   finished: Promise<RingbackEnd>;
   // Stops the tone at once. Idempotent; nothing after the ring is over.
   cancel: () => void;
@@ -136,9 +145,11 @@ const swallow = () => undefined;
 
 // The ring is decoration: nothing about it may take a call down, not even a
 // native surface that lacks the player (an older binary, a test's mock).
-const playTone = (): Promise<boolean> => {
+const playTone = (durationMs: number): Promise<boolean> => {
   try {
-    return Promise.resolve(nativePlayAudio([ringbackWavBase64()])).then(
+    return Promise.resolve(
+      nativePlayAudio([ringbackWavBase64(durationMs)])
+    ).then(
       (played) => played === true,
       () => false
     );
@@ -155,13 +166,14 @@ const stopTone = () => {
   }
 };
 
-// Rings. `finished` settles when the caller may go on (pick up); `cancel`
-// (hang-up, minimize) silences the tone and settles it as cancelled. A
-// player that cannot play still holds the line for `fallbackMs`, so the call
-// rings — silently — for the same beat everywhere.
+// Rings for `durationMs` — a fresh 2–5 s draw unless the caller fixes it.
+// `finished` settles when the caller may go on (pick up); `cancel` (hang-up,
+// minimize) silences the tone and settles it as cancelled. A player that
+// cannot play still holds the line for the same length, so the call rings —
+// silently — for the same beat everywhere.
 export const startRingback = ({
-  fallbackMs = RINGBACK_DURATION_MS,
-}: { fallbackMs?: number } = {}): Ringback => {
+  durationMs = pickRingbackDuration(),
+}: { durationMs?: number } = {}): Ringback => {
   let settled = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let resolveEnd: (end: RingbackEnd) => void = () => undefined;
@@ -188,7 +200,7 @@ export const startRingback = ({
       return;
     }
     clearTimer();
-    const remaining = Math.max(0, fallbackMs - (Date.now() - startedAt));
+    const remaining = Math.max(0, durationMs - (Date.now() - startedAt));
     timer = setTimeout(() => end("silent"), remaining);
   };
   timer = setTimeout(() => {
@@ -197,8 +209,8 @@ export const startRingback = ({
     }
     stopTone();
     end("silent");
-  }, RINGBACK_MAX_WAIT_MS);
-  playTone().then((played) => {
+  }, durationMs + RINGBACK_GRACE_MS);
+  playTone(durationMs).then((played) => {
     if (settled) {
       return;
     }
@@ -209,6 +221,7 @@ export const startRingback = ({
     holdTheLine();
   });
   return {
+    durationMs,
     finished,
     cancel: () => {
       if (settled) {
