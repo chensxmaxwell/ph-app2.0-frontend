@@ -824,15 +824,34 @@ RCT_REMAP_METHOD(syncAlarms,
 // PHCameraFirstFrameTimeout without a frame reports which half failed, with
 // the layer's size, instead of leaving JS to time out on its own.
 //
+// 1.2 (19): still 「不行」 with all of that on board — because the view had
+// no size. The camera side was a prop named `position`, and RN's base view
+// manager already exports `position` as the Yoga layout prop: RN flattens
+// `style` and the component's props into one payload, the later key wins, so
+// UIManager received `position: "front"`, RCTConvert fell back to `relative`
+// (an RCTLogInfo in Debug, nothing in Release) and a relative child with no
+// width or height inside the centred PiP frame is 0×0. A preview layer with
+// no bounds paints nothing, whatever the session does. The prop is `facing`
+// now, and the frame is watched from two independent sides: the layer's
+// `previewing` flag, and a video data output that counts the frames the
+// session actually delivers (`running` when frames flow into an enabled,
+// active preview connection on a layer that has bounds; the stall copy says
+// whether any frame ever came). Never name a native prop after a style
+// attribute (landmine 29; `__tests__/camera-pip-layout.test.tsx`).
+//
 // Status events: `authorized` (permission granted, session configured),
 // `running` (frames are on screen — only this clears the PiP copy),
 // `interrupted` (the system paused the camera, with the reason, or the
 // session stopped behind our back), `denied`, `unavailable` (no camera / the
 // session failed or never drew, with the reason).
-@interface PHCameraPreviewView : UIView
-@property (nonatomic, copy) NSString *position;
+@interface PHCameraPreviewView : UIView <AVCaptureVideoDataOutputSampleBufferDelegate>
+// "front" (default) or "back". Not `position`: that name is Yoga's.
+@property (nonatomic, copy) NSString *facing;
 @property (nonatomic, copy) RCTDirectEventBlock onStatusChange;
 @property (nonatomic, readonly) AVCaptureVideoPreviewLayer *previewLayer;
+// Frames the session has delivered since it was configured. Written on the
+// frame queue (one writer), read on main for `running` and for the copy.
+@property (atomic, assign) NSUInteger framesIn;
 @end
 
 static void *PHPreviewingContext = &PHPreviewingContext;
@@ -844,6 +863,9 @@ static void *PHPreviewingContext = &PHPreviewingContext;
 static const NSTimeInterval PHCameraFirstFrameTimeout = 4.0;
 static const NSTimeInterval PHCameraFramePollInterval = 0.2;
 static const NSTimeInterval PHCameraLateFramePollInterval = 1.0;
+// While `running` is still unsent, every Nth delivered frame asks main to
+// check again (the first frame always does).
+static const NSUInteger PHCameraFrameCheckEvery = 30;
 
 // One serial queue for every preview view. A replacement view (Retry, video
 // toggled off and on, the call re-entered) configures and starts its session
@@ -858,6 +880,42 @@ static dispatch_queue_t PHCameraSessionQueue(void)
     queue = dispatch_queue_create("house.pleasure.camera-preview", DISPATCH_QUEUE_SERIAL);
   });
   return queue;
+}
+
+// Where the video data output hands over sample buffers. Its own queue: a
+// frame must never wait behind a stopRunning on the session queue, nor hold
+// the session queue up.
+static dispatch_queue_t PHCameraFrameQueue(void)
+{
+  static dispatch_queue_t queue;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    queue = dispatch_queue_create("house.pleasure.camera-frames", DISPATCH_QUEUE_SERIAL);
+  });
+  return queue;
+}
+
+// The camera on the wanted side: the wide-angle one, else any device facing
+// that way, else whatever the phone calls its default camera.
+static AVCaptureDevice *PHCameraDevice(AVCaptureDevicePosition wanted)
+{
+  AVCaptureDevice *device =
+      [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
+                                         mediaType:AVMediaTypeVideo
+                                          position:wanted];
+  if (device) {
+    return device;
+  }
+  AVCaptureDeviceDiscoverySession *discovery = [AVCaptureDeviceDiscoverySession
+      discoverySessionWithDeviceTypes:@[ AVCaptureDeviceTypeBuiltInWideAngleCamera,
+                                         AVCaptureDeviceTypeBuiltInTrueDepthCamera,
+                                         AVCaptureDeviceTypeBuiltInDualCamera ]
+                            mediaType:AVMediaTypeVideo
+                             position:wanted];
+  if (discovery.devices.count) {
+    return discovery.devices.firstObject;
+  }
+  return [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
 }
 
 // The system's reason for pausing the camera, as copy the PiP can show.
@@ -893,6 +951,10 @@ static NSString *PHCameraInterruptionCopy(NSNumber *reasonValue)
   NSUInteger _startGeneration;
   // `running` goes out once per run of the session.
   BOOL _reportedRunning;
+  // Whether the last layout pass left the view with a size. RN attaches the
+  // view first and sizes it afterwards; the moment it gains a size is when
+  // the first frame's clock should start.
+  BOOL _hadBounds;
 }
 
 + (Class)layerClass
@@ -910,7 +972,7 @@ static NSString *PHCameraInterruptionCopy(NSNumber *reasonValue)
   if ((self = [super initWithFrame:frame])) {
     self.backgroundColor = [UIColor blackColor];
     self.clipsToBounds = YES;
-    _position = @"front";
+    _facing = @"front";
     self.previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
     // Fast path only: if AVFoundation does post this, `running` goes out at
     // once. The poll in expectFramesFrom: is what the PiP relies on.
@@ -939,12 +1001,24 @@ static NSString *PHCameraInterruptionCopy(NSNumber *reasonValue)
 }
 
 // Belt and braces for didMoveToWindow: a view that is on screen with a size
-// and was never asked to start, starts now.
+// and was never asked to start, starts now. A view that was started before
+// RN gave it a size (attach, then layout) gets its first-frame window from
+// the moment it has room to draw, not from startRunning.
 - (void)layoutSubviews
 {
   [super layoutSubviews];
-  if (self.window && !_wantsRunning && !CGRectIsEmpty(self.bounds)) {
+  BOOL hasBounds = !CGRectIsEmpty(self.bounds);
+  BOOL gotBounds = hasBounds && !_hadBounds;
+  _hadBounds = hasBounds;
+  if (!self.window || !hasBounds) {
+    return;
+  }
+  if (!_wantsRunning) {
     [self startPreview];
+    return;
+  }
+  if (gotBounds && _session && !_reportedRunning) {
+    [self expectFramesFrom:_session];
   }
 }
 
@@ -1025,25 +1099,70 @@ static NSString *PHCameraInterruptionCopy(NSNumber *reasonValue)
 
 // Main thread. The session had its chance and the layer never drew: tell JS
 // which half failed, with the numbers that decide it, so a screenshot of the
-// PiP is a diagnosis.
+// PiP is a diagnosis. "no frames in" = the session delivered nothing (the
+// camera pipeline); "N frames in" = the camera delivers and the layer is
+// what does not show them.
 - (void)reportNoFramesFrom:(AVCaptureSession *)session
 {
   CGSize size = self.bounds.size;
   AVCaptureConnection *connection = self.previewLayer.connection;
+  NSUInteger frames = self.framesIn;
+  NSString *delivered =
+      frames ? [NSString stringWithFormat:@"%lu frames in", (unsigned long)frames] : @"no frames in";
   NSString *message;
   if (!session.isRunning) {
     message = @"Camera didn't start.";
   } else if (size.width < 1 || size.height < 1) {
-    message = @"Camera is on but has no room to draw.";
+    message = [NSString stringWithFormat:@"Camera is on but has no room to draw (%@).", delivered];
   } else if (!connection) {
-    message = @"Camera is on but not connected to the preview.";
+    message = [NSString stringWithFormat:@"Camera is on but not connected to the preview (%@).",
+                                         delivered];
   } else if (!connection.isEnabled || !connection.isActive) {
-    message = @"Camera is on but the preview is switched off.";
+    message = [NSString stringWithFormat:@"Camera is on but the preview is switched off (%@).",
+                                         delivered];
   } else {
-    message = [NSString stringWithFormat:@"Camera is on but not drawing (%.0f×%.0f).",
-                                         size.width, size.height];
+    message = [NSString stringWithFormat:@"Camera is on but not drawing (%.0f×%.0f, %@).",
+                                         size.width, size.height, delivered];
   }
   [self emitStatus:@"unavailable" message:message];
+}
+
+// Frame queue: the session delivered a frame. Count it; the first one, and
+// every PHCameraFrameCheckEvery-th after it, asks main whether that makes
+// the preview live. Nothing here touches view state.
+- (void)captureOutput:(AVCaptureOutput *)output
+    didOutputSampleBuffer:(__unused CMSampleBufferRef)sampleBuffer
+           fromConnection:(__unused AVCaptureConnection *)connection
+{
+  NSUInteger count = self.framesIn + 1;
+  self.framesIn = count;
+  if (count != 1 && count % PHCameraFrameCheckEvery != 1) {
+    return;
+  }
+  // A view configures one session in its life and that session's data
+  // output delivers to this view alone, so these frames are `_session`'s;
+  // main re-checks that the view still wants them.
+  __weak PHCameraPreviewView *weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [weakSelf framesFlowing];
+  });
+}
+
+// Main thread. Frames are flowing from the session: if they flow into an
+// enabled, active preview connection on a layer that has bounds, the layer
+// is showing them — `running`, whatever the `previewing` flag says. If not,
+// the poll's deadline will say which of those is missing.
+- (void)framesFlowing
+{
+  if (_reportedRunning || !_wantsRunning || !_session) {
+    return;
+  }
+  AVCaptureConnection *connection = self.previewLayer.connection;
+  if (CGRectIsEmpty(self.bounds) || !connection || !connection.isEnabled ||
+      !connection.isActive || self.previewLayer.session != _session) {
+    return;
+  }
+  [self reportRunning];
 }
 
 - (void)observeSession:(AVCaptureSession *)session
@@ -1253,65 +1372,93 @@ static NSString *PHCameraInterruptionCopy(NSNumber *reasonValue)
 {
   @try {
     AVCaptureDevicePosition wanted =
-        [self.position isEqualToString:@"back"] ? AVCaptureDevicePositionBack
-                                                : AVCaptureDevicePositionFront;
+        [self.facing isEqualToString:@"back"] ? AVCaptureDevicePositionBack
+                                              : AVCaptureDevicePositionFront;
     AVCaptureSession *session = [AVCaptureSession new];
     // Never let the capture session reconfigure the voice loop's audio
-    // session (it has no audio input to configure it for anyway).
+    // session (it has no audio input to configure it for anyway). Video-only
+    // sessions do not observe AVAudioSession, so the recognizer's Record ↔
+    // inactive ↔ Playback flips cannot pause this one (landmine 28).
     session.automaticallyConfiguresApplicationAudioSession = NO;
     _session = session;
     _reportedRunning = NO;
+    self.framesIn = 0;
     [self observeSession:session];
+    self.previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
     self.previewLayer.session = session;
 
     __weak PHCameraPreviewView *weakSelf = self;
-    dispatch_async(PHCameraSessionQueue(), ^{
-      AVCaptureDevice *device =
-          [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
-                                             mediaType:AVMediaTypeVideo
-                                              position:wanted];
-      if (!device) {
-        device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
-      }
-      NSError *error = nil;
-      AVCaptureDeviceInput *input =
-          device ? [AVCaptureDeviceInput deviceInputWithDevice:device error:&error] : nil;
-      if (!input || ![session canAddInput:input]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-          PHCameraPreviewView *strongSelf = weakSelf;
-          if (!strongSelf || strongSelf->_session != session) {
-            return;
-          }
-          strongSelf.previewLayer.session = nil;
-          strongSelf->_session = nil;
-          [strongSelf emitStatus:@"unavailable" message:@"No camera on this device."];
-        });
-        return;
-      }
-      [session beginConfiguration];
-      if ([session canSetSessionPreset:AVCaptureSessionPreset640x480]) {
-        session.sessionPreset = AVCaptureSessionPreset640x480;
-      }
-      [session addInput:input];
-      [session commitConfiguration];
+    // Tells JS the session is not coming, from the queue.
+    void (^failed)(NSString *) = ^(NSString *message) {
       dispatch_async(dispatch_get_main_queue(), ^{
         PHCameraPreviewView *strongSelf = weakSelf;
         if (!strongSelf || strongSelf->_session != session) {
           return;
         }
-        AVCaptureConnection *connection = strongSelf.previewLayer.connection;
-        if (connection.isVideoOrientationSupported) {
-          connection.videoOrientation = AVCaptureVideoOrientationPortrait;
-        }
-        [strongSelf emitStatus:@"authorized" message:@""];
+        strongSelf.previewLayer.session = nil;
+        strongSelf->_session = nil;
+        [strongSelf emitStatus:@"unavailable" message:message];
       });
-      [session startRunning];
-      dispatch_async(dispatch_get_main_queue(), ^{
-        PHCameraPreviewView *strongSelf = weakSelf;
-        if (strongSelf && session == strongSelf->_session) {
-          [strongSelf expectFramesFrom:session];
+    };
+    dispatch_async(PHCameraSessionQueue(), ^{
+      // An ObjC exception on a GCD queue is uncaught: the process dies with
+      // no banner. Anything AVFoundation throws here becomes copy instead.
+      @try {
+        PHCameraPreviewView *owner = weakSelf;
+        if (!owner) {
+          return;
         }
-      });
+        AVCaptureDevice *device = PHCameraDevice(wanted);
+        NSError *error = nil;
+        AVCaptureDeviceInput *input =
+            device ? [AVCaptureDeviceInput deviceInputWithDevice:device error:&error] : nil;
+        if (!input || ![session canAddInput:input]) {
+          failed(error.localizedDescription.length ? error.localizedDescription
+                                                   : @"No camera on this device.");
+          return;
+        }
+        [session beginConfiguration];
+        [session addInput:input];
+        // Asked with the camera in place, so the answer is this camera's;
+        // an unsupported preset is simply not used (the default stands).
+        if ([session canSetSessionPreset:AVCaptureSessionPreset640x480]) {
+          session.sessionPreset = AVCaptureSessionPreset640x480;
+        }
+        // The second witness: frames the session delivers, counted on the
+        // frame queue, independent of the preview layer altogether.
+        AVCaptureVideoDataOutput *frames = [AVCaptureVideoDataOutput new];
+        frames.alwaysDiscardsLateVideoFrames = YES;
+        [frames setSampleBufferDelegate:owner queue:PHCameraFrameQueue()];
+        if ([session canAddOutput:frames]) {
+          [session addOutput:frames];
+        }
+        [session commitConfiguration];
+        dispatch_async(dispatch_get_main_queue(), ^{
+          PHCameraPreviewView *strongSelf = weakSelf;
+          if (!strongSelf || strongSelf->_session != session) {
+            return;
+          }
+          AVCaptureConnection *connection = strongSelf.previewLayer.connection;
+          if (connection) {
+            connection.enabled = YES;
+            if (connection.isVideoOrientationSupported) {
+              connection.videoOrientation = AVCaptureVideoOrientationPortrait;
+            }
+          }
+          [strongSelf emitStatus:@"authorized" message:@""];
+        });
+        [session startRunning];
+        dispatch_async(dispatch_get_main_queue(), ^{
+          PHCameraPreviewView *strongSelf = weakSelf;
+          if (strongSelf && session == strongSelf->_session) {
+            [strongSelf expectFramesFrom:session];
+          }
+        });
+      } @catch (NSException *exception) {
+        failed(exception.reason.length
+                   ? [NSString stringWithFormat:@"The camera could not start: %@", exception.reason]
+                   : @"The camera could not start.");
+      }
     });
   } @catch (__unused NSException *exception) {
     [self emitStatus:@"unavailable" message:@"The camera could not start."];
@@ -1360,7 +1507,11 @@ RCT_EXPORT_MODULE(PHCameraPreview)
   return [PHCameraPreviewView new];
 }
 
-RCT_EXPORT_VIEW_PROPERTY(position, NSString)
+// Prop names here share one payload with the style attributes (position,
+// top, opacity, transform, …): a name RCTViewManager already exports —
+// `position` did this, 1.2 (19) — silently overrides the style. Keep them
+// unique; __tests__/camera-pip-layout.test.tsx checks every export.
+RCT_EXPORT_VIEW_PROPERTY(facing, NSString)
 RCT_EXPORT_VIEW_PROPERTY(onStatusChange, RCTDirectEventBlock)
 
 @end

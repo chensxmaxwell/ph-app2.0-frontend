@@ -67,6 +67,6 @@ describe("camera preview availability gate", () => {
       (node) => String(node.type) === CAMERA_PREVIEW_VIEW
     );
     expect(hosts).toHaveLength(1);
-    expect(hosts[0].props.position).toBe("front");
+    expect(hosts[0].props.facing).toBe("front");
   });
 });

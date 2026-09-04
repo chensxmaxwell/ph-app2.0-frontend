@@ -3,7 +3,7 @@ import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { voiceForPerson } from "../../services/voices";
 import { usePersonFace } from "../avatar/use-person-face";
 import { CallBody } from "../call/call-body";
-import { CALL_CONNECT_DELAY_MS, useVoiceCall } from "../call/use-voice-call";
+import { useVoiceCall } from "../call/use-voice-call";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
 
@@ -43,16 +43,14 @@ export const ChatCallScreen = () => {
   );
   // Re-entered from the thread while the call is flagged: already on, no
   // ring and no second greeting.
-  const [connectDelayMs] = useState(() =>
-    inCallThreadId === threadId ? 0 : CALL_CONNECT_DELAY_MS
-  );
+  const [ring] = useState(() => inCallThreadId !== threadId);
   const call = useVoiceCall({
     name,
     personality: thread?.personality,
     story: thread?.description,
     history,
     voiceId: voiceForPerson({ id: threadId, thread }).id,
-    connectDelayMs,
+    ring,
   });
   const [video, setVideo] = useState(false);
   const [now, setNow] = useState(() => Date.now());

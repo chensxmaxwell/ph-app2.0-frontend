@@ -1,14 +1,18 @@
 import {
   LLM_API_KEY,
+  MINIMAX_API_KEY,
   TTS_ACCESS_TOKEN,
   TTS_API_KEY,
   TTS_APP_ID,
 } from "@env";
 import type { LlmConfig } from "./llm-config";
+import type { MiniMaxCredentials } from "./minimax-tts";
 
-// Who the Doubao speech endpoint is told we are. The new 豆包语音 console
-// issues one API key (`X-Api-Key`); older apps have an APP ID + Access Token.
-export type TtsCredentials =
+// Which cloud speaks, and as whom. `minimax`: a MiniMax platform key
+// (Bearer), preferred whenever it is saved. Otherwise Doubao: the new 豆包语音
+// console issues one API key (`X-Api-Key`); older apps have an APP ID +
+// Access Token.
+export type DoubaoCredentials =
   | {
       kind: "api-key";
       apiKey: string;
@@ -20,7 +24,10 @@ export type TtsCredentials =
     }
   | { kind: "app"; appId: string; accessToken: string };
 
+export type TtsCredentials = MiniMaxCredentials | DoubaoCredentials;
+
 export type TtsCredentialInputs = {
+  minimaxApiKey?: string;
   ttsApiKey?: string;
   ttsAppId?: string;
   ttsAccessToken?: string;
@@ -35,9 +42,15 @@ const clean = (value: unknown): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+// MiniMax first, then the Doubao speech key, then the legacy Doubao pair,
+// then the Ark best effort; none of those → the on-device voice.
 export const resolveTtsCredentials = (
   inputs: TtsCredentialInputs
 ): TtsCredentials | null => {
+  const minimaxKey = clean(inputs.minimaxApiKey);
+  if (minimaxKey) {
+    return { kind: "minimax", apiKey: minimaxKey };
+  }
   const ttsKey = clean(inputs.ttsApiKey);
   if (ttsKey) {
     return { kind: "api-key", apiKey: ttsKey, source: "tts" };
@@ -60,8 +73,18 @@ export const ttsCredentialsFromConfig = (
   config: LlmConfig
 ): TtsCredentials | null =>
   resolveTtsCredentials({
+    minimaxApiKey: config.minimaxApiKey ?? MINIMAX_API_KEY,
     ttsApiKey: config.ttsApiKey ?? TTS_API_KEY,
     ttsAppId: TTS_APP_ID,
     ttsAccessToken: TTS_ACCESS_TOKEN,
     arkApiKey: config.apiKey || LLM_API_KEY,
   });
+
+// Whether these credentials are a speech key someone saved on purpose (any
+// MiniMax key, a Doubao speech-console key, the legacy pair) rather than the
+// Ark key being tried: only then is the cloud voice the expected outcome.
+export const isCloudVoiceConfigured = (
+  credentials: TtsCredentials | null
+): boolean =>
+  credentials !== null &&
+  (credentials.kind !== "api-key" || credentials.source === "tts");
