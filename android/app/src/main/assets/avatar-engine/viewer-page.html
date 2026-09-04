@@ -110,22 +110,41 @@
     return clamp01(v) * (amount == null ? 0.28 : amount);
   }
 
-  // Head_0's Shape_EyeLidHeight drops the upper lid (about 15mm at 1.0, the
-  // lower lid barely moves). At rest the BoZo lids open ~24deg above and
-  // ~32deg below the iris axis - a round, startled aperture that TestFlight
-  // 1.2 (12) read as a horror-doll stare. 0.16 (the default Eyes setting)
-  // brings the upper lid to about +14deg, so it rests on the top of the iris
-  // like a relaxed eye while the pupil stays clear; the Eyes slider opens it
-  // a little for bigger eyes. Stay under ~0.27, where the lid starts to
-  // cross the pupil, and far from 0.45, where it crosses the iris centre.
+  // Head_0's Shape_EyeLidHeight drops the upper lid (the margin moves ~28mm
+  // at 1.0 = fully closed; the lower lid barely moves). At rest the BoZo
+  // lids open ~24deg above and ~32deg below the iris axis - a round,
+  // startled aperture that TestFlight 1.2 (12) read as a horror-doll stare.
+  // Calibrated on the rendered eye in headless Chrome (share of the iris
+  // height under the upper lid, iris paint 1.0): 0.16 -> 3%, 0.20 -> 9%,
+  // 0.24 -> 14%, 0.28 -> 20%, 0.32 -> 28%, and the lid reaches the pupil at
+  // ~0.34. 1.2 (14) shipped 0.20 -> 0.12 with Size (3-9%: still a stare, and
+  // opening further for bigger eyes). A relaxed lid covers 15-25% of the
+  // iris, so Size now runs the lid the other way: UPPER_LID_DROP at Size 0
+  // (~27%, the tight aperture that makes a small stylized eye read cute),
+  // UPPER_LID_DROP_LARGE at Size 1 (~15%, still resting on the iris so a big
+  // eye reads doll-pretty, never startled). The pupil stays clear at every
+  // Size (see irisSizeFor).
   function upperLidDrop(eyeSize) {
-    return UPPER_LID_DROP - clamp01(eyeSize) * 0.08;
+    return UPPER_LID_DROP - clamp01(eyeSize) * (UPPER_LID_DROP - UPPER_LID_DROP_LARGE);
+  }
+
+  // Brows follow Size the same way: no arch lift on a small or default eye
+  // (the TestFlight screenshots read the old 0.02 + 0.04 * Size lift as part
+  // of the stare), a slight settle toward the eye for small eyes
+  // (Shape_LowerBrows moves 6.7mm at 1.0, so 0.12 is under 1mm).
+  function browMorphs(eyeSize, jaw) {
+    var eye = clamp01(eyeSize);
+    return {
+      raise: eye * 0.03,
+      lower: mild(jaw, 0.08) + (1 - eye) * 0.12
+    };
   }
 
   function applyMeshLook(mesh, next) {
     var arms = (clamp01(next.upperArms) + clamp01(next.forearms)) * 0.5;
     var hips = clamp01(next.backAndHips);
     var eye = clamp01(next.eyeSize);
+    var brows = browMorphs(eye, next.jaw);
     setMorph(mesh, "Shape_Squareness", mild(next.faceWidth, 0.22));
     setMorph(mesh, "Shape_Stern", mild(next.jaw, 0.22));
     setMorph(mesh, "Shape_Sharpness", mild(next.chin, 0.18));
@@ -134,9 +153,8 @@
     setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16));
     setMorph(mesh, "Shape_MouthWide", mild(next.faceWidth, 0.14));
     setMorph(mesh, "Shape_MouthThin", (1 - clamp01(next.chin)) * 0.1);
-    // Raised brows over wide lids read as shock; keep them nearly neutral.
-    setMorph(mesh, "Shape_RaiseBrows", 0.02 + eye * 0.04);
-    setMorph(mesh, "Shape_LowerBrows", mild(next.jaw, 0.08));
+    setMorph(mesh, "Shape_RaiseBrows", brows.raise);
+    setMorph(mesh, "Shape_LowerBrows", brows.lower);
     setMorph(mesh, "Shape_NoseTiltDown", mild(next.chin, 0.08));
     setMorph(mesh, "Shape_LashLength", 0.42);
     setMorph(mesh, "Shape_BrowsThickness", 0.32);
@@ -378,7 +396,7 @@
       mat.needsUpdate = true;
     });
     var iris = hexColor(EYE_COLORS[next.eyeColor] || EYE_COLORS[0]);
-    var irisSize = 0.82 + clamp01(next.eyeSize) * 0.28;
+    var irisSize = irisSizeFor(next.eyeSize);
     eyeMats.forEach(function (mat) {
       mat.color.setRGB(1, 1, 1);
       mat.userData.irisSize = irisSize;
@@ -498,18 +516,49 @@
   // aperture (36deg radius against a 56deg opening) with a black disc for a
   // pupil, under lids that were still wide open, eyes parallel (wall-eyed
   // from 1.7m) and aimed above the camera - "恐怖". The fix is three-part:
-  // drop the upper lid (UPPER_LID_DROP), converge both eyes on the camera
+  // drop the upper lid (upperLidDrop), converge both eyes on the camera
   // (aimEyes, so the iris also settles onto the lower lid and there is no
   // lower white), and paint a smaller iris with a pupil that keeps ~37% of
-  // it. tintLook scales both radii by irisSize, 0.82..1.10 from the Eyes
-  // slider, so the iris stays between 0.25 and 0.34 (23deg..31deg).
+  // it. IRIS_RADIUS 0.31 is a 27.9deg iris, i.e. an iris about as wide as
+  // the eyeball's radius - the real proportion; tintLook scales both radii
+  // by irisSizeFor(Size).
   var IRIS_RADIUS = 0.31;
   var PUPIL_RADIUS = 0.115;
-  var UPPER_LID_DROP = 0.20;
+  // Shape_EyeLidHeight weights at Size 0 and Size 1 (see upperLidDrop).
+  var UPPER_LID_DROP = 0.29;
+  var UPPER_LID_DROP_LARGE = 0.21;
   // Gaze is clamped to this many radians off the rest axis per eye, enough
   // for the bust (6.6deg down) and full (9.4deg down) cameras plus
-  // convergence, not enough to roll the eye into the socket wall.
+  // convergence, not enough to roll the eye into the socket wall. The lid
+  // margins are skinned 1.0 to the eye bones (measured on the GLB), so they
+  // turn with the gaze and the lid weight reads the same from both cameras.
   var MAX_GAZE_ANGLE = 0.24;
+  // Painted iris share of the eyeball by Size. 1.2 (14) / PR #33 ran this
+  // 0.82 -> 1.10 *with* Size, so a small eye was a small iris in a small
+  // ball (a pinprick in white) and only the large end got a full iris.
+  // Measured (lid 0.28, scale 0.58): sclera share of the opening 38% at
+  // 0.90, 31% at 1.00, 24% at 1.10, 19% at 1.20. Small eyes now get the
+  // biggest share (IRIS_SIZE_SMALL, an iris a touch wider than the ball's
+  // radius, the stylized small-eye look), large eyes the real proportion
+  // (IRIS_SIZE_LARGE = 1.0) so what grows with Size is the eye and its
+  // resting lid, not a white saucer. IRIS_RADIUS * IRIS_SIZE_SMALL stays
+  // under the 0.35 lower-lid opening; the pupil top (PUPIL_RADIUS *
+  // irisSize * 90deg -> sin) stays under the Size-0 lid at ~0.235 r.
+  var IRIS_SIZE_SMALL = 1.10;
+  var IRIS_SIZE_LARGE = 1.0;
+
+  function irisSizeFor(eyeSize) {
+    return IRIS_SIZE_SMALL - clamp01(eyeSize) * (IRIS_SIZE_SMALL - IRIS_SIZE_LARGE);
+  }
+
+  // Catchlight on the eyeball: smoothstep(lo, hi) on the dot between the
+  // analytic sphere normal and a fixed view-space direction, mixed `mix`
+  // toward white. The old spot (0.977, 0.992, 92%) was a ~12deg blob of the
+  // *interpolated* vertex normal on the 20-segment Eyes_0 sphere: measured,
+  // it whitened 15-49% of the visible iris and changed size with the facet
+  // alignment between renders, and on a 10 px full-body iris it painted the
+  // top half sclera-white. cos(9deg) = 0.988, cos(5deg) = 0.996.
+  var CATCHLIGHT = { lo: 0.988, hi: 0.996, mix: 0.8 };
   // TestFlight 1.2 (13): with the lids, gaze and 0.31 iris above, Maxwell
   // still read the eyes as too big - the whole eye, not the pupil. Eyes_0 is
   // two 22.2mm-radius spheres (44mm across on a 26cm head; a real eye is
@@ -520,17 +569,20 @@
   // and the iris keeps its share of the smaller opening.
   //
   // 1.2 (14) shipped that as a fixed 0.70 (31mm eye) while the Eyes "Size"
-  // slider only repainted the iris (irisSize 0.82..1.10) and opened the lid
-  // by 0.08, so Size min and max looked alike (Eyes_0 31.2 -> 31.7mm tall)
-  // and both still read a bit large. Size now drives this scale, linearly
-  // from EYE_SCALE_MIN (Size 0: 0.42, an 18.6mm eye, lid line still drawn)
-  // to EYE_SCALE_MAX (Size 1: 0.74, 32.9mm, a little past the old fixed
-  // eye); the default look (Size 0.5) lands on EYE_SCALE 0.58 (25.8mm,
-  // close to a real 24mm eye). Re-applied on every applyLook, not once at
-  // load. Below ~0.40 the lid falloff stretches so thin the eye reads as a
-  // bare bead; above ~0.80 it is the 1.2 (11) saucer again.
-  var EYE_SCALE_MIN = 0.42;
-  var EYE_SCALE_MAX = 0.74;
+  // slider only repainted the iris and opened the lid by 0.08, so Size min
+  // and max looked alike. PR #33 drove this scale 0.42 -> 0.74 on its own,
+  // and the TestFlight walk of that read as a pinprick at min (uniform scale
+  // alone: a small ball with a small iris share under a wide-open lid) and a
+  // wide stare at max. Size now couples three things - this bone scale,
+  // upperLidDrop and irisSizeFor - so the scale itself stays in a beauty
+  // band: EYE_SCALE_MIN 0.46 (Size 0, a 20.4mm eye) to EYE_SCALE_MAX 0.70
+  // (Size 1, 31.1mm, the 1.2 (14) eye; large is the intent at the top end).
+  // The default look (Size 0.5) stays on EYE_SCALE 0.58 (25.8mm, close to a
+  // real 24mm eye), so saved companions keep their eyeball size. Re-applied
+  // on every applyLook, not once at load. Above ~0.80 it is the 1.2 (11)
+  // saucer again.
+  var EYE_SCALE_MIN = 0.46;
+  var EYE_SCALE_MAX = 0.70;
 
   function eyeScaleFor(eyeSize) {
     return EYE_SCALE_MIN + clamp01(eyeSize) * (EYE_SCALE_MAX - EYE_SCALE_MIN);
@@ -552,8 +604,10 @@
   // GLSL appended after map_fragment: paints sclera, iris, pupil and limbal
   // ring onto the Eyes_0 UVs, shades the eyeball under the upper lid so it
   // sits in the socket instead of glowing, and puts one catchlight per eye
-  // at the same screen position (view-space normal, so both eyes match and
-  // it follows the gaze). Everything but the sclera is sized from irisR.
+  // at the same screen position (view-space direction against the analytic
+  // sphere normal from the eye centres, so both eyes match, it follows the
+  // gaze and its size does not depend on the mesh facets). Everything but
+  // the sclera is sized from irisR.
   function irisFragmentChunk() {
     return [
       "#include <map_fragment>",
@@ -581,11 +635,17 @@
       "vec3 col = mix(scleraCol, irisCol, irisM);",
       "col = mix(col, pupilCol, pupilM);",
       // Catchlights from a fixed view-space direction (upper right on
-      // screen), identical on both eyes.
-      "vec3 vn = normalize(vNormal);",
-      "float spec = smoothstep(0.977, 0.992, dot(vn, normalize(vec3(0.20, 0.16, 1.0))));",
-      "float spec2 = smoothstep(0.993, 0.998, dot(vn, normalize(vec3(-0.22, -0.26, 1.0))));",
-      "col = mix(col, vec3(1.0), spec * 0.92);",
+      // screen), identical on both eyes. The normal is the exact sphere
+      // normal (fragment minus the nearer eye centre, both in view space):
+      // the interpolated vertex normal of the 20-segment sphere made the
+      // spot bulge or shrink with the facet under it.
+      "vec3 fragPos = -vViewPosition;",
+      "vec3 toL = fragPos - eyeCentreL;",
+      "vec3 toR = fragPos - eyeCentreR;",
+      "vec3 ballN = normalize(dot(toL, toL) < dot(toR, toR) ? toL : toR);",
+      "float spec = smoothstep(" + CATCHLIGHT.lo.toFixed(3) + ", " + CATCHLIGHT.hi.toFixed(3) + ", dot(ballN, normalize(vec3(0.20, 0.16, 1.0))));",
+      "float spec2 = smoothstep(0.993, 0.998, dot(ballN, normalize(vec3(-0.22, -0.26, 1.0))));",
+      "col = mix(col, vec3(1.0), spec * " + CATCHLIGHT.mix.toFixed(2) + ");",
       "col = mix(col, vec3(1.0), spec2 * 0.18);",
       "diffuseColor.rgb = col;",
       // The eyeball faces the dark purple ground of the hemisphere light, so
@@ -610,9 +670,16 @@
     mat.skinning = true;
     // Head_0 carries a skin-textured copy of both eyeballs (dished to ~0.7 r
     // at the iris, flush with the sphere at the rim); pull the real eyeball
-    // forward in depth so the copy cannot z-fight skin speckles across it.
+    // forward in depth by a constant so the copy cannot z-fight skin speckles
+    // across it. Constant only: a slope-scaled factor (-2 until this change)
+    // grows with the polygon's per-pixel depth slope, which explodes at the
+    // sphere's grazing rim and is steeper the smaller the eye is drawn, so
+    // the eyeball's silhouette won the depth test against the lid skin in
+    // front of it - a ring of sclera round the lids in the full-body view
+    // (45% sclera share vs 36% in the bust for the same lid weight) and a
+    // bare bead at small Sizes.
     mat.polygonOffset = true;
-    mat.polygonOffsetFactor = -2;
+    mat.polygonOffsetFactor = 0;
     mat.polygonOffsetUnits = -4;
     if (envMap) mat.envMap = envMap;
     mat.userData.irisColor = new THREE.Color(0x2e4d7a);
@@ -620,9 +687,11 @@
     mat.onBeforeCompile = function (shader) {
       shader.uniforms.irisColor = { value: mat.userData.irisColor };
       shader.uniforms.irisSize = { value: mat.userData.irisSize };
+      shader.uniforms.eyeCentreL = { value: new THREE.Vector3() };
+      shader.uniforms.eyeCentreR = { value: new THREE.Vector3() };
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <common>",
-        "#include <common>\nuniform vec3 irisColor;\nuniform float irisSize;"
+        "#include <common>\nuniform vec3 irisColor;\nuniform float irisSize;\nuniform vec3 eyeCentreL;\nuniform vec3 eyeCentreR;"
       );
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <map_fragment>",
@@ -744,6 +813,35 @@
     var i;
     for (i = 0; i < eyeBones.length; i++) {
       aimBoneAt(eyeBones[i], eyeRests[i], target, MAX_GAZE_ANGLE);
+    }
+  }
+
+  var _eyeCentreL = new THREE.Vector3();
+  var _eyeCentreR = new THREE.Vector3();
+
+  // The first two eye bones' centres in `cam`'s view space (bones[0] -> outL,
+  // bones[1] -> outR; the shader takes whichever is nearer, so the order
+  // does not matter). Feeds the analytic eyeball normal in irisFragmentChunk.
+  function viewSpaceEyeCentres(bones, cam, outL, outR) {
+    cam.updateMatrixWorld(true);
+    cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+    var outs = [outL, outR];
+    var i;
+    for (i = 0; i < bones.length && i < 2; i++) {
+      bones[i].updateWorldMatrix(true, false);
+      bones[i].getWorldPosition(outs[i]).applyMatrix4(cam.matrixWorldInverse);
+    }
+  }
+
+  function updateEyeCentres() {
+    if (!camera || eyeBones.length < 2) return;
+    viewSpaceEyeCentres(eyeBones, camera, _eyeCentreL, _eyeCentreR);
+    var i;
+    for (i = 0; i < eyeMats.length; i++) {
+      var shader = eyeMats[i].userData.shader;
+      if (!shader || !shader.uniforms.eyeCentreL) continue;
+      shader.uniforms.eyeCentreL.value.copy(_eyeCentreL);
+      shader.uniforms.eyeCentreR.value.copy(_eyeCentreR);
     }
   }
 
@@ -910,6 +1008,7 @@
       headBones[i].rotation.y = headRests[i].y + Math.sin(clock * 0.45) * 0.035;
     }
     if (camera) aimEyes(camera.position);
+    updateEyeCentres();
     renderer.render(scene, camera);
   }
 
@@ -1172,11 +1271,25 @@
         position: [pos.x, pos.y, pos.z],
         forward: [fwd.x, fwd.y, fwd.z],
         scale: bone.scale.x,
-        offCameraDeg: null
+        offCameraDeg: null,
+        screen: null
       };
       if (camera) {
         toCam.subVectors(camera.position, pos).normalize();
         entry.offCameraDeg = (fwd.angleTo(toCam) * 180) / Math.PI;
+        // Where the eye centre lands on the canvas (CSS px, y down) and how
+        // many CSS px one metre covers at its depth, so a pixel check can
+        // find the eyeball without re-deriving the camera rule.
+        camera.updateMatrixWorld(true);
+        var view = pos.clone().applyMatrix4(camera.matrixWorldInverse);
+        var ndc = pos.clone().project(camera);
+        var w = window.innerWidth;
+        var h = window.innerHeight;
+        entry.screen = {
+          x: ((ndc.x + 1) / 2) * w,
+          y: ((1 - ndc.y) / 2) * h,
+          pxPerMetre: (h / 2) / Math.tan((camera.fov * Math.PI) / 360) / Math.max(1e-6, -view.z)
+        };
       }
       out.gaze[rigName(bone)] = entry;
     });
@@ -1193,11 +1306,18 @@
     IRIS_RADIUS: IRIS_RADIUS,
     PUPIL_RADIUS: PUPIL_RADIUS,
     UPPER_LID_DROP: UPPER_LID_DROP,
+    UPPER_LID_DROP_LARGE: UPPER_LID_DROP_LARGE,
     MAX_GAZE_ANGLE: MAX_GAZE_ANGLE,
     EYE_SCALE: EYE_SCALE,
     EYE_SCALE_MIN: EYE_SCALE_MIN,
     EYE_SCALE_MAX: EYE_SCALE_MAX,
+    IRIS_SIZE_SMALL: IRIS_SIZE_SMALL,
+    IRIS_SIZE_LARGE: IRIS_SIZE_LARGE,
+    CATCHLIGHT: CATCHLIGHT,
     eyeScaleFor: eyeScaleFor,
+    irisSizeFor: irisSizeFor,
+    browMorphs: browMorphs,
+    viewSpaceEyeCentres: viewSpaceEyeCentres,
     applyEyeScale: applyEyeScale,
     upperLidDrop: upperLidDrop,
     aimBoneAt: aimBoneAt,

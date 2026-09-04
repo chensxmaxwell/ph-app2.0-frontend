@@ -56,11 +56,23 @@ type ViewerRig = {
   IRIS_RADIUS: number;
   PUPIL_RADIUS: number;
   UPPER_LID_DROP: number;
+  UPPER_LID_DROP_LARGE: number;
   MAX_GAZE_ANGLE: number;
   EYE_SCALE: number;
   EYE_SCALE_MIN: number;
   EYE_SCALE_MAX: number;
+  IRIS_SIZE_SMALL: number;
+  IRIS_SIZE_LARGE: number;
+  CATCHLIGHT: { lo: number; hi: number; mix: number };
   eyeScaleFor: (eyeSize: number) => number;
+  irisSizeFor: (eyeSize: number) => number;
+  browMorphs: (eyeSize: number, jaw: number) => { raise: number; lower: number };
+  viewSpaceEyeCentres: (
+    bones: unknown[],
+    camera: unknown,
+    outL: unknown,
+    outR: unknown
+  ) => void;
   applyEyeScale: (bones: unknown[], scale: number) => void;
   upperLidDrop: (eyeSize: number) => number;
   aimBoneAt: (
@@ -198,11 +210,23 @@ describe("eyes", () => {
     }
   );
 
-  it("gives the iris material a polygon offset so the closed-eye cap in Head_0 cannot z-fight it", () => {
+  it("gives the iris material a constant depth offset only: a slope-scaled factor let the eyeball rim poke through the lids", () => {
+    // TestFlight craft screenshots (Outfit full vs Eyes bust): the same lid
+    // weight read as a wide stare with sclera all round in the full-body view
+    // and as a resting lid in the bust. Measured in headless Chrome with only
+    // this variable flipped: polygonOffsetFactor -2 scales with the polygon's
+    // per-pixel depth slope, which explodes at a sphere's grazing rim and is
+    // ~2.5x steeper when the eye is drawn smaller (far camera, small Size),
+    // so the sphere's silhouette won the depth test against the lid skin in
+    // front of it - 45.5% sclera share in full vs 36.3% in bust. Factor 0
+    // gives 33.9% vs 33.7%. The constant `units` term is enough to keep the
+    // coincident Head_0 eye cap behind the eyeball.
     const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
     const iris = html.slice(html.indexOf("function upgradeIrisMat"));
     expect(iris).toMatch(/mat\.polygonOffset = true/);
-    expect(iris).toMatch(/mat\.polygonOffsetFactor = -\d/);
+    expect(iris).toMatch(/mat\.polygonOffsetFactor = 0;/);
+    expect(iris).toMatch(/mat\.polygonOffsetUnits = -\d/);
+    expect(iris).not.toMatch(/mat\.polygonOffsetFactor = -\d/);
   });
 
   it("paints the iris well inside the lid opening, with a pupil that reads as an iris rather than a black disc", () => {
@@ -211,11 +235,11 @@ describe("eyes", () => {
     // the nose and 0.66 to the temple. 1.2 (11) shipped irisR 0.58 (edge to
     // edge), 1.2 (12) shipped 0.40, still the full height of the aperture
     // with a black-disc pupil. The iris must stay inside the lower lid at
-    // every Eyes-slider setting (irisSize 0.82..1.10) with sclera on both
-    // sides, and the pupil must leave a wide iris band.
-    expect(rig.IRIS_RADIUS * 1.1).toBeLessThan(0.35);
+    // every Eyes-slider setting (irisSizeFor) with sclera on both sides, and
+    // the pupil must leave a wide iris band.
+    expect(rig.IRIS_RADIUS * rig.IRIS_SIZE_SMALL).toBeLessThan(0.35);
     // Still a cartoon eye, not a pinprick.
-    expect(rig.IRIS_RADIUS * 0.82).toBeGreaterThan(0.22);
+    expect(rig.IRIS_RADIUS * rig.IRIS_SIZE_LARGE).toBeGreaterThan(0.22);
     const pupilToIris = rig.PUPIL_RADIUS / rig.IRIS_RADIUS;
     expect(pupilToIris).toBeGreaterThanOrEqual(0.3);
     expect(pupilToIris).toBeLessThanOrEqual(0.42);
@@ -248,29 +272,50 @@ describe("eyes", () => {
     expect(chunk).not.toContain("vec3(0.98, 0.99, 1.0)");
     expect(chunk).toMatch(/lidShade = smoothstep\([^)]*p\.y\)/);
     expect(chunk).toContain("scleraCol *= 1.0 - lidShade;");
-    expect(chunk).toMatch(/dot\(vn, normalize\(vec3\(/);
+    expect(chunk).toMatch(/dot\(ballN, normalize\(vec3\(/);
     expect(chunk).not.toMatch(/length\(p - vec2\([^)]*\) \* irisR\)/);
     // Lifted unlit so the lower white does not go steel grey under the
     // purple hemisphere ground.
     expect(chunk).toMatch(/totalEmissiveRadiance \+= col \*/);
   });
 
-  it("lowers the upper lid off the startled rest pose for every Eyes setting, never onto the pupil", () => {
-    // Shape_EyeLidHeight on Head_0: 0 is the wide-open rest lid (+24deg above
-    // the iris axis), ~0.27 puts the lid on the pupil, 0.45 on the iris
-    // centre. Bigger Eyes open the lid a little, never all the way.
+  // Shape_EyeLidHeight on Head_0, calibrated in headless Chrome on the
+  // rendered eye (upper-lid coverage of the iris height, iris paint 1.0):
+  // 0.16 -> 3%, 0.20 -> 9%, 0.24 -> 14%, 0.28 -> 20%, 0.32 -> 28%, and the
+  // lid reaches the pupil at ~0.34. A relaxed adult lid covers 15-25% of the
+  // iris; TestFlight shipped 0.20 -> 0.12 (3-9%), which read as a stare.
+  const LID_ON_PUPIL = 0.34;
+  // TestFlight 1.2 (14) shipped a fixed eye-bone scale of 0.70.
+  const PREVIOUS_FIXED_EYE_SCALE = 0.7;
+
+  it("rests the upper lid on the iris at every Size: heaviest for small eyes, lighter but never startled for large", () => {
+    // Stylized small eyes read cute with a tighter aperture (more lid, less
+    // sclera), large eyes need a resting lid so they do not read as startled.
+    // The lid therefore gets *heavier* as Size shrinks - the 1.2 (14) curve
+    // opened it for bigger eyes, which is the wrong direction at both ends.
     const drops = [0, 0.25, 0.5, 0.75, 1].map((eye) => rig.upperLidDrop(eye));
     for (const drop of drops) {
-      expect(drop).toBeGreaterThanOrEqual(0.1);
-      expect(drop).toBeLessThanOrEqual(0.24);
+      // Never back to the 0.12-0.20 stare, never onto the pupil.
+      expect(drop).toBeGreaterThanOrEqual(0.2);
+      expect(drop).toBeLessThanOrEqual(LID_ON_PUPIL - 0.03);
     }
     for (let i = 1; i < drops.length; i += 1) {
       expect(drops[i]).toBeLessThan(drops[i - 1]);
     }
-    expect(rig.upperLidDrop(0.5)).toBeCloseTo(rig.UPPER_LID_DROP - 0.04, 6);
+    // Size 0: about a quarter of the iris under the lid (0.29 -> ~27%).
+    expect(rig.upperLidDrop(0)).toBe(rig.UPPER_LID_DROP);
+    expect(rig.upperLidDrop(0)).toBeGreaterThanOrEqual(0.28);
+    // Size 0.5 (the default look): the lid rests on the iris top (~18%).
+    expect(rig.upperLidDrop(0.5)).toBeGreaterThanOrEqual(0.24);
+    expect(rig.upperLidDrop(0.5)).toBeLessThanOrEqual(0.27);
+    // Size 1: lighter, still on the iris (~15%), never the old 0.12.
+    expect(rig.upperLidDrop(1)).toBe(rig.UPPER_LID_DROP_LARGE);
+    expect(rig.upperLidDrop(1)).toBeGreaterThanOrEqual(0.2);
+    expect(rig.upperLidDrop(1)).toBeLessThanOrEqual(0.23);
     // Out-of-range slider values clamp instead of flipping the lid open.
     expect(rig.upperLidDrop(-3)).toBe(rig.upperLidDrop(0));
     expect(rig.upperLidDrop(9)).toBe(rig.upperLidDrop(1));
+    expect(rig.upperLidDrop(NaN)).toBe(rig.upperLidDrop(0));
   });
 
   it("shrinks the default whole eye below the 1.2 (14) fixed 0.70 so a mid Size reads human-proportioned", () => {
@@ -281,30 +326,36 @@ describe("eyes", () => {
     // a 26 cm head; a real eye is 24 mm, i.e. 0.54. The default look (Eyes
     // Size 0.5) must sit clearly under the old 0.70 without becoming a
     // pinprick, and EYE_SCALE stays the name for that default.
-    const PREVIOUS_FIXED_EYE_SCALE = 0.7;
     expect(rig.EYE_SCALE).toBeCloseTo(rig.eyeScaleFor(0.5), 9);
     expect(rig.EYE_SCALE).toBeLessThanOrEqual(PREVIOUS_FIXED_EYE_SCALE - 0.05);
     expect(rig.EYE_SCALE).toBeGreaterThanOrEqual(0.5);
+    // The PR #33 default (a 25.8 mm eye) is kept exactly, so every companion
+    // saved at Size 0.5 keeps its eyeball size; only lid and iris change.
+    expect(rig.EYE_SCALE).toBeCloseTo(0.58, 9);
     // Not 1.0 by a rounding accident.
     expect(rig.EYE_SCALE).not.toBeCloseTo(1, 1);
   });
 
-  it("maps the Eyes Size slider onto a whole-eye scale range wide enough to see", () => {
+  it("maps the Eyes Size slider onto a narrower whole-eye beauty band: small is modest, not a pinprick", () => {
     // 1.2 (14): Size only repainted the iris (irisSize 0.82..1.10) and opened
     // the lid by 0.08 while the eyeball stayed at 0.70 at every slider
-    // position, so min and max looked the same (Eyes_0 31.2 -> 31.7 mm tall).
-    // Size 0 must be clearly smaller than the old fixed eye, Size 1 may go a
-    // little past it but never back toward the 1.0 saucer.
+    // position. PR #33 then drove the bones 0.42 -> 0.74: at 0.42 (18.6 mm)
+    // the eye read as a bare bead because the whole look was uniform scale.
+    // Size now couples scale with the lid and iris, so the scale itself can
+    // stay in a beauty band: 0.46 (20.4 mm, a small eye) to 0.70 (31.1 mm,
+    // the 1.2 (14) eye Maxwell called "a bit large" - large is the intent at
+    // the top end). Never back toward the 1.0 saucer.
     const min = rig.eyeScaleFor(0);
     const max = rig.eyeScaleFor(1);
     expect(min).toBe(rig.EYE_SCALE_MIN);
     expect(max).toBe(rig.EYE_SCALE_MAX);
-    expect(min).toBeLessThanOrEqual(0.5);
-    expect(min).toBeGreaterThanOrEqual(0.35);
+    expect(min).toBeGreaterThanOrEqual(0.45);
+    expect(min).toBeLessThanOrEqual(0.48);
     expect(max).toBeGreaterThan(rig.EYE_SCALE);
-    expect(max).toBeLessThanOrEqual(0.85);
-    // The spread: the eye grows by at least half from min to max.
-    expect(max - min).toBeGreaterThanOrEqual(0.25);
+    expect(max).toBeLessThanOrEqual(PREVIOUS_FIXED_EYE_SCALE);
+    expect(max).toBeGreaterThanOrEqual(0.68);
+    // The spread: the eye still grows by half from min to max.
+    expect(max - min).toBeGreaterThanOrEqual(0.24 - 1e-9);
     expect(max / min).toBeGreaterThanOrEqual(1.5);
     // Monotonic and linear, so every slider step is the same visible step.
     const steps = [0, 0.25, 0.5, 0.75, 1].map((size) => rig.eyeScaleFor(size));
@@ -339,14 +390,151 @@ describe("eyes", () => {
     expect(html).toMatch(/applyEyeScale\(eyeBones,\s*eyeScaleFor\(/);
   });
 
-  it("keeps the 1.2 (13) lid, gaze and iris constants: Size moves the eyeball scale, not the horror-eye fixes", () => {
-    expect(rig.UPPER_LID_DROP).toBe(0.2);
+  it("keeps the 1.2 (13) gaze and iris radii: Size moves scale, lid weight and iris share, not the gaze solver", () => {
     expect(rig.MAX_GAZE_ANGLE).toBe(0.24);
+    // 0.31 = a 27.9deg iris on the ball (d is angle / 90deg, measured on the
+    // GLB's UVs), the real iris-to-eyeball proportion; irisSizeFor scales it.
     expect(rig.IRIS_RADIUS).toBe(0.31);
     expect(rig.PUPIL_RADIUS).toBe(0.115);
-    expect(rig.upperLidDrop(0)).toBeCloseTo(0.2, 9);
-    expect(rig.upperLidDrop(0.5)).toBeCloseTo(0.16, 9);
-    expect(rig.upperLidDrop(1)).toBeCloseTo(0.12, 9);
+  });
+
+  it("paints the iris largest for small eyes and never under the real proportion, so neither end goes white", () => {
+    // 1.2 (14) / PR #33 painted irisSize 0.82 -> 1.10 *with* Size: a small
+    // eye got both a small ball and a small iris share (a pinprick in white),
+    // a large eye a big share. Measured on the render (lid 0.28, scale 0.58):
+    // sclera share 38% at 0.90, 31% at 1.00, 24% at 1.10, 19% at 1.20. Small
+    // eyes keep a readable iris by getting the biggest share; large eyes stay
+    // at the real proportion (1.0 = iris diameter ~ eyeball radius) so a
+    // resting lid, not a white saucer, is what grows.
+    const sizes = [0, 0.25, 0.5, 0.75, 1].map((eye) => rig.irisSizeFor(eye));
+    expect(sizes[0]).toBe(rig.IRIS_SIZE_SMALL);
+    expect(sizes[4]).toBe(rig.IRIS_SIZE_LARGE);
+    expect(rig.IRIS_SIZE_SMALL).toBeGreaterThanOrEqual(1.08);
+    expect(rig.IRIS_SIZE_SMALL).toBeLessThanOrEqual(1.15);
+    expect(rig.IRIS_SIZE_LARGE).toBeGreaterThanOrEqual(1.0);
+    expect(rig.IRIS_SIZE_LARGE).toBeLessThan(rig.IRIS_SIZE_SMALL);
+    for (let i = 1; i < sizes.length; i += 1) {
+      expect(sizes[i]).toBeLessThanOrEqual(sizes[i - 1]);
+    }
+    // The painted iris must stay inside the lower lid at every Size: the rest
+    // lids uncover 0.35 below the axis, and the lid rests on top.
+    expect(rig.IRIS_RADIUS * rig.IRIS_SIZE_SMALL).toBeLessThan(0.35);
+    // The pupil stays clear of the heaviest lid: at Size 0 the lid sits about
+    // 0.235 r above the centre (0.29 -> ~27% of the iris), the pupil top at
+    // sin(PUPIL_RADIUS * irisSize * 90deg) r must be under that.
+    const pupilTop = Math.sin(
+      (rig.PUPIL_RADIUS * rig.IRIS_SIZE_SMALL * 90 * Math.PI) / 180
+    );
+    expect(pupilTop).toBeLessThan(0.21);
+    expect(rig.irisSizeFor(-1)).toBe(rig.IRIS_SIZE_SMALL);
+    expect(rig.irisSizeFor(4)).toBe(rig.IRIS_SIZE_LARGE);
+    expect(rig.irisSizeFor(NaN)).toBe(rig.IRIS_SIZE_SMALL);
+  });
+
+  it("drives the painted iris from irisSizeFor on every look, with no leftover 0.82 + 0.28 * Size curve", () => {
+    const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+    const tintStart = html.indexOf("function tintLook(");
+    const tintEnd = html.indexOf("function canvasTexture(");
+    expect(tintStart).toBeGreaterThan(0);
+    expect(tintEnd).toBeGreaterThan(tintStart);
+    const tintBody = html.slice(tintStart, tintEnd);
+    expect(tintBody).toMatch(/irisSize = irisSizeFor\(next\.eyeSize\)/);
+    expect(html).not.toMatch(/0\.82 \+ clamp01\(next\.eyeSize\) \* 0\.28/);
+  });
+
+  it("paints a small, translucent catchlight from the analytic eyeball normal, not the interpolated vertex normal", () => {
+    // Eyes_0 is a 20-segment UV sphere. The old highlight was a
+    // smoothstep(0.977, 0.992) spot (a ~12deg radius, 0.21 r on screen) of the
+    // *interpolated* vertex normal, mixed 92% white: measured, it whitened
+    // 15-49% of the visible iris and its size flipped between renders with
+    // the facet alignment. On a 10 px full-body iris that is the top half of
+    // the iris painted sclera-white. The normal is now (fragment - eye
+    // centre) in view space, exact on a sphere, and the spot is <= 9deg and
+    // <= 85% white.
+    const chunk = rig.irisFragmentChunk();
+    expect(chunk).toContain("eyeCentreL");
+    expect(chunk).toContain("eyeCentreR");
+    expect(chunk).toMatch(/vec3 fragPos = -vViewPosition;/);
+    expect(chunk).toMatch(/vec3 ballN = normalize\(/);
+    expect(chunk).toMatch(/float spec = smoothstep\([^)]*dot\(ballN,/);
+    expect(chunk).not.toMatch(/float spec = smoothstep\([^)]*dot\(vn,/);
+    const { lo, hi, mix } = rig.CATCHLIGHT;
+    // cos(9deg) = 0.9877: the spot's soft edge starts inside 9deg.
+    expect(lo).toBeGreaterThanOrEqual(0.987);
+    expect(hi).toBeGreaterThan(lo);
+    expect(hi).toBeLessThan(1);
+    expect(mix).toBeLessThanOrEqual(0.85);
+    expect(mix).toBeGreaterThanOrEqual(0.6);
+    expect(chunk).toContain(
+      `float spec = smoothstep(${lo.toFixed(3)}, ${hi.toFixed(3)}, dot(ballN,`
+    );
+    expect(chunk).toContain(`col = mix(col, vec3(1.0), spec * ${mix.toFixed(2)});`);
+    // The material declares the two centres and the frame loop feeds them.
+    const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+    const irisMat = html.slice(html.indexOf("function upgradeIrisMat"), html.indexOf("function addGroundContact"));
+    expect(irisMat).toMatch(/uniform vec3 eyeCentreL;\\nuniform vec3 eyeCentreR;/);
+    expect(irisMat).toMatch(/shader\.uniforms\.eyeCentreL = \{ value: new THREE\.Vector3\(\) \}/);
+    const animateBody = html.slice(html.indexOf("function animate("), html.indexOf("function fail("));
+    expect(animateBody).toMatch(/aimEyes\(camera\.position\);\s*\n\s*updateEyeCentres\(\);/);
+  });
+
+  it("puts each eye's centre into the camera's view space for the catchlight", () => {
+    const camera = new THREE.PerspectiveCamera(28, 393 / 854, 0.05, 40);
+    camera.position.set(0.09, 1.478, 1.735);
+    camera.lookAt(0, 1.44, 0);
+    camera.updateMatrixWorld(true);
+    const root = new THREE.Group();
+    root.position.set(0.01, 0.02, 0);
+    const left = new THREE.Bone();
+    left.position.set(0.039, 1.651, 0.077);
+    const right = new THREE.Bone();
+    right.position.set(-0.043, 1.651, 0.077);
+    root.add(left, right);
+    root.updateMatrixWorld(true);
+    const outL = new THREE.Vector3();
+    const outR = new THREE.Vector3();
+    rig.viewSpaceEyeCentres([left, right], camera, outL, outR);
+    const wantL = left
+      .getWorldPosition(new THREE.Vector3())
+      .applyMatrix4(camera.matrixWorldInverse);
+    const wantR = right
+      .getWorldPosition(new THREE.Vector3())
+      .applyMatrix4(camera.matrixWorldInverse);
+    expect(outL.distanceTo(wantL)).toBeLessThan(1e-9);
+    expect(outR.distanceTo(wantR)).toBeLessThan(1e-9);
+    // In view space the character's left eye (+x) sits to the right of the
+    // right eye and both are in front of the camera (negative z).
+    expect(outL.x).toBeGreaterThan(outR.x);
+    expect(outL.z).toBeLessThan(-1);
+    expect(outR.z).toBeLessThan(-1);
+  });
+
+  it("keeps the brows nearly level: no arch lift for a default eye, a slight settle for small eyes", () => {
+    // The two screenshots read "arched brows" as part of the stare: the old
+    // Shape_RaiseBrows 0.02 + 0.04 * Size lifted every look. Now the lift is
+    // 0 at Size 0 and stays under 0.03; small eyes settle the brow a touch
+    // (Shape_LowerBrows moves 6.7 mm at 1.0, so 0.12 is under 1 mm).
+    const jaw = 0.46;
+    const small = rig.browMorphs(0, jaw);
+    const mid = rig.browMorphs(0.5, jaw);
+    const large = rig.browMorphs(1, jaw);
+    expect(small.raise).toBe(0);
+    expect(mid.raise).toBeLessThanOrEqual(0.02);
+    expect(large.raise).toBeLessThanOrEqual(0.03);
+    expect(large.raise).toBeGreaterThanOrEqual(mid.raise);
+    // The jaw share of LowerBrows (mild(jaw, 0.08)) is still there...
+    const jawShare = Math.max(0, Math.min(1, jaw)) * 0.08;
+    expect(large.lower).toBeCloseTo(jawShare, 9);
+    // ...and small eyes add a settle that fades out by Size 1.
+    expect(small.lower).toBeGreaterThan(jawShare + 0.08);
+    expect(small.lower).toBeLessThanOrEqual(jawShare + 0.15);
+    expect(mid.lower).toBeGreaterThan(large.lower);
+    expect(mid.lower).toBeLessThan(small.lower);
+    const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+    const meshLook = html.slice(html.indexOf("function applyMeshLook("), html.indexOf("function prefixIndex("));
+    expect(meshLook).toMatch(/var brows = browMorphs\(eye, next\.jaw\);/);
+    expect(meshLook).toMatch(/"Shape_RaiseBrows", brows\.raise/);
+    expect(meshLook).toMatch(/"Shape_LowerBrows", brows\.lower/);
   });
 
   // A head bone with one eye bone under it and a three-vertex SkinnedMesh.
