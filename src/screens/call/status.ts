@@ -34,6 +34,18 @@ export const callStatusLabel = ({
   }
 };
 
+export type CallMode = "voice" | "video";
+
+// The third control switches modes. It is named after where it goes, not
+// where the call is: on a video call it reads Voice (back to audio only), on
+// a voice call it reads Video — and the glyph follows the same word.
+export const modeToggle = (
+  video: boolean
+): { target: CallMode; label: "Voice" | "Video" } =>
+  video
+    ? { target: "voice", label: "Voice" }
+    : { target: "video", label: "Video" };
+
 export const holdButtonLabel = (phase: CallPhase): string => {
   switch (phase) {
     case "connecting":

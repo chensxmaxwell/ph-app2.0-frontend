@@ -50,7 +50,11 @@ import {
   CAMERA_START_TIMEOUT_MS,
   CAMERA_STARTING_COPY,
 } from "../src/screens/call/camera-preview";
-import { callStatusLabel, holdButtonLabel } from "../src/screens/call/status";
+import {
+  callStatusLabel,
+  holdButtonLabel,
+  modeToggle,
+} from "../src/screens/call/status";
 
 /**
  * The phone icon on a Message thread and on Love chat used to open a timer
@@ -519,6 +523,40 @@ describe("Message thread voice call", () => {
     expect(texts(tree.root)).toContain("Amanda is speaking");
   });
 
+  it("the mode toggle's icon and label agree: a camera to go to Video, a handset to go back to Voice", async () => {
+    // TestFlight 1.2 (14): in video mode the control showed a camera glyph
+    // under the word "Voice". Icon and label both name the target mode.
+    const tree = await mountMessageCall("amanda");
+    await connect();
+    const toggle = () => touchable(tree.root, "call-video-toggle");
+    // A View matches as both the composite and its host node: dedupe.
+    const iconIds = () =>
+      Array.from(
+        new Set(
+          toggle()
+            .findAll((node) =>
+              /^call-mode-icon-/.test(String(node.props?.testID))
+            )
+            .map((node) => String(node.props.testID))
+        )
+      );
+    const labelOf = () =>
+      texts(tree.root).filter((copy) => copy === "Video" || copy === "Voice");
+
+    expect(labelOf()).toEqual(["Video"]);
+    expect(iconIds()).toEqual(["call-mode-icon-video"]);
+
+    press(toggle());
+    await settle();
+    expect(labelOf()).toEqual(["Voice"]);
+    expect(iconIds()).toEqual(["call-mode-icon-voice"]);
+
+    press(toggle());
+    await settle();
+    expect(labelOf()).toEqual(["Video"]);
+    expect(iconIds()).toEqual(["call-mode-icon-video"]);
+  });
+
   it("the portrait fills the video stage instead of drawing at the asset's own size", async () => {
     // TestFlight 1.2 (14): Amanda's photo (girl.png, 786×676) sat at the
     // stage's top-left at its intrinsic size — only hair, one eye and an ear
@@ -867,6 +905,11 @@ describe("call status copy", () => {
     expect(callStatusLabel({ phase: "speaking", name: "Kevin" })).toBe(
       "Kevin is speaking"
     );
+  });
+
+  it("the mode toggle names the mode it switches to", () => {
+    expect(modeToggle(false)).toEqual({ target: "video", label: "Video" });
+    expect(modeToggle(true)).toEqual({ target: "voice", label: "Voice" });
   });
 
   it("labels the hold button by phase", () => {
