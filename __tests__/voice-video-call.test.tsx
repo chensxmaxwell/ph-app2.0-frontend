@@ -921,6 +921,19 @@ describe("Message thread voice call", () => {
     expect(texts(pip())).toEqual([]);
     expect(cameraHosts(pip())).toHaveLength(1);
 
+    // A late "configured" report never covers a preview that is already
+    // painting (and never restarts the stall timer over it).
+    act(() => {
+      cameraHosts(pip())[0].props.onStatusChange({
+        nativeEvent: { status: "authorized", message: "" },
+      });
+    });
+    expect(texts(pip())).toEqual([]);
+    act(() => {
+      jest.advanceTimersByTime(CAMERA_START_TIMEOUT_MS + 50);
+    });
+    expect(texts(pip())).toEqual([]);
+
     act(() => {
       cameraHosts(pip())[0].props.onStatusChange({
         nativeEvent: { status: "interrupted", message: "" },
@@ -1352,14 +1365,29 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
       "utf8"
     );
     const camera = source.slice(source.indexOf("@implementation PHCameraPreviewView"));
-    // `running` is what clears the PiP copy: it must come from the session
-    // actually starting, not from having configured it.
-    expect(camera).toContain("AVCaptureSessionDidStartRunningNotification");
+    // TestFlight 1.2 (15): the PiP was a black box with no copy at 00:30 —
+    // JS had been told `running` (AVCaptureSessionDidStartRunning fired) and
+    // yet nothing painted. The session running is not the layer painting.
+    // The preview layer is now the view's own backing layer (no hand-managed
+    // sublayer whose frame was copied from bounds that RN had not laid out
+    // yet), and `running` is derived from the layer's `previewing` flag,
+    // which is true only while it renders frames.
+    expect(camera).toContain("+ (Class)layerClass");
+    expect(camera).toContain("[AVCaptureVideoPreviewLayer class]");
+    expect(camera).not.toContain("addSublayer:");
+    expect(camera).not.toContain("layerWithSession:");
+    expect(camera).toContain('forKeyPath:@"previewing"');
     expect(camera).toContain('emitStatus:@"running"');
     expect(camera).toContain("AVCaptureSessionRuntimeErrorNotification");
     expect(camera).toContain("AVCaptureSessionWasInterruptedNotification");
     expect(camera).toContain("AVCaptureSessionInterruptionEndedNotification");
+    // A session that stops behind our back (another camera client, the
+    // view detached and reattached) must not leave JS believing `running`.
+    expect(camera).toContain("AVCaptureSessionDidStopRunningNotification");
     expect(camera).toContain('emitStatus:@"interrupted"');
+    // Session configuration and start/stop run on the session queue, never
+    // the main thread.
+    expect(camera).toContain("dispatch_async(_sessionQueue");
     // Coming back from Settings after granting access starts the preview
     // without a remount.
     expect(camera).toContain("UIApplicationDidBecomeActiveNotification");
