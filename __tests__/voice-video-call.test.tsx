@@ -14,7 +14,7 @@ import {
   it,
   jest,
 } from "@jest/globals";
-import { readFileSync } from "fs";
+import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SCREENS } from "../src/common/constant";
@@ -65,7 +65,9 @@ import {
 } from "../src/screens/call/camera-preview";
 import { OPENER_INSTRUCTION } from "../src/screens/call/opener";
 import {
+  CALL_PHASES,
   callStatusLabel,
+  micButtonEnabled,
   micButtonLabel,
   modeToggle,
   voiceKeyHint,
@@ -1290,6 +1292,10 @@ describe("call status copy", () => {
     expect(callStatusLabel({ phase: "connecting", name: "Kevin" })).toBe(
       "Calling Kevin"
     );
+    // The companion's first line is on its way: connected, timer running.
+    expect(callStatusLabel({ phase: "greeting", name: "Kevin" })).toBe(
+      "Connected"
+    );
     expect(callStatusLabel({ phase: "ready", name: "Kevin" })).toBe("Connected");
     expect(callStatusLabel({ phase: "listening", name: "Kevin" })).toBe(
       "Listening…"
@@ -1307,8 +1313,12 @@ describe("call status copy", () => {
     expect(modeToggle(true)).toEqual({ target: "voice", label: "Voice" });
   });
 
-  it("labels the mic button by phase, never as hold-to-talk", () => {
+  it("labels the mic button by phase: the mic is connecting until the companion has greeted, then it listens on its own", () => {
     expect(micButtonLabel({ phase: "connecting", muted: false })).toBe(
+      "Connecting…"
+    );
+    // The opener is on its way (Ark): the mic will open by itself after it.
+    expect(micButtonLabel({ phase: "greeting", muted: false })).toBe(
       "Connecting…"
     );
     expect(micButtonLabel({ phase: "listening", muted: false })).toBe(
@@ -1320,11 +1330,45 @@ describe("call status copy", () => {
     expect(micButtonLabel({ phase: "speaking", muted: false })).toBe(
       "Tap to interrupt"
     );
+    // The loop stopped for something only the user can fix (mic permission,
+    // no Ark key): the last-resort tap resumes, it never "starts" talking.
     expect(micButtonLabel({ phase: "ready", muted: false })).toBe(
-      "Tap to talk"
+      "Tap to resume"
     );
     expect(micButtonLabel({ phase: "ready", muted: true })).toBe("Muted");
     expect(micButtonLabel({ phase: "speaking", muted: true })).toBe("Muted");
+  });
+
+  it("no phase, muted or not, ever reads Tap to talk or Hold to talk (Maxwell, TestFlight 1.2 (18): 「还是有tap to talk」)", () => {
+    expect(CALL_PHASES).toEqual(
+      expect.arrayContaining([
+        "connecting",
+        "greeting",
+        "listening",
+        "thinking",
+        "speaking",
+        "ready",
+      ])
+    );
+    CALL_PHASES.forEach((phase) => {
+      [false, true].forEach((muted) => {
+        expect(micButtonLabel({ phase, muted })).not.toMatch(
+          /tap to talk|hold to talk|to talk/i
+        );
+        expect(callStatusLabel({ phase, name: "Chad" })).not.toMatch(
+          /tap to talk|hold to talk|to talk/i
+        );
+      });
+    });
+  });
+
+  it("the mic control is inert while the call rings and while the opener is on its way, live from the first spoken word", () => {
+    expect(micButtonEnabled("connecting")).toBe(false);
+    expect(micButtonEnabled("greeting")).toBe(false);
+    expect(micButtonEnabled("speaking")).toBe(true);
+    expect(micButtonEnabled("listening")).toBe(true);
+    expect(micButtonEnabled("thinking")).toBe(true);
+    expect(micButtonEnabled("ready")).toBe(true);
   });
 
   it("names the Voice key the cloud voice needs", () => {
@@ -1365,6 +1409,22 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
     expect(source).not.toContain("onPressIn");
     expect(source).not.toContain("onPressOut");
     expect(source).toContain('testID="call-mic"');
+  });
+
+  it("no call source carries tap-to-talk or hold-to-talk copy, in any casing", () => {
+    // Maxwell, TestFlight 1.2 (18): 「还是有tap to talk」. The words must not
+    // come back through any file the call renders.
+    const callDir = join(__dirname, "../src/screens/call");
+    const files = [
+      ...readdirSync(callDir).map((file) => join(callDir, file)),
+      join(__dirname, "../src/screens/chat/call.tsx"),
+      join(__dirname, "../src/screens/love/call.tsx"),
+    ];
+    expect(files.length).toBeGreaterThan(5);
+    const offenders = files.filter((file) =>
+      /tap[ -]to[ -]talk|hold[ -]to[ -]talk/i.test(readFileSync(file, "utf8"))
+    );
+    expect(offenders).toEqual([]);
   });
 
   it("PHNative listens for one utterance at a time and decides natively when the user has finished", () => {

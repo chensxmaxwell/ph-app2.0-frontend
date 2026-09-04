@@ -10,7 +10,7 @@ import { ttsSpeak, ttsStop } from "../../services/tts";
 import { ttsCredentialsFromConfig } from "../../services/tts-config";
 import { listenForUtterance, stopVoiceInput } from "../../services/voice-input";
 import { localOpener, OPENER_INSTRUCTION } from "./opener";
-import { CallPhase, voiceKeyHint } from "./status";
+import { CallPhase, micButtonEnabled, voiceKeyHint } from "./status";
 
 export const CALL_CONNECT_DELAY_MS = 1600;
 // End-pointing handed to the native recognizer: how long the user must be
@@ -337,7 +337,7 @@ export const useVoiceCall = ({
   }, []);
 
   const pressMic = useCallback(() => {
-    if (!aliveRef.current || phaseRef.current === "connecting") {
+    if (!aliveRef.current || !micButtonEnabled(phaseRef.current)) {
       return;
     }
     const turn = (turnRef.current += 1);
