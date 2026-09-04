@@ -7,12 +7,23 @@ export type NativeVoiceResult = {
   message?: string;
 };
 
+// How AVSpeechSynthesizer should sound: a voice of this gender for this
+// language (picked natively from the installed voices), or an exact voice id.
+export type NativeSpeakOptions = {
+  gender?: "female" | "male";
+  language?: string;
+  voiceIdentifier?: string;
+};
+
 type PHNativeModule = {
   avatarViewerUrl?: string | null;
   requestNotifications?: () => Promise<boolean>;
   syncAlarms?: (alarms: Array<Record<string, unknown>>) => Promise<boolean>;
-  speak?: (text: string) => Promise<boolean>;
+  speak?: (text: string, options: NativeSpeakOptions) => Promise<boolean>;
   stopSpeaking?: () => Promise<boolean>;
+  // Base64 MP3 pieces, decoded and concatenated natively, played with
+  // AVAudioPlayer on the playback session; resolves when playback ends.
+  playAudio?: (chunks: string[]) => Promise<boolean>;
   startVoiceInput?: () => Promise<NativeVoiceResult>;
   stopVoiceInput?: () => Promise<NativeVoiceResult>;
 };
@@ -60,17 +71,21 @@ export const syncNativeAlarms = async (alarms: AlarmPayload[]) => {
   }
 };
 
-export const nativeSpeak = async (text: string) => {
+export const nativeSpeak = async (
+  text: string,
+  options: NativeSpeakOptions = {}
+) => {
   if (!Native?.speak) {
     return false;
   }
   try {
-    return (await Native.speak(text)) === true;
+    return (await Native.speak(text, options)) === true;
   } catch {
     return false;
   }
 };
 
+// Stops both the synthesizer and the audio player.
 export const nativeStopSpeaking = async () => {
   if (!Native?.stopSpeaking) {
     return;
@@ -79,6 +94,17 @@ export const nativeStopSpeaking = async () => {
     await Native.stopSpeaking();
   } catch {
     // Already stopped or native module missing.
+  }
+};
+
+export const nativePlayAudio = async (chunks: string[]) => {
+  if (!Native?.playAudio || chunks.length === 0) {
+    return false;
+  }
+  try {
+    return (await Native.playAudio(chunks)) === true;
+  } catch {
+    return false;
   }
 };
 
