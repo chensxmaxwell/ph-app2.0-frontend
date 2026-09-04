@@ -14,7 +14,7 @@ import { useCompanions } from "../../store/companions";
 import { useChat } from "../chat/store";
 import { usePersonFace } from "../avatar/use-person-face";
 import { CallBody } from "../call/call-body";
-import { CALL_CONNECT_DELAY_MS, useVoiceCall } from "../call/use-voice-call";
+import { useVoiceCall } from "../call/use-voice-call";
 import { dismissLoveOverlays } from "./overlay";
 import { resolveLovePerson } from "./partner";
 import { useLoveSession } from "./session";
@@ -72,16 +72,14 @@ export const LoveCallScreen = () => {
     [chatMessages]
   );
   // Restored from the pill: the call has been running, no ring.
-  const [connectDelayMs] = useState(() =>
-    callStartedAt ? 0 : CALL_CONNECT_DELAY_MS
-  );
+  const [ring] = useState(() => !callStartedAt);
   const call = useVoiceCall({
     name,
     personality,
     story,
     history,
     voiceId: voiceForPerson({ id: partnerId, thread, companion }).id,
-    connectDelayMs,
+    ring,
   });
   const [video, setVideo] = useState(false);
   const [now, setNow] = useState(Date.now());

@@ -193,8 +193,17 @@ describe("PHCameraPreviewView (source) starts a preview that paints when the cam
     // Retry, Video off→on and a re-entered call all replace the view.
     expect(camera).toContain("PHCameraSessionQueue()");
     expect(camera).toContain("dispatch_once");
-    expect(camera.match(/dispatch_queue_create\(/g) ?? []).toHaveLength(1);
+    // One session queue in the whole file, created once; the frame queue
+    // (sample-buffer delivery) is a different queue with a different job.
+    expect(
+      camera.match(
+        /dispatch_queue_create\("house\.pleasure\.camera-preview"/g
+      ) ?? []
+    ).toHaveLength(1);
+    expect(camera.match(/dispatch_queue_create\(/g) ?? []).toHaveLength(2);
     expect(camera).not.toContain("_sessionQueue");
+    // Configure, start and stop go through the shared queue only.
+    expect(camera).not.toMatch(/dispatch_async\(PHCameraFrameQueue\(\)/);
   });
 
   it("reads the interruption reason and turns it into copy", () => {
@@ -223,5 +232,55 @@ describe("PHCameraPreviewView (source) starts a preview that paints when the cam
     // Whether the view wants frames replaces a flag set around our own stop.
     expect(camera).toContain("_wantsRunning");
     expect(camera).not.toContain("_stoppedByUs");
+  });
+
+  // 1.2 (19): the view was laid out 0×0 because its camera-side prop was
+  // named `position`, which RN's base view manager already owns for Yoga
+  // (`__tests__/camera-pip-layout.test.tsx` has the whole trace). The rest
+  // of this block locks the belt-and-braces added at the same time.
+  const method = (name: string) => {
+    const start = camera.indexOf(`- (void)${name}`);
+    if (start < 0) {
+      throw new Error(`No method ${name} in PHCameraPreviewView`);
+    }
+    const next = camera.indexOf("\n- (", start + 1);
+    return camera.slice(start, next < 0 ? undefined : next);
+  };
+
+  it("names the camera side `facing`, never `position`", () => {
+    expect(camera).toContain("RCT_EXPORT_VIEW_PROPERTY(facing, NSString)");
+    expect(camera).not.toMatch(/RCT_EXPORT_VIEW_PROPERTY\(position,/);
+    expect(camera).not.toMatch(/@property[^\n]*\bposition;/);
+  });
+
+  it("counts delivered frames with a video data output — a second signal for `running` that owes nothing to the layer's flag — and says whether frames came when the layer never paints", () => {
+    expect(camera).toContain("AVCaptureVideoDataOutput");
+    expect(camera).toMatch(
+      /captureOutput:\(AVCaptureOutput \*\)output\s+didOutputSampleBuffer:/
+    );
+    expect(camera).toContain("alwaysDiscardsLateVideoFrames = YES");
+    // The data output's own queue: sample buffers must never wait behind a
+    // stopRunning on the shared session queue, nor block it.
+    expect(camera).toContain("PHCameraFrameQueue()");
+    expect(camera).toContain("frames in");
+    expect(camera).toContain("no frames in");
+  });
+
+  it("adds the input before choosing a preset (so canSetSessionPreset: answers for this camera) and lets no queue-side exception escape the process", () => {
+    const configure = method("configureAndRun");
+    expect(configure.indexOf("addInput:")).toBeGreaterThan(0);
+    expect(configure.indexOf("canSetSessionPreset:")).toBeGreaterThan(
+      configure.indexOf("addInput:")
+    );
+    // One @try around the main-thread half, one around the queue half.
+    expect(configure.match(/@try/g) ?? []).toHaveLength(2);
+    expect(configure).toContain("exception.reason");
+  });
+
+  it("looks for the first frame again when layout hands the view its size, and keeps the preview connection enabled", () => {
+    const layout = method("layoutSubviews");
+    expect(layout).toContain("expectFramesFrom:");
+    expect(layout).toContain("CGRectIsEmpty(self.bounds)");
+    expect(camera).toContain("connection.enabled = YES");
   });
 });

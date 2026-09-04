@@ -163,4 +163,26 @@ describe("Release bundle dependency maps", () => {
     expect(source).toMatch(/import \{[^}]*LLM_API_KEY[^}]*\} from "@env"/);
     expect(source).not.toMatch(/require\(\s*["']@env["']\s*\)/);
   });
+
+  it("the cloud voice keys come from the same static @env import — MINIMAX_API_KEY beside TTS_API_KEY — with the saved Companion AI key first, and the committed example carries no value", () => {
+    // react-native-dotenv inlines `@env` at build time from the gitignored
+    // .env merged with the build process's environment, so Maxwell's key on
+    // the Mac reaches the app through this import and nothing else: no
+    // runtime require, no process.env lookup in the bundle (landmine 10).
+    const source = fs.readFileSync(
+      path.join(ROOT, "src/services/tts-config.ts"),
+      "utf8"
+    );
+    expect(source).toMatch(/import \{[^}]*MINIMAX_API_KEY[^}]*\} from "@env"/);
+    expect(source).toMatch(/import \{[^}]*TTS_API_KEY[^}]*\} from "@env"/);
+    expect(source).not.toMatch(/require\(\s*["']@env["']\s*\)/);
+    expect(source).not.toMatch(/process\.env/);
+    // The key saved on the phone wins; the shipped .env is the fallback.
+    expect(source).toContain("config.minimaxApiKey ?? MINIMAX_API_KEY");
+    expect(source).toContain("config.ttsApiKey ?? TTS_API_KEY");
+    // The example (what Jest inlines) names the variable and holds nothing.
+    const example = fs.readFileSync(path.join(ROOT, ".env.example"), "utf8");
+    expect(example).toMatch(/^MINIMAX_API_KEY=\s*$/m);
+    expect(example).toMatch(/^TTS_API_KEY=\s*$/m);
+  });
 });

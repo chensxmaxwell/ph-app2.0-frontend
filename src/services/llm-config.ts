@@ -15,6 +15,10 @@ export type LlmConfig = {
   // its own key, separate from the Ark key above. Optional: blobs saved
   // before voices existed have none.
   ttsApiKey?: string;
+  // MiniMax platform API key (speech-2.8-hd through T2A v2). When saved it
+  // is the voice that speaks, ahead of Doubao. Stored like the other keys:
+  // on this account on this phone, never logged, never uploaded.
+  minimaxApiKey?: string;
 };
 
 const envString = (value: unknown) =>
@@ -57,6 +61,10 @@ const parseStored = (raw: string, defaults: LlmConfig): LlmConfig => {
     model: parsed.model || defaults.model,
     ttsApiKey:
       typeof parsed.ttsApiKey === "string" ? parsed.ttsApiKey : undefined,
+    minimaxApiKey:
+      typeof parsed.minimaxApiKey === "string"
+        ? parsed.minimaxApiKey
+        : undefined,
   };
 };
 
@@ -97,6 +105,7 @@ export const saveLlmConfig = async (
       baseUrl: next.baseUrl.trim() || ARK_BASE_URL,
       model: next.model.trim() || ARK_MODEL,
       ttsApiKey: next.ttsApiKey?.trim() || undefined,
+      minimaxApiKey: next.minimaxApiKey?.trim() || undefined,
     })
   );
 };

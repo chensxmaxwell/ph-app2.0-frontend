@@ -61,6 +61,9 @@ const Failure = ({ copy, onRetry }: { copy: string; onRetry: () => void }) => (
 // on TestFlight 1.2 (14) the PiP was an empty dark box with nothing to say
 // why, and on 1.2 (18) it failed with the camera authorized in Settings, so
 // the copy has to say which half failed. The native view's own words win.
+// The native view fills this frame through `styles.fill` (absolute, all four
+// edges); its own props must never share a name with a style attribute, or
+// the style loses (1.2 (19): `position` — see src/native/camera-preview.ts).
 export const CameraPreview = ({ style }: CameraPreviewProps) => {
   const Native = useMemo(() => nativeCameraPreview(), []);
   const [status, setStatus] = useState<PipStatus>("starting");
@@ -141,7 +144,7 @@ export const CameraPreview = ({ style }: CameraPreviewProps) => {
       <Native
         key={attempt}
         style={styles.fill}
-        position="front"
+        facing="front"
         onStatusChange={(event) => {
           const next = event.nativeEvent.status;
           if (next === "authorized") {

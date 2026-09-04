@@ -1,4 +1,4 @@
-import type { TtsCredentials } from "./tts-config";
+import type { DoubaoCredentials } from "./tts-config";
 
 /**
  * Doubao Seed-TTS (火山引擎 豆包语音合成大模型) over the V3 HTTP endpoint:
@@ -44,7 +44,7 @@ export const buildTtsRequest = ({
 }: {
   text: string;
   voiceId: string;
-  credentials: TtsCredentials;
+  credentials: DoubaoCredentials;
   requestId: string;
   expressive?: boolean;
 }): TtsRequest => {
@@ -234,7 +234,7 @@ export const synthesizeSpeech = async ({
 }: {
   text: string;
   voiceId: string;
-  credentials: TtsCredentials;
+  credentials: DoubaoCredentials;
   signal?: AbortSignal;
   expressive?: boolean;
   fetchImpl?: typeof fetch;

@@ -12,4 +12,6 @@ declare module "@env" {
   export const TTS_API_KEY: string;
   export const TTS_APP_ID: string;
   export const TTS_ACCESS_TOKEN: string;
+  // MiniMax platform key for cloud TTS (preferred over Doubao when set).
+  export const MINIMAX_API_KEY: string;
 }
