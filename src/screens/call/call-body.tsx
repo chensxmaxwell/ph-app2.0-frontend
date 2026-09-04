@@ -17,7 +17,12 @@ import type { CompanionFace } from "../avatar/face";
 import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
 import { CameraIcon } from "./camera-icon";
-import { callStatusLabel, micButtonLabel, modeToggle } from "./status";
+import {
+  callStatusLabel,
+  micButtonEnabled,
+  micButtonLabel,
+  modeToggle,
+} from "./status";
 import type { VoiceCall } from "./use-voice-call";
 import { VideoStage } from "./video-stage";
 
@@ -146,6 +151,7 @@ export const CallBody = ({
   const insets = useSafeAreaInsets();
   const speaking = call.phase === "speaking";
   const listening = call.phase === "listening" && !call.muted;
+  const micLive = micButtonEnabled(call.phase);
   const toggle = modeToggle(video);
 
   return (
@@ -199,13 +205,13 @@ export const CallBody = ({
           <TouchableOpacity
             testID="call-mic"
             onPress={call.pressMic}
-            disabled={!call.connected}
+            disabled={!micLive}
             activeOpacity={0.85}
             style={[
               styles.round,
               listening && styles.roundHot,
               call.muted && styles.roundMuted,
-              !call.connected && styles.roundDisabled,
+              !micLive && styles.roundDisabled,
             ]}
           >
             {call.muted ? (
