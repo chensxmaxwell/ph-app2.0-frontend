@@ -2,6 +2,9 @@ export type TtsSpeakInput = {
   id: string;
   text: string;
   voiceId?: string;
+  // Ask the cloud for its expressive rendering of the speaker (a call reply,
+  // where delivery matters most). Off for Listen and everything else.
+  expressive?: boolean;
 };
 
 export type TtsEngine = {

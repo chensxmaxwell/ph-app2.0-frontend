@@ -123,7 +123,12 @@ export const CameraPreview = ({ style }: CameraPreviewProps) => {
         style={styles.fill}
         position="front"
         onStatusChange={(event) => {
-          setStatus(event.nativeEvent.status);
+          const next = event.nativeEvent.status;
+          setStatus((previous) =>
+            // "Configured" arriving after frames already paint changes
+            // nothing; only a real state change may cover a live preview.
+            previous === "running" && next === "authorized" ? previous : next
+          );
           setMessage(event.nativeEvent.message ?? "");
         }}
       />

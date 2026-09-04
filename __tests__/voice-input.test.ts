@@ -2,12 +2,14 @@ import fs from "fs";
 import path from "path";
 import { describe, expect, it, jest, beforeEach } from "@jest/globals";
 import {
+  nativeListenForUtterance,
   nativeSpeak,
   nativeStartVoiceInput,
   nativeStopSpeaking,
   nativeStopVoiceInput,
 } from "../src/native/ph-native";
 import {
+  listenForUtterance,
   speakWithNativeTts,
   startVoiceInput,
   stopNativeTts,
@@ -19,12 +21,16 @@ import { enterTalkMode, leaveTalkMode } from "../src/screens/chat/talk-mode";
 jest.mock("../src/native/ph-native", () => ({
   nativeStartVoiceInput: jest.fn(),
   nativeStopVoiceInput: jest.fn(),
+  nativeListenForUtterance: jest.fn(),
   nativeSpeak: jest.fn(),
   nativeStopSpeaking: jest.fn(),
 }));
 
 const startMock = nativeStartVoiceInput as jest.Mock;
 const stopMock = nativeStopVoiceInput as jest.Mock;
+const listenMock = nativeListenForUtterance as jest.Mock<
+  typeof nativeListenForUtterance
+>;
 const speakMock = nativeSpeak as jest.Mock;
 const stopSpeakMock = nativeStopSpeaking as jest.Mock;
 
@@ -32,8 +38,51 @@ describe("voice input safety", () => {
   beforeEach(() => {
     startMock.mockReset();
     stopMock.mockReset();
+    listenMock.mockReset();
     speakMock.mockReset();
     stopSpeakMock.mockReset();
+  });
+
+  it("hands-free listening returns the utterance and how it ended", async () => {
+    listenMock.mockResolvedValueOnce({
+      ok: true,
+      text: "你好",
+      end: "utterance",
+    });
+    await expect(
+      listenForUtterance({ silenceMs: 1100, maxMs: 20000, idleMs: 45000 })
+    ).resolves.toEqual({ ok: true, text: "你好", end: "utterance" });
+    expect(listenMock).toHaveBeenCalledWith({
+      silenceMs: 1100,
+      maxMs: 20000,
+      idleMs: 45000,
+    });
+    // A native side that predates `end` still reads as a finished utterance.
+    listenMock.mockResolvedValueOnce({ ok: true, text: "" });
+    await expect(listenForUtterance()).resolves.toEqual({
+      ok: true,
+      text: "",
+      end: "utterance",
+    });
+  });
+
+  it("hands-free listening reports a build without the native method instead of throwing", async () => {
+    listenMock.mockRejectedValueOnce(new Error("native down"));
+    await expect(listenForUtterance()).resolves.toEqual({
+      ok: false,
+      reason: "unavailable",
+      message: "Voice input is not available on this build.",
+    });
+    listenMock.mockResolvedValueOnce({
+      ok: false,
+      reason: "permission-denied",
+      message: "Microphone access is needed to use voice input.",
+    });
+    await expect(listenForUtterance()).resolves.toEqual({
+      ok: false,
+      reason: "permission-denied",
+      message: "Microphone access is needed to use voice input.",
+    });
   });
 
   it("strips iOS dictation placeholder characters", () => {

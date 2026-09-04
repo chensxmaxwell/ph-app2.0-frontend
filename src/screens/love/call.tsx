@@ -27,12 +27,10 @@ type CallRoute = RouteProp<
   "LoveCall"
 >;
 
-const nextId = () => `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-
 // Voice / video call inside a Love session. Minimize keeps the session (the
 // global pill restores this overlay); hang-up ends the call layer and lands
-// back on the chat underneath. Spoken turns are written to the Love
-// transcript, which lives in LoveSessionProvider so minimize keeps them.
+// back on the chat underneath. The Love chat grounds the replies; nothing
+// said on the call is written into it (the call keeps its own transcript).
 export const LoveCallScreen = () => {
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
   const route = useRoute<CallRoute>();
@@ -84,27 +82,6 @@ export const LoveCallScreen = () => {
     history,
     voiceId: voiceForPerson({ id: partnerId, thread, companion }).id,
     connectDelayMs,
-    onExchange: (userText, reply) =>
-      patchChat((current) => ({
-        ...current,
-        messages: [
-          ...current.messages,
-          {
-            kind: "bubble",
-            id: nextId(),
-            from: "me",
-            text: userText,
-            synced: current.synced || undefined,
-          },
-          {
-            kind: "bubble",
-            id: nextId(),
-            from: "them",
-            text: reply,
-            synced: current.synced || undefined,
-          },
-        ],
-      })),
   });
   const [video, setVideo] = useState(false);
   const [now, setNow] = useState(Date.now());

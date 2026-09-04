@@ -7,6 +7,23 @@ export type NativeVoiceResult = {
   message?: string;
 };
 
+// One hands-free utterance: the native recognizer decides when the user has
+// finished. `silenceMs` of quiet (no new words, mic below the voice floor)
+// ends the utterance; `maxMs` caps one utterance; `idleMs` ends an empty
+// listen as `idle` so JS can start a fresh one (iOS Speech caps a request
+// at about a minute).
+export type NativeListenOptions = {
+  silenceMs?: number;
+  maxMs?: number;
+  idleMs?: number;
+};
+
+// `end`: utterance (the user finished talking), idle (nothing was said in
+// time), stopped (stopVoiceInput / another start took the mic first).
+export type NativeUtteranceResult = NativeVoiceResult & {
+  end?: "utterance" | "idle" | "stopped";
+};
+
 // How AVSpeechSynthesizer should sound: a voice of this gender for this
 // language (picked natively from the installed voices), or an exact voice id.
 export type NativeSpeakOptions = {
@@ -26,6 +43,9 @@ type PHNativeModule = {
   playAudio?: (chunks: string[]) => Promise<boolean>;
   startVoiceInput?: () => Promise<NativeVoiceResult>;
   stopVoiceInput?: () => Promise<NativeVoiceResult>;
+  listenForUtterance?: (
+    options: NativeListenOptions
+  ) => Promise<NativeUtteranceResult>;
 };
 
 const Native = NativeModules.PHNative as PHNativeModule | undefined;
@@ -118,6 +138,27 @@ export const nativeStartVoiceInput = async (): Promise<NativeVoiceResult> => {
   }
   try {
     return await Native.startVoiceInput();
+  } catch {
+    return {
+      ok: false,
+      reason: "unavailable",
+      message: "Voice input is not available on this build.",
+    };
+  }
+};
+
+export const nativeListenForUtterance = async (
+  options: NativeListenOptions = {}
+): Promise<NativeUtteranceResult> => {
+  if (!Native?.listenForUtterance) {
+    return {
+      ok: false,
+      reason: "unavailable",
+      message: "Voice input is not available on this build.",
+    };
+  }
+  try {
+    return await Native.listenForUtterance(options);
   } catch {
     return {
       ok: false,

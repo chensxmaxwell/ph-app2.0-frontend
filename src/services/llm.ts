@@ -12,10 +12,14 @@ export type CompanionChatFailureCode =
 
 type CompanionChatInput = {
   name: string;
+  // What the user just said. Empty when the companion speaks unprompted
+  // (a call's opener) — then `instruction` says what to do instead.
   userText: string;
   history: { from: "me" | "them"; text: string }[];
   personality?: string;
   story?: string;
+  // A stage direction for this one reply, sent as the last system turn.
+  instruction?: string;
 };
 
 export class CompanionChatError extends Error {
@@ -88,7 +92,12 @@ const toTurns = (input: CompanionChatInput): LlmTurn[] => {
       content: item.text,
     });
   });
-  messages.push({ role: "user", content: input.userText });
+  if (input.userText.trim()) {
+    messages.push({ role: "user", content: input.userText });
+  }
+  if (input.instruction?.trim()) {
+    messages.push({ role: "system", content: input.instruction.trim() });
+  }
   return messages;
 };
 

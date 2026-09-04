@@ -11,17 +11,24 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { writeSessionUser } from "../src/backend/session";
 import { seedThreads } from "../src/backend/chat-seed";
+import { saveChat } from "../src/backend/store";
+import { resourceIdForVoice } from "../src/services/cloud-tts";
 import {
   FEMALE_VOICES,
   MALE_VOICES,
+  RETIRED_SEED_VOICES,
   SEED_VOICES,
   VOICES,
   assignVoiceForGender,
+  refreshedSeedVoiceId,
   voiceById,
   voiceForPerson,
   voiceMatchesGender,
   voicePoolForGender,
 } from "../src/services/voices";
+
+const expressive = (voices: readonly { tier: string }[]) =>
+  voices.filter((voice) => voice.tier === "expressive");
 import { configureTtsEngine, TtsSpeakInput } from "../src/services/tts";
 import {
   Companion,
@@ -155,29 +162,90 @@ describe("voice pools", () => {
     expect(FEMALE_VOICES.length).toBeGreaterThanOrEqual(4);
     expect(MALE_VOICES.length).toBeGreaterThanOrEqual(4);
     FEMALE_VOICES.forEach((voice) => {
-      expect(voice.id).toMatch(/^zh_female_[a-z0-9]+_uranus_bigtts$/);
+      expect(voice.id).toMatch(/^(zh|en)_female_[a-z0-9]+_uranus_bigtts$/);
       expect(voice.gender).toBe("female");
+      expect(resourceIdForVoice(voice.id)).toBe("seed-tts-2.0");
     });
     MALE_VOICES.forEach((voice) => {
-      expect(voice.id).toMatch(/^zh_male_[a-z0-9]+_uranus_bigtts$/);
+      expect(voice.id).toMatch(/^(zh|en)_male_[a-z0-9]+_uranus_bigtts$/);
       expect(voice.gender).toBe("male");
+      expect(resourceIdForVoice(voice.id)).toBe("seed-tts-2.0");
     });
     expect(new Set(VOICES.map((voice) => voice.id)).size).toBe(VOICES.length);
   });
 
-  it("Female draws from the female pool, Male from the male pool, Non-binary from both", () => {
-    expect(voicePoolForGender("Female")).toEqual(FEMALE_VOICES);
-    expect(voicePoolForGender("Male")).toEqual(MALE_VOICES);
-    expect(voicePoolForGender("Non-binary")).toEqual(VOICES);
-    expect(voicePoolForGender(undefined)).toEqual(VOICES);
+  it("every voice carries Volcengine's tier: expressive (情感变化、指令遵循) or standard", () => {
+    // Volcengine's 2.0 speaker list marks a handful of speakers 情感变化、
+    // 指令遵循、ASMR — the conversational tier that reads like a person. The
+    // rest are 视频配音 / 角色扮演 / 通用 / 多语种 voices: fine to keep for a
+    // future picker, not what a companion should default to.
+    VOICES.forEach((voice) => {
+      expect(["expressive", "standard"]).toContain(voice.tier);
+    });
+    expect(expressive(FEMALE_VOICES).length).toBeGreaterThanOrEqual(4);
+    expect(expressive(MALE_VOICES).length).toBeGreaterThanOrEqual(3);
+    const tierOf = (id: string) => voiceById(id)?.tier;
+    expect(tierOf("zh_female_vv_uranus_bigtts")).toBe("expressive");
+    expect(tierOf("zh_female_xiaohe_uranus_bigtts")).toBe("expressive");
+    expect(tierOf("zh_male_m191_uranus_bigtts")).toBe("expressive");
+    expect(tierOf("zh_male_liufei_uranus_bigtts")).toBe("expressive");
+    expect(tierOf("zh_male_taocheng_uranus_bigtts")).toBe("expressive");
+    // 视频配音 / 角色扮演 / 通用 / 多语种 in Volcengine's own list.
+    expect(tierOf("zh_male_ruyayichen_uranus_bigtts")).toBe("standard");
+    expect(tierOf("zh_male_dayi_uranus_bigtts")).toBe("standard");
+    expect(tierOf("zh_female_cancan_uranus_bigtts")).toBe("standard");
+    expect(tierOf("zh_female_meilinvyou_uranus_bigtts")).toBe("standard");
+    expect(tierOf("en_male_tim_uranus_bigtts")).toBe("standard");
+    expect(tierOf("en_female_dacey_uranus_bigtts")).toBe("standard");
+  });
+
+  it("Vivi 2.0 heads the female pool and 云舟 2.0 the male pool", () => {
+    // The two flagship 2.0 speakers: Vivi is the only one Volcengine lists
+    // with multi-language + dialects on top of emotion and instruction
+    // following; 云舟 is the male speaker with the same feature set.
+    expect(voicePoolForGender("Female")[0].id).toBe(
+      "zh_female_vv_uranus_bigtts"
+    );
+    expect(voicePoolForGender("Male")[0].id).toBe("zh_male_m191_uranus_bigtts");
+    expect(FEMALE_VOICES[0].id).toBe("zh_female_vv_uranus_bigtts");
+    expect(MALE_VOICES[0].id).toBe("zh_male_m191_uranus_bigtts");
+  });
+
+  it("still knows the English Seed-TTS 2.0 speakers, as standard-tier catalogue entries", () => {
+    // Tim / Dacey / Stokie are 多语种 2.0 in Volcengine's list, not the
+    // expressive tier: resolvable if persisted or picked later, never a
+    // default draw.
+    ["en_male_tim_uranus_bigtts"].forEach((id) => {
+      expect(MALE_VOICES.map((voice) => voice.id)).toContain(id);
+      expect(voiceById(id)?.tier).toBe("standard");
+    });
+    ["en_female_dacey_uranus_bigtts", "en_female_stokie_uranus_bigtts"].forEach(
+      (id) => {
+        expect(FEMALE_VOICES.map((voice) => voice.id)).toContain(id);
+        expect(voiceById(id)?.tier).toBe("standard");
+      }
+    );
+  });
+
+  it("Female draws from the expressive female pool, Male from the expressive male pool, Non-binary from both", () => {
+    expect(voicePoolForGender("Female")).toEqual(expressive(FEMALE_VOICES));
+    expect(voicePoolForGender("Male")).toEqual(expressive(MALE_VOICES));
+    expect(voicePoolForGender("Non-binary")).toEqual(expressive(VOICES));
+    expect(voicePoolForGender(undefined)).toEqual(expressive(VOICES));
+    voicePoolForGender(undefined).forEach((voice) => {
+      expect(voice.tier).toBe("expressive");
+      expect(voice.id).toMatch(/^zh_/);
+    });
   });
 
   it("assignment is random within the pool", () => {
-    expect(assignVoiceForGender("Female", () => 0)).toBe(FEMALE_VOICES[0].id);
+    const female = voicePoolForGender("Female");
+    const male = voicePoolForGender("Male");
+    expect(assignVoiceForGender("Female", () => 0)).toBe(female[0].id);
     expect(assignVoiceForGender("Female", () => 0.999)).toBe(
-      FEMALE_VOICES[FEMALE_VOICES.length - 1].id
+      female[female.length - 1].id
     );
-    expect(assignVoiceForGender("Male", () => 0)).toBe(MALE_VOICES[0].id);
+    expect(assignVoiceForGender("Male", () => 0)).toBe(male[0].id);
     expect(genderOf(assignVoiceForGender("Male", () => 0.5))).toBe("male");
     expect(genderOf(assignVoiceForGender("Female", () => 0.5))).toBe("female");
     const nonBinary = new Set(
@@ -188,12 +256,20 @@ describe("voice pools", () => {
     expect(nonBinary).toEqual(new Set(["female", "male"]));
   });
 
-  it("knows whether a voice fits a gender; Non-binary accepts either", () => {
+  it("knows whether a voice fits a gender; Non-binary accepts either; a standard-tier voice still fits", () => {
     expect(voiceMatchesGender(FEMALE_VOICES[0].id, "Female")).toBe(true);
     expect(voiceMatchesGender(FEMALE_VOICES[0].id, "Male")).toBe(false);
     expect(voiceMatchesGender(MALE_VOICES[0].id, "Non-binary")).toBe(true);
     expect(voiceMatchesGender(undefined, "Female")).toBe(false);
     expect(voiceMatchesGender("not-a-voice", "Female")).toBe(false);
+    // A companion persisted with a standard-tier voice keeps it through a
+    // persona edit: it is still a voice of their gender.
+    expect(voiceMatchesGender("zh_male_ruyayichen_uranus_bigtts", "Male")).toBe(
+      true
+    );
+    expect(voiceMatchesGender("en_female_dacey_uranus_bigtts", "Female")).toBe(
+      true
+    );
   });
 });
 
@@ -206,6 +282,75 @@ describe("seeded people", () => {
     expect(byId.get("amanda")?.voiceId).toBe(SEED_VOICES.amanda);
     expect(byId.get("kevin")?.voiceId).toBe(SEED_VOICES.kevin);
     expect(byId.get("chad")?.voiceId).toBe(SEED_VOICES.chad);
+  });
+
+  it("Amanda speaks as Vivi 2.0, Kevin as 云舟 2.0, Chad as 刘飞 2.0 — the expressive Seed-TTS 2.0 speakers", () => {
+    // Maxwell (after 1.2 (15)): the most realistic voices Volcengine has.
+    // Vivi and 云舟 are the flagship 2.0 speakers (情感变化、指令遵循; Vivi also
+    // multi-language + dialects); 刘飞 is the next expressive male, so Chad
+    // never shares Kevin's voice.
+    expect(SEED_VOICES.amanda).toBe("zh_female_vv_uranus_bigtts");
+    expect(SEED_VOICES.kevin).toBe("zh_male_m191_uranus_bigtts");
+    expect(SEED_VOICES.chad).toBe("zh_male_liufei_uranus_bigtts");
+    Object.values(SEED_VOICES).forEach((id) => {
+      expect(voiceById(id)?.tier).toBe("expressive");
+    });
+    expect(new Set(Object.values(SEED_VOICES)).size).toBe(3);
+    // The seeds are the heads of their pools.
+    expect(SEED_VOICES.amanda).toBe(voicePoolForGender("Female")[0].id);
+    expect(SEED_VOICES.kevin).toBe(voicePoolForGender("Male")[0].id);
+  });
+
+  it("a seeded thread still on a retired default voice takes the current one; a chosen voice stays", () => {
+    // The voice a seeded person had before this change is not a choice
+    // anyone made (there is no voice picker), so it follows the new default.
+    expect(RETIRED_SEED_VOICES.amanda).toEqual(
+      expect.arrayContaining([
+        "zh_female_xiaohe_uranus_bigtts",
+        "en_female_dacey_uranus_bigtts",
+      ])
+    );
+    expect(RETIRED_SEED_VOICES.kevin).toContain("en_male_tim_uranus_bigtts");
+    expect(RETIRED_SEED_VOICES.chad).toContain(
+      "zh_male_ruyayichen_uranus_bigtts"
+    );
+    // A retired default is never also the current one.
+    (Object.keys(SEED_VOICES) as (keyof typeof SEED_VOICES)[]).forEach(
+      (seed) => {
+        expect(RETIRED_SEED_VOICES[seed]).not.toContain(SEED_VOICES[seed]);
+      }
+    );
+    expect(
+      refreshedSeedVoiceId("amanda", "zh_female_xiaohe_uranus_bigtts")
+    ).toBe(SEED_VOICES.amanda);
+    expect(refreshedSeedVoiceId("kevin", undefined)).toBe(SEED_VOICES.kevin);
+    expect(refreshedSeedVoiceId("kevin", "zh_male_dayi_uranus_bigtts")).toBe(
+      "zh_male_dayi_uranus_bigtts"
+    );
+    expect(
+      refreshedSeedVoiceId("companion-nova", "zh_female_xiaohe_uranus_bigtts")
+    ).toBe("zh_female_xiaohe_uranus_bigtts");
+  });
+
+  it("a chat blob from before the change hydrates Amanda with Vivi and leaves a crafted voice alone", async () => {
+    const [kevin, chad, amanda] = seedThreads();
+    await saveChat("demo", {
+      threads: [
+        { ...kevin, voiceId: undefined },
+        { ...chad, voiceId: "zh_male_dayi_uranus_bigtts" },
+        { ...amanda, voiceId: "zh_female_xiaohe_uranus_bigtts" },
+      ],
+      isPremium: false,
+      deletedThreadIds: [],
+    });
+    await mount(<Probe />);
+
+    expect(chat!.getThread("kevin")!.voiceId).toBe(SEED_VOICES.kevin);
+    expect(chat!.getThread("chad")!.voiceId).toBe("zh_male_dayi_uranus_bigtts");
+    expect(chat!.getThread("amanda")!.voiceId).toBe(SEED_VOICES.amanda);
+    expect(voiceForPerson({ thread: chat!.getThread("amanda")! }).id).toBe(
+      "zh_female_vv_uranus_bigtts"
+    );
   });
 
   it("a thread persisted before voices existed still resolves to a voice of its gender, the same one every time", () => {
@@ -395,6 +540,9 @@ describe("Listen speaks with the person's voice", () => {
     const amandaCall = speak.mock.calls[0][0];
     expect(amandaCall.voiceId).toBe(SEED_VOICES.amanda);
     expect(genderOf(amandaCall.voiceId)).toBe("female");
+    // Listen reads bubbles with the standard rendering; the expressive
+    // model is for call replies.
+    expect(amandaCall.expressive ?? false).toBe(false);
 
     act(() => {
       chat!.setListen("amanda", false);

@@ -3,7 +3,7 @@ import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { voiceForPerson } from "../../services/voices";
 import { usePersonFace } from "../avatar/use-person-face";
 import { CallBody } from "../call/call-body";
-import { useVoiceCall } from "../call/use-voice-call";
+import { CALL_CONNECT_DELAY_MS, useVoiceCall } from "../call/use-voice-call";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
 
@@ -12,24 +12,27 @@ type CallRoute = RouteProp<{ ChatCall: { threadId: string } }, "ChatCall">;
 // Voice / video call from a Message thread. Minimize (top-left) keeps the
 // call flagged on the thread; hang-up clears it. Hangup vs minimize is
 // decided through a ref so the unmount cleanup never ends a minimized call.
+// Nothing said on the call is written to the thread.
 export const ChatCallScreen = () => {
   const navigation = useNavigation();
   const route = useRoute<CallRoute>();
   const threadId = route.params.threadId;
-  const {
-    getThread,
-    setInCall,
-    setListen,
-    stopSpeaking,
-    recordCallExchange,
-  } = useChat();
+  const { getThread, setInCall, setListen, stopSpeaking, inCallThreadId } =
+    useChat();
   const thread = getThread(threadId);
   const { face } = usePersonFace(threadId, thread?.kind);
   const name = thread?.name ?? "Kevin";
   const messages = thread?.messages;
+  // The thread grounds the replies; the call never writes back to it. What
+  // is said on the call stays on the call (`call.transcript`).
   const history = useMemo(
     () => (messages ?? []).map((item) => ({ from: item.from, text: item.text })),
     [messages]
+  );
+  // Re-entered from the thread while the call is flagged: already on, no
+  // ring and no second greeting.
+  const [connectDelayMs] = useState(() =>
+    inCallThreadId === threadId ? 0 : CALL_CONNECT_DELAY_MS
   );
   const call = useVoiceCall({
     name,
@@ -37,8 +40,7 @@ export const ChatCallScreen = () => {
     story: thread?.description,
     history,
     voiceId: voiceForPerson({ id: threadId, thread }).id,
-    onExchange: (userText, reply) =>
-      recordCallExchange(threadId, userText, reply),
+    connectDelayMs,
   });
   const [video, setVideo] = useState(false);
   const [elapsed, setElapsed] = useState(0);

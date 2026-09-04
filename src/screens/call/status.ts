@@ -1,13 +1,13 @@
-// One spoken turn on a call: hold (listening) → release → Ark (thinking) →
-// the reply is spoken (speaking) → ready for the next hold.
+// One turn on a hands-free call: the mic is open (listening) → the native
+// recognizer hears the user finish → Ark (thinking) → the reply is spoken
+// (speaking) → the mic opens again. `ready` is the connected call with the
+// mic closed: before the opener, while muted, or after a failure.
 export type CallPhase =
   | "connecting"
   | "ready"
   | "listening"
   | "thinking"
   | "speaking";
-
-export const NOTHING_HEARD_COPY = "Didn't catch that — hold and try again.";
 
 export const callStatusLabel = ({
   phase,
@@ -46,20 +46,41 @@ export const modeToggle = (
     ? { target: "voice", label: "Voice" }
     : { target: "video", label: "Video" };
 
-export const holdButtonLabel = (phase: CallPhase): string => {
+// The mic control is a state, and a tap does the one thing that makes sense
+// in that state: interrupt the companion, mute the open mic, or open it
+// again. There is no press-and-hold anywhere on a call (Maxwell, TestFlight
+// 1.2 (15)).
+export const micButtonLabel = ({
+  phase,
+  muted,
+}: {
+  phase: CallPhase;
+  muted: boolean;
+}): string => {
+  if (phase === "connecting") {
+    return "Connecting…";
+  }
+  if (muted) {
+    return "Muted";
+  }
   switch (phase) {
-    case "connecting":
-      return "Connecting…";
     case "listening":
-      return "Release to send";
-    case "speaking":
-      return "Hold to interrupt";
-    case "ready":
+      return "Listening";
     case "thinking":
-      return "Hold to talk";
+      return "Thinking…";
+    case "speaking":
+      return "Tap to interrupt";
+    case "ready":
+      return "Tap to talk";
     default: {
       const exhaustive: never = phase;
       return exhaustive;
     }
   }
 };
+
+// Shown on the call while no speech-console key is saved: the reply is
+// spoken by the phone's own synthesizer, not the companion's Doubao voice,
+// and this is where to fix that.
+export const voiceKeyHint = (name: string): string =>
+  `Using the phone's voice. Add a Voice key in Companion AI for ${name}'s real voice.`;
