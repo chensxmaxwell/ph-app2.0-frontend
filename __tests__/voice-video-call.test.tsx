@@ -46,6 +46,7 @@ import {
 } from "../src/screens/love/session";
 import { clearLoveSessionBoot } from "../src/screens/love/session-persist";
 import { ChatCallScreen } from "../src/screens/chat/call";
+import { GlobalMessageCallPill } from "../src/screens/chat/call-pill";
 import { LoveCallScreen } from "../src/screens/love/call";
 import { LoveChatScreen } from "../src/screens/love/chat";
 import { AvatarPreview } from "../src/screens/avatar/engine/AvatarPreview";
@@ -1347,6 +1348,122 @@ describe("Message thread voice call", () => {
 
     expect(mockNavigation.goBack).toHaveBeenCalledTimes(1);
     expect(chat!.inCallThreadId).toBe("kevin");
+  });
+
+  it("minimize leaves a floating face pill over the thread that keeps the call's clock; tapping it restores the call with no ring and no second greeting; hang-up clears it", async () => {
+    // Maxwell, TestFlight 1.2 (18): top-left minimize on the Chad call
+    // landed on the plain Chad thread — no 头像小窗, nothing to say a call
+    // was on, no way back but the drawer. Love has its pill; Message gets
+    // one of its own, global like Love's, wearing this person's face and the
+    // running call time.
+    await saveArkKey();
+    const tree = await mountMessageCall("kevin");
+    await connectAndGreet();
+    await say("你好 Kevin");
+    await finishSpeech();
+    expect(speakMock).toHaveBeenCalledTimes(2);
+    const before = chat!.getThread("kevin")!;
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+    await settle();
+    const clock = (root: ReactTestInstance) =>
+      texts(root).find((copy) => /^\d\d:\d\d$/.test(copy));
+    const onCall = clock(tree.root);
+    expect(onCall).toBe("00:05");
+    // No pill while the call screen itself is up.
+    const pill = () =>
+      tree.root.findAll(
+        (node) => node.props?.testID === "message-call-pill"
+      )[0];
+    act(() => {
+      tree.update(
+        <Providers>
+          <ChatCallScreen />
+          <GlobalMessageCallPill />
+        </Providers>
+      );
+    });
+    await settle();
+    expect(pill()).toBeUndefined();
+
+    press(touchable(tree.root, "call-minimize"));
+    expect(mockNavigation.goBack).toHaveBeenCalledTimes(1);
+    expect(chat!.inCallThreadId).toBe("kevin");
+    // goBack took the call screen down; the thread is what is left, and the
+    // pill floats over it.
+    stopVoice.mockClear();
+    act(() => {
+      tree.update(
+        <Providers>
+          <GlobalMessageCallPill />
+        </Providers>
+      );
+    });
+    await settle();
+    // The screen going away closes the mic (the thread has its own).
+    expect(stopVoice).toHaveBeenCalledTimes(1);
+    expect(pill()).toBeTruthy();
+    expect(imageUris(pill()).some(isKevinPhoto)).toBe(true);
+    expect(clock(pill())).toBe("00:05");
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+    await settle();
+    expect(clock(pill())).toBe("00:08");
+
+    // Back to the call through the pill: no ring, no opener, listening at
+    // once, the clock where it was, the pill gone.
+    speakMock.mockClear();
+    listenMock.mockClear();
+    (global.fetch as jest.Mock).mockClear();
+    press(pill());
+    expect(mockNavigation.navigate).toHaveBeenCalledWith(SCREENS.CHAT_CALL, {
+      threadId: "kevin",
+    });
+    act(() => {
+      tree.update(
+        <Providers>
+          <ChatCallScreen />
+          <GlobalMessageCallPill />
+        </Providers>
+      );
+    });
+    await settle();
+    expect(texts(tree.root)).not.toContain("Calling Kevin");
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("Listening…");
+    expect(texts(tree.root).join("\n")).not.toMatch(/Tap to talk/i);
+    expect(clock(tree.root)).toBe("00:08");
+    expect(pill()).toBeUndefined();
+
+    press(touchable(tree.root, "call-hangup"));
+    await settle();
+    expect(chat!.inCallThreadId).toBeNull();
+    act(() => {
+      tree.update(
+        <Providers>
+          <GlobalMessageCallPill />
+        </Providers>
+      );
+    });
+    await settle();
+    expect(pill()).toBeUndefined();
+    // Nothing from the call, before or after the minimize, is in the thread.
+    const after = chat!.getThread("kevin")!;
+    expect(after.messages).toEqual(before.messages);
+    expect(after.messages.map((m) => m.text)).not.toContain("你好 Kevin");
+  });
+
+  it("the Message call pill is mounted globally, beside Love's, so it shows on the thread and on every other screen", () => {
+    const source = readFileSync(
+      join(__dirname, "../navigations/home-stack.tsx"),
+      "utf8"
+    );
+    expect(source).toContain("<GlobalSessionLovePill />");
+    expect(source).toContain("<GlobalMessageCallPill />");
   });
 });
 

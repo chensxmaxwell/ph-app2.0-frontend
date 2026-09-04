@@ -9,16 +9,28 @@ import { useChat } from "./store";
 
 type CallRoute = RouteProp<{ ChatCall: { threadId: string } }, "ChatCall">;
 
-// Voice / video call from a Message thread. Minimize (top-left) keeps the
-// call flagged on the thread; hang-up clears it. Hangup vs minimize is
-// decided through a ref so the unmount cleanup never ends a minimized call.
-// Nothing said on the call is written to the thread.
+// Voice / video call from a Message thread. Minimize (top-left) takes the
+// screen down and leaves the call on: flagged on the thread with its clock in
+// the chat store, shown as the floating face pill (`MessageCallPill`) that
+// brings this screen back already connected. The mic closes while the screen
+// is down (the thread has its own) and opens again on restore. Hang-up is
+// the only end. Hangup vs minimize is decided through a ref so the unmount
+// cleanup never ends a minimized call. Nothing said on the call is written
+// to the thread.
 export const ChatCallScreen = () => {
   const navigation = useNavigation();
   const route = useRoute<CallRoute>();
   const threadId = route.params.threadId;
-  const { getThread, setInCall, setListen, stopSpeaking, inCallThreadId } =
-    useChat();
+  const {
+    getThread,
+    setInCall,
+    startCallTimer,
+    minimizeCall,
+    setListen,
+    stopSpeaking,
+    inCallThreadId,
+    inCallStartedAt,
+  } = useChat();
   const thread = getThread(threadId);
   const { face } = usePersonFace(threadId, thread?.kind);
   const name = thread?.name ?? "Kevin";
@@ -43,8 +55,14 @@ export const ChatCallScreen = () => {
     connectDelayMs,
   });
   const [video, setVideo] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   const endedRef = useRef(false);
+  // The clock starts when the call connects and lives in the store, so a
+  // minimized call keeps counting and a restored one carries on.
+  const elapsed =
+    call.connected && inCallStartedAt
+      ? Math.max(0, Math.floor((now - inCallStartedAt) / 1000))
+      : 0;
 
   // Once per thread: flag the call and switch off Listen (the thread reads
   // replies aloud; the call speaks them itself). Store callbacks and the
@@ -67,11 +85,13 @@ export const ChatCallScreen = () => {
     if (!call.connected) {
       return;
     }
+    startCallTimer(threadId);
+    setNow(Date.now());
     const timer = setInterval(() => {
-      setElapsed((current) => current + 1);
+      setNow(Date.now());
     }, 1000);
     return () => clearInterval(timer);
-  }, [call.connected]);
+  }, [call.connected, startCallTimer, threadId]);
 
   return (
     <ChatGradient>
@@ -82,7 +102,10 @@ export const ChatCallScreen = () => {
         elapsed={elapsed}
         video={video}
         onToggleVideo={() => setVideo((current) => !current)}
-        onMinimize={() => navigation.goBack()}
+        onMinimize={() => {
+          minimizeCall();
+          navigation.goBack();
+        }}
         onHangUp={() => {
           endedRef.current = true;
           call.hangUp();
