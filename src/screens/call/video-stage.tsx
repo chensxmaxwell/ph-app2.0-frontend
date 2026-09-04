@@ -6,28 +6,29 @@ import {
   View,
   useWindowDimensions,
 } from "react-native";
-import { AvatarPreview } from "../avatar/engine/AvatarPreview";
+import { InlineAvatarViewer } from "../avatar/engine/InlineAvatarViewer";
 import type { CompanionFace } from "../avatar/face";
 import { s } from "../avatar/scale";
 import { CameraPreview } from "./camera-preview";
 
 type VideoStageProps = {
   // This person's one face (`companionFace`): the crafted 3D look fills the
-  // stage through the avatar engine, otherwise their portrait does.
+  // stage through an in-place viewer, otherwise their portrait does.
   face: CompanionFace;
   speaking: boolean;
   // Status and captions, laid out beside the camera picture-in-picture.
   children?: ReactNode;
 };
 
-// The 3D avatar is a WKWebView the engine host floats over the whole app at
-// the stage's measured rect, so nothing in this tree may sit inside that
-// rect: the camera PiP lives in a row above the stage, not on top of it.
+// The companion fills a rounded stage; the camera PiP and the captions sit in
+// a row above it. The 3D look is drawn by `InlineAvatarViewer`, a WebView
+// that lives inside the stage box: the app-wide floated engine WebView is
+// under a transparentModal (the call screens) and would never be seen here.
 export const VideoStage = ({ face, speaking, children }: VideoStageProps) => {
   const window = useWindowDimensions();
   const [size, setSize] = useState(() => {
     const width = Math.max(1, window.width - s(32));
-    return { width, height: Math.max(1, Math.round(width * 1.15)) };
+    return { width, height: Math.max(1, Math.round(width * 0.9)) };
   });
 
   const onLayout = (event: LayoutChangeEvent) => {
@@ -55,11 +56,10 @@ export const VideoStage = ({ face, speaking, children }: VideoStageProps) => {
         style={[styles.stage, speaking && styles.stageSpeaking]}
       >
         {face.look ? (
-          <AvatarPreview
+          <InlineAvatarViewer
             look={face.look}
-            width={size.width}
-            height={size.height}
             viewMode="bust"
+            placeholderSize={Math.round(Math.min(size.width, size.height) * 0.6)}
           />
         ) : (
           <Image

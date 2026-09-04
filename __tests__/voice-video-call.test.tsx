@@ -42,6 +42,8 @@ import { clearLoveSessionBoot } from "../src/screens/love/session-persist";
 import { ChatCallScreen } from "../src/screens/chat/call";
 import { LoveCallScreen } from "../src/screens/love/call";
 import { AvatarPreview } from "../src/screens/avatar/engine/AvatarPreview";
+import { useAvatarEngine } from "../src/screens/avatar/engine/AvatarEngineHost";
+import { InlineAvatarViewer } from "../src/screens/avatar/engine/InlineAvatarViewer";
 import { DEFAULT_DRAFT } from "../src/screens/avatar/context";
 import { CALL_CONNECT_DELAY_MS } from "../src/screens/call/use-voice-call";
 import { callStatusLabel, holdButtonLabel } from "../src/screens/call/status";
@@ -144,11 +146,14 @@ const stopVoice = stopVoiceInput as jest.Mock<typeof stopVoiceInput>;
 
 type ChatApi = ReturnType<typeof useChat>;
 type SessionApi = ReturnType<typeof useLoveSession>;
+type EngineApi = ReturnType<typeof useAvatarEngine>;
 let chat: ChatApi | null = null;
 let session: SessionApi | null = null;
+let engine: EngineApi | null = null;
 const Probe = () => {
   chat = useChat();
   session = useLoveSession();
+  engine = useAvatarEngine();
   return null;
 };
 
@@ -279,6 +284,9 @@ const stageFace = (root: ReactTestInstance) => {
 const cameraHosts = (root: ReactTestInstance) =>
   root.findAll((node) => String(node.type) === "PHCameraPreview");
 
+const webViews = (root: ReactTestInstance) =>
+  root.findAll((node) => String(node.type) === "MockWebView");
+
 const arkReply = (content: string) => ({
   ok: true,
   status: 200,
@@ -331,6 +339,7 @@ beforeEach(async () => {
   });
   chat = null;
   session = null;
+  engine = null;
   mockCameraAvailable = true;
   startVoice.mockReset();
   stopVoice.mockReset();
@@ -536,14 +545,53 @@ describe("Message thread voice call", () => {
     await settle();
 
     const stage = stageFace(tree.root);
-    const preview = stage.findAllByType(AvatarPreview);
-    expect(preview).toHaveLength(1);
-    expect(preview[0].props.look).toEqual(
+    const viewer = stage.findAllByType(InlineAvatarViewer);
+    expect(viewer).toHaveLength(1);
+    expect(viewer[0].props.look).toEqual(
       lookFromCompanion({ ...nova, id: "kevin", name: "Kevin" })
     );
-    expect(preview[0].props.viewMode).toBe("bust");
+    expect(viewer[0].props.viewMode).toBe("bust");
+    // The call is a transparentModal, presented by UIKit above the RN root
+    // view where AvatarEngineHost floats its WebView, so a floated 3D face
+    // is invisible on a call: the stage hosts its own viewer WebView, inside
+    // its rounded, clipped box, and attaches no slot to the floating engine.
+    expect(webViews(stage)).toHaveLength(1);
+    expect(tree.root.findAllByType(AvatarPreview)).toHaveLength(0);
+    expect(engine?.slot ?? null).toBeNull();
+    // The vector face stands in until the viewer reports ready.
     expect(stage.findAllByType(Svg).length).toBeGreaterThan(0);
     expect(imageUris(tree.root).filter(isKevinPhoto)).toEqual([]);
+  });
+
+  it("the stage viewer drops the vector stand-in once the page is ready and offers Retry on error", async () => {
+    await saveCompanions("demo", {
+      companions: [{ ...nova, id: "kevin", name: "Kevin" }],
+      activeCompanionId: null,
+    });
+    const tree = await mountMessageCall("kevin");
+    await connect();
+    press(touchable(tree.root, "call-video-toggle"));
+    await settle();
+
+    const stage = stageFace(tree.root);
+    expect(stage.findAllByType(Svg).length).toBeGreaterThan(0);
+    act(() => {
+      webViews(stage)[0].props.onMessage({ nativeEvent: { data: "ready" } });
+    });
+    expect(stage.findAllByType(Svg)).toHaveLength(0);
+    expect(texts(stage)).not.toContain("Retry");
+
+    act(() => {
+      webViews(stage)[0].props.onMessage({
+        nativeEvent: { data: "error:WebGL is unavailable" },
+      });
+    });
+    const copy = texts(stage).join("\n");
+    expect(copy).toMatch(/Couldn’t load 3D preview/);
+    expect(copy).toMatch(/WebGL is unavailable/);
+    press(touchable(stage, "call-stage-retry"));
+    expect(stage.findAllByType(Svg).length).toBeGreaterThan(0);
+    expect(texts(stage)).not.toContain("Retry");
   });
 
   it("shows the camera permission copy when the front camera is denied", async () => {
@@ -716,9 +764,12 @@ describe("Love voice call", () => {
     await settle();
 
     const stage = stageFace(tree.root);
-    const preview = stage.findAllByType(AvatarPreview);
-    expect(preview).toHaveLength(1);
-    expect(preview[0].props.look).toEqual(lookFromCompanion(nova));
+    const viewer = stage.findAllByType(InlineAvatarViewer);
+    expect(viewer).toHaveLength(1);
+    expect(viewer[0].props.look).toEqual(lookFromCompanion(nova));
+    expect(viewer[0].props.viewMode).toBe("bust");
+    expect(webViews(stage)).toHaveLength(1);
+    expect(engine?.slot ?? null).toBeNull();
     expect(cameraHosts(tree.root)).toHaveLength(1);
     expect(imageUris(tree.root).filter(isKevinPhoto)).toEqual([]);
     expect(texts(tree.root)).toContain("Nova");
