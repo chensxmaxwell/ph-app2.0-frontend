@@ -1,4 +1,5 @@
 import { nativePlayAudio, nativeStopSpeaking } from "../native/ph-native";
+import { bytesToBase64 } from "./bytes";
 
 /**
  * The ring-back a call plays before the companion picks up (Maxwell,
@@ -103,29 +104,9 @@ export const ringbackWav = (durationMs: number): Uint8Array => {
   return bytes;
 };
 
-const BASE64 =
-  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-// RN has no Buffer and no btoa to rely on; the WAV is encoded once.
-export const bytesToBase64 = (bytes: Uint8Array): string => {
-  const parts: string[] = [];
-  for (let index = 0; index < bytes.length; index += 3) {
-    const first = bytes[index];
-    const second = index + 1 < bytes.length ? bytes[index + 1] : 0;
-    const third = index + 2 < bytes.length ? bytes[index + 2] : 0;
-    const triple = (first << 16) | (second << 8) | third;
-    parts.push(
-      BASE64[(triple >> 18) & 63],
-      BASE64[(triple >> 12) & 63],
-      index + 1 < bytes.length ? BASE64[(triple >> 6) & 63] : "=",
-      index + 2 < bytes.length ? BASE64[triple & 63] : "="
-    );
-  }
-  return parts.join("");
-};
-
 // Every connect draws its own length, so the tone is made for the call at
-// hand (a few ms of arithmetic) rather than kept.
+// hand (a few ms of arithmetic) rather than kept. Base64 because that is
+// what PHNative's player takes (bytes.ts; RN has no Buffer / btoa).
 export const ringbackWavBase64 = (durationMs: number): string =>
   bytesToBase64(ringbackWav(durationMs));
 

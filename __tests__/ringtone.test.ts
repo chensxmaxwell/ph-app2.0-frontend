@@ -7,8 +7,8 @@ import {
   jest,
 } from "@jest/globals";
 import { nativePlayAudio, nativeStopSpeaking } from "../src/native/ph-native";
+import { bytesToBase64 } from "../src/services/bytes";
 import {
-  bytesToBase64,
   pickRingbackDuration,
   RINGBACK_BURST_MS,
   RINGBACK_FADE_MS,

@@ -86,6 +86,26 @@ export const CompanionAiScreen = () => {
           autoCapitalize="none"
           autoCorrect={false}
         />
+        <Text style={styles.label}>MiniMax voice key</Text>
+        <TextInput
+          testID="companion-ai-minimax-key"
+          value={config.minimaxApiKey ?? ""}
+          onChangeText={(minimaxApiKey) =>
+            setConfig((current) => ({ ...current, minimaxApiKey }))
+          }
+          style={styles.input}
+          placeholder="MiniMax API key"
+          placeholderTextColor={colors.grayLighter}
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry
+        />
+        <Text style={styles.fieldHint}>
+          With a MiniMax key saved, calls, Sync and Listen speak with MiniMax
+          speech-2.8-hd voices — this key is preferred over the Doubao key
+          below. Either MiniMax platform's key works (China or global). It
+          stays on this phone and is never shown or logged.
+        </Text>
         <Text style={styles.label}>Voice key (豆包语音)</Text>
         <TextInput
           testID="companion-ai-tts-key"
@@ -101,10 +121,10 @@ export const CompanionAiScreen = () => {
           secureTextEntry
         />
         <Text style={styles.fieldHint}>
-          Calls and Listen speak with Doubao Seed-TTS 2.0 voices. The speech
-          console issues its own API key (豆包语音 → API Key 管理); the Ark key
-          above is not accepted there. Without one, replies use an on-device
-          voice of the companion's gender.
+          Without a MiniMax key, calls and Listen speak with Doubao Seed-TTS
+          2.0 voices. The speech console issues its own API key (豆包语音 → API
+          Key 管理); the Ark key above is not accepted there. With neither key,
+          replies use an on-device voice of the companion's gender.
         </Text>
         <TouchableOpacity
           testID="companion-ai-save"

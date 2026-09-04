@@ -8,7 +8,10 @@ import {
 import { hasLlmKey, loadLlmConfig } from "../../services/llm-config";
 import { Ringback, startRingback } from "../../services/ringtone";
 import { ttsSpeak, ttsStop } from "../../services/tts";
-import { ttsCredentialsFromConfig } from "../../services/tts-config";
+import {
+  isCloudVoiceConfigured,
+  ttsCredentialsFromConfig,
+} from "../../services/tts-config";
 import { listenForUtterance, stopVoiceInput } from "../../services/voice-input";
 import { localOpener, OPENER_INSTRUCTION } from "./opener";
 import { CallPhase, micButtonEnabled, voiceKeyHint } from "./status";
@@ -356,10 +359,9 @@ export const useVoiceCall = ({
           setKeyMissing(true);
           setNotice(companionChatFailureMessage("missing_key"));
         }
-        const credentials = ttsCredentialsFromConfig(config);
-        const cloudVoice =
-          credentials !== null &&
-          (credentials.kind === "app" || credentials.source === "tts");
+        const cloudVoice = isCloudVoiceConfigured(
+          ttsCredentialsFromConfig(config)
+        );
         setVoiceHint(cloudVoice ? null : voiceKeyHint(inputRef.current.name));
       })
       .catch(swallow);

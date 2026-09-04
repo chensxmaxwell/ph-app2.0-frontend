@@ -1196,6 +1196,20 @@ describe("Message thread voice call", () => {
     const withKey = await mountMessageCall("kevin");
     await connectAndGreet();
     expect(texts(withKey.root)).not.toContain(voiceKeyHint("Kevin"));
+    act(() => {
+      trees.splice(0).forEach((item) => item.unmount());
+    });
+
+    // A MiniMax key alone is a cloud voice too.
+    await saveLlmConfig({
+      apiKey: "ark-device-key",
+      baseUrl: ARK_BASE_URL,
+      model: ARK_MODEL,
+      minimaxApiKey: "sk-api-minimax",
+    });
+    const withMiniMax = await mountMessageCall("kevin");
+    await connectAndGreet();
+    expect(texts(withMiniMax.root)).not.toContain(voiceKeyHint("Kevin"));
   });
 
   it("switching video on and off keeps the conversation and shows Amanda, not Kevin's stock face", async () => {
