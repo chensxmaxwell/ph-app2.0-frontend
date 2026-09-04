@@ -361,9 +361,7 @@ const isKevinPhoto = (uri: string) =>
   /(^|\/)avatar-ring\.png$/.test(uri);
 
 const stageFace = (root: ReactTestInstance) => {
-  const match = root.findAll(
-    (node) => node.props?.testID === "call-stage-face"
-  )[0];
+  const match = root.findAll((node) => node.props?.testID === "call-stage-face")[0];
   if (!match) {
     throw new Error("No call stage face (testID call-stage-face)");
   }
@@ -1806,9 +1804,7 @@ describe("call status copy", () => {
     expect(callStatusLabel({ phase: "greeting", name: "Kevin" })).toBe(
       "Connected"
     );
-    expect(callStatusLabel({ phase: "ready", name: "Kevin" })).toBe(
-      "Connected"
-    );
+    expect(callStatusLabel({ phase: "ready", name: "Kevin" })).toBe("Connected");
     expect(callStatusLabel({ phase: "listening", name: "Kevin" })).toBe(
       "Listening…"
     );
@@ -1896,14 +1892,11 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
     "src/screens/call/video-stage.tsx",
     "src/screens/chat/call.tsx",
     "src/screens/love/call.tsx",
-  ])(
-    "%s resolves the person's face instead of faceSourceForId / call-face.png",
-    (file) => {
-      const source = readFileSync(join(__dirname, "..", file), "utf8");
-      expect(source).not.toContain("faceSourceForId(");
-      expect(source).not.toContain("call-face.png");
-    }
-  );
+  ])("%s resolves the person's face instead of faceSourceForId / call-face.png", (file) => {
+    const source = readFileSync(join(__dirname, "..", file), "utf8");
+    expect(source).not.toContain("faceSourceForId(");
+    expect(source).not.toContain("call-face.png");
+  });
 
   it("only asks UIManager-registered native views of requireNativeComponent (a missing view is a Release RCTFatal)", () => {
     const source = readFileSync(
@@ -1975,9 +1968,7 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
       "utf8"
     );
     expect(source).toContain("RCT_EXPORT_MODULE(PHCameraPreview)");
-    expect(source).toContain(
-      "automaticallyConfiguresApplicationAudioSession = NO"
-    );
+    expect(source).toContain("automaticallyConfiguresApplicationAudioSession = NO");
     expect(source).toContain("AVCaptureDevicePositionFront");
     expect(source).toContain("requestAccessForMediaType:AVMediaTypeVideo");
     // After voice input the shared session is left in Record (no output
@@ -1995,9 +1986,7 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
       join(__dirname, "../ios/AppFrontend/PHNative.mm"),
       "utf8"
     );
-    const camera = source.slice(
-      source.indexOf("@implementation PHCameraPreviewView")
-    );
+    const camera = source.slice(source.indexOf("@implementation PHCameraPreviewView"));
     // TestFlight 1.2 (15): the PiP was a black box with no copy at 00:30 —
     // JS had been told `running` (AVCaptureSessionDidStartRunning fired) and
     // yet nothing painted. The session running is not the layer painting.
