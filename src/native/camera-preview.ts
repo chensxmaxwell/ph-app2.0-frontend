@@ -12,7 +12,20 @@ import {
 // AVAudioSession the voice loop is using).
 export const CAMERA_PREVIEW_VIEW = "PHCameraPreview";
 
-export type CameraPreviewStatus = "authorized" | "denied" | "unavailable";
+// What the native view reports through onStatusChange:
+// - authorized: permission granted and the capture session is configured;
+//   frames are not on screen yet.
+// - running: AVCaptureSession started delivering (the PiP shows the user).
+// - interrupted: the system paused the camera (another client, background,
+//   system pressure); `running` follows when the interruption ends.
+// - denied: camera permission refused (or restricted).
+// - unavailable: no camera, or the session failed to start (message says why).
+export type CameraPreviewStatus =
+  | "authorized"
+  | "running"
+  | "interrupted"
+  | "denied"
+  | "unavailable";
 
 export type CameraPreviewStatusEvent = {
   nativeEvent: { status: CameraPreviewStatus; message?: string };

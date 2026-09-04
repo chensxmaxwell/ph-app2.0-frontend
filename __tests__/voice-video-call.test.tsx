@@ -46,6 +46,10 @@ import { useAvatarEngine } from "../src/screens/avatar/engine/AvatarEngineHost";
 import { InlineAvatarViewer } from "../src/screens/avatar/engine/InlineAvatarViewer";
 import { DEFAULT_DRAFT } from "../src/screens/avatar/context";
 import { CALL_CONNECT_DELAY_MS } from "../src/screens/call/use-voice-call";
+import {
+  CAMERA_START_TIMEOUT_MS,
+  CAMERA_STARTING_COPY,
+} from "../src/screens/call/camera-preview";
 import { callStatusLabel, holdButtonLabel } from "../src/screens/call/status";
 
 /**
@@ -594,6 +598,78 @@ describe("Message thread voice call", () => {
     expect(texts(stage)).not.toContain("Retry");
   });
 
+  it("the PiP is never a bare box: it says the camera is starting until the native view reports frames", async () => {
+    // TestFlight 1.2 (14): the PiP was an empty dark rectangle. The native
+    // view now reports `running` once AVCaptureSession delivers, and until
+    // then (or on any other state) the PiP carries copy.
+    const tree = await mountMessageCall("chad");
+    await connect();
+    press(touchable(tree.root, "call-video-toggle"));
+    await settle();
+
+    const pip = () =>
+      tree.root.findAll((node) => node.props?.testID === "call-camera-pip")[0];
+    expect(cameraHosts(pip())).toHaveLength(1);
+    expect(texts(pip())).toContain(CAMERA_STARTING_COPY);
+
+    act(() => {
+      cameraHosts(pip())[0].props.onStatusChange({
+        nativeEvent: { status: "authorized", message: "" },
+      });
+    });
+    expect(texts(pip())).toContain(CAMERA_STARTING_COPY);
+
+    act(() => {
+      cameraHosts(pip())[0].props.onStatusChange({
+        nativeEvent: { status: "running", message: "" },
+      });
+    });
+    expect(texts(pip())).toEqual([]);
+    expect(cameraHosts(pip())).toHaveLength(1);
+
+    act(() => {
+      cameraHosts(pip())[0].props.onStatusChange({
+        nativeEvent: { status: "interrupted", message: "" },
+      });
+    });
+    expect(texts(pip()).join("\n")).toMatch(/Camera paused/);
+    act(() => {
+      cameraHosts(pip())[0].props.onStatusChange({
+        nativeEvent: { status: "running", message: "" },
+      });
+    });
+    expect(texts(pip())).toEqual([]);
+  });
+
+  it("a camera that never starts says so and Retry remounts the native view", async () => {
+    const tree = await mountMessageCall("chad");
+    await connect();
+    press(touchable(tree.root, "call-video-toggle"));
+    await settle();
+    const pip = () =>
+      tree.root.findAll((node) => node.props?.testID === "call-camera-pip")[0];
+    const [first] = cameraHosts(pip());
+
+    act(() => {
+      jest.advanceTimersByTime(CAMERA_START_TIMEOUT_MS + 50);
+    });
+    expect(texts(pip()).join("\n")).toMatch(/Camera didn't start/);
+    expect(texts(pip())).toContain("Retry");
+
+    press(touchable(pip(), "call-camera-retry"));
+    await settle();
+    expect(texts(pip())).toContain(CAMERA_STARTING_COPY);
+    expect(cameraHosts(pip())).toHaveLength(1);
+    expect(cameraHosts(pip())[0]).not.toBe(first);
+    // A view that comes up after the retry clears the copy.
+    act(() => {
+      cameraHosts(pip())[0].props.onStatusChange({
+        nativeEvent: { status: "running", message: "" },
+      });
+    });
+    expect(texts(pip())).toEqual([]);
+  });
+
   it("shows the camera permission copy when the front camera is denied", async () => {
     const tree = await mountMessageCall("chad");
     await connect();
@@ -842,5 +918,25 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
       source.indexOf("RCT_REMAP_METHOD(stopSpeaking,")
     );
     expect(speak).toContain("ensurePlaybackAudioSession");
+  });
+
+  it("PHCameraPreview reports running / interrupted / failed from the capture session and restarts after Settings", () => {
+    const source = readFileSync(
+      join(__dirname, "../ios/AppFrontend/PHNative.mm"),
+      "utf8"
+    );
+    const camera = source.slice(source.indexOf("@implementation PHCameraPreviewView"));
+    // `running` is what clears the PiP copy: it must come from the session
+    // actually starting, not from having configured it.
+    expect(camera).toContain("AVCaptureSessionDidStartRunningNotification");
+    expect(camera).toContain('emitStatus:@"running"');
+    expect(camera).toContain("AVCaptureSessionRuntimeErrorNotification");
+    expect(camera).toContain("AVCaptureSessionWasInterruptedNotification");
+    expect(camera).toContain("AVCaptureSessionInterruptionEndedNotification");
+    expect(camera).toContain('emitStatus:@"interrupted"');
+    // Coming back from Settings after granting access starts the preview
+    // without a remount.
+    expect(camera).toContain("UIApplicationDidBecomeActiveNotification");
+    expect(camera).toContain("removeObserver:self");
   });
 });

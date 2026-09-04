@@ -420,6 +420,12 @@ RCT_REMAP_METHOD(syncAlarms,
 // app's AVAudioSession, so the speech recognizer and the synthesizer keep
 // the session to themselves. Runs while attached to a window, stops when
 // detached. JS gates on UIManager having "PHCameraPreview" before rendering.
+//
+// Status events: `authorized` (permission granted, session configured),
+// `running` (the session started delivering — only this clears the PiP
+// copy), `interrupted` (system paused the camera), `denied`, `unavailable`
+// (no camera / runtime error, with the reason). TestFlight 1.2 (14) showed
+// an empty dark PiP with nothing to say why; every state now reports.
 @interface PHCameraPreviewView : UIView
 @property (nonatomic, copy) NSString *position;
 @property (nonatomic, copy) RCTDirectEventBlock onStatusChange;
@@ -440,6 +446,12 @@ RCT_REMAP_METHOD(syncAlarms,
     _position = @"front";
     _sessionQueue = dispatch_queue_create("house.pleasure.camera-preview",
                                           DISPATCH_QUEUE_SERIAL);
+    // Back from Settings after allowing the camera, or from a system
+    // interruption: try again without the JS side remounting the view.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(applicationDidBecomeActive:)
+                                                 name:UIApplicationDidBecomeActiveNotification
+                                               object:nil];
   }
   return self;
 }
@@ -458,6 +470,57 @@ RCT_REMAP_METHOD(syncAlarms,
   } else {
     [self stopPreview];
   }
+}
+
+- (void)applicationDidBecomeActive:(__unused NSNotification *)note
+{
+  if (self.window) {
+    [self startPreview];
+  }
+}
+
+- (void)observeSession:(AVCaptureSession *)session
+{
+  NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+  [center addObserver:self
+             selector:@selector(sessionDidStartRunning:)
+                 name:AVCaptureSessionDidStartRunningNotification
+               object:session];
+  [center addObserver:self
+             selector:@selector(sessionRuntimeError:)
+                 name:AVCaptureSessionRuntimeErrorNotification
+               object:session];
+  [center addObserver:self
+             selector:@selector(sessionWasInterrupted:)
+                 name:AVCaptureSessionWasInterruptedNotification
+               object:session];
+  [center addObserver:self
+             selector:@selector(sessionInterruptionEnded:)
+                 name:AVCaptureSessionInterruptionEndedNotification
+               object:session];
+}
+
+- (void)sessionDidStartRunning:(__unused NSNotification *)note
+{
+  [self emitStatus:@"running" message:@""];
+}
+
+- (void)sessionRuntimeError:(NSNotification *)note
+{
+  NSError *error = note.userInfo[AVCaptureSessionErrorKey];
+  NSString *reason = [error isKindOfClass:[NSError class]] ? error.localizedDescription : nil;
+  [self emitStatus:@"unavailable"
+           message:reason.length ? reason : @"The camera could not start."];
+}
+
+- (void)sessionWasInterrupted:(__unused NSNotification *)note
+{
+  [self emitStatus:@"interrupted" message:@"Camera paused by the system."];
+}
+
+- (void)sessionInterruptionEnded:(__unused NSNotification *)note
+{
+  [self emitStatus:@"running" message:@""];
 }
 
 - (void)emitStatus:(NSString *)status message:(NSString *)message
@@ -570,6 +633,9 @@ RCT_REMAP_METHOD(syncAlarms,
     [self.layer addSublayer:layer];
     _previewLayer = layer;
     _session = session;
+    [self observeSession:session];
+    // `running` is posted by the session itself once frames flow; a session
+    // that fails to start posts a runtime error instead of staying black.
     dispatch_async(_sessionQueue, ^{
       [session startRunning];
     });
@@ -594,6 +660,7 @@ RCT_REMAP_METHOD(syncAlarms,
 
 - (void)dealloc
 {
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
   [self stopPreview];
 }
 
