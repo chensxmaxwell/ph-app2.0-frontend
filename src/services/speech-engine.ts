@@ -1,4 +1,4 @@
-import type { SynthesisResult } from "./cloud-tts";
+import type { SynthesisFailure, SynthesisResult } from "./cloud-tts";
 import { splitForSynthesis } from "./cloud-tts";
 import type { TtsCredentials } from "./tts-config";
 import type { TtsEngine, TtsSpeakInput } from "./tts";
@@ -18,6 +18,7 @@ export type SpeechEngineDeps = {
     voiceId: string;
     credentials: TtsCredentials;
     signal: AbortSignal;
+    expressive?: boolean;
   }) => Promise<SynthesisResult>;
   // Resolves when playback ends; false when the binary cannot play audio.
   playAudio: (chunks: string[]) => Promise<boolean>;
@@ -32,6 +33,11 @@ const CJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 export const languageForText = (text: string): DeviceSpeakOptions["language"] =>
   CJK.test(text) ? "zh-CN" : "en-US";
 
+// Why one synthesis attempt came back empty.
+type SynthesisOutcome =
+  | { chunks: string[] }
+  | { chunks: null; reason: SynthesisFailure["reason"] | "empty" };
+
 /**
  * Cloud voice first, on-device voice of the same gender second.
  *
@@ -40,10 +46,13 @@ export const languageForText = (text: string): DeviceSpeakOptions["language"] =>
  * whose audio arrives after stop is dropped. One refusal of the credentials
  * turns the cloud off for the rest of the session so a bad key costs one
  * request, not one per reply; a speaker the account has not enabled is
- * remembered on its own and only that voice falls back.
+ * remembered on its own and only that voice falls back. An expressive
+ * request the API turns down is retried plain once — the cloud voice stays
+ * the happy path — and the session stops asking for the expressive model.
  */
 export const createSpeechEngine = (deps: SpeechEngineDeps): TtsEngine => {
   let cloudDisabled = false;
+  let expressiveRefused = false;
   const disabledVoices = new Set<string>();
   let utterance = 0;
   let controller: AbortController | null = null;
@@ -54,15 +63,22 @@ export const createSpeechEngine = (deps: SpeechEngineDeps): TtsEngine => {
     text: string,
     voiceId: string,
     credentials: TtsCredentials,
-    signal: AbortSignal
-  ): Promise<string[] | null> => {
+    signal: AbortSignal,
+    expressive: boolean
+  ): Promise<SynthesisOutcome> => {
     const parts = splitForSynthesis(text);
     if (parts.length === 0) {
-      return null;
+      return { chunks: null, reason: "empty" };
     }
     const results = await Promise.all(
       parts.map((part) =>
-        deps.synthesize({ text: part, voiceId, credentials, signal })
+        deps.synthesize({
+          text: part,
+          voiceId,
+          credentials,
+          signal,
+          expressive,
+        })
       )
     );
     const chunks: string[] = [];
@@ -82,14 +98,55 @@ export const createSpeechEngine = (deps: SpeechEngineDeps): TtsEngine => {
             return exhaustive;
           }
         }
-        return null;
+        return { chunks: null, reason: result.reason };
       }
       chunks.push(...result.chunks);
     }
-    return chunks;
+    return { chunks };
   };
 
-  const speak = async ({ text, voiceId }: TtsSpeakInput) => {
+  // The expressive rendering when asked for and not yet refused; if that
+  // request fails for any reason but the key or the speaker, the same text
+  // goes again without it and a success marks the model as refused.
+  const synthesizeReply = async (
+    text: string,
+    voiceId: string,
+    credentials: TtsCredentials,
+    signal: AbortSignal,
+    expressive: boolean
+  ): Promise<string[] | null> => {
+    const wantExpressive = expressive && !expressiveRefused;
+    const first = await synthesizeAll(
+      text,
+      voiceId,
+      credentials,
+      signal,
+      wantExpressive
+    );
+    if (first.chunks) {
+      return first.chunks;
+    }
+    if (!wantExpressive || first.reason !== "request_failed") {
+      return null;
+    }
+    const plain = await synthesizeAll(
+      text,
+      voiceId,
+      credentials,
+      signal,
+      false
+    );
+    if (plain.chunks) {
+      expressiveRefused = true;
+    }
+    return plain.chunks;
+  };
+
+  const speak = async ({
+    text,
+    voiceId,
+    expressive = false,
+  }: TtsSpeakInput) => {
     const token = (utterance += 1);
     controller?.abort();
     controller = new AbortController();
@@ -113,7 +170,13 @@ export const createSpeechEngine = (deps: SpeechEngineDeps): TtsEngine => {
       if (credentials) {
         let chunks: string[] | null = null;
         try {
-          chunks = await synthesizeAll(text, voice.id, credentials, signal);
+          chunks = await synthesizeReply(
+            text,
+            voice.id,
+            credentials,
+            signal,
+            expressive
+          );
         } catch {
           chunks = null;
         }

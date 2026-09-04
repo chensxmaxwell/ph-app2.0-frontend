@@ -484,11 +484,13 @@ describe("Message thread voice call", () => {
       content: OPENER_INSTRUCTION,
     });
     expect(body.messages.length).toBeGreaterThan(2);
-    // Spoken before anyone is asked to talk, in Kevin's own (male) voice.
+    // Spoken before anyone is asked to talk, in Kevin's own (male) voice,
+    // asking Doubao for its expressive rendering.
     expect(speakMock).toHaveBeenCalledTimes(1);
     expect(speakMock.mock.calls[0][0]).toMatchObject({
       text: "Hey you. Took you long enough.",
       voiceId: SEED_VOICES.kevin,
+      expressive: true,
     });
     expect(voiceById(SEED_VOICES.kevin)?.gender).toBe("male");
     expect(texts(tree.root)).toContain("Kevin is speaking");
@@ -539,6 +541,7 @@ describe("Message thread voice call", () => {
     expect(speakMock.mock.calls[1][0]).toMatchObject({
       text: "我在呢。",
       voiceId: SEED_VOICES.kevin,
+      expressive: true,
     });
     const copy = texts(tree.root);
     expect(copy).toContain("Kevin is speaking");

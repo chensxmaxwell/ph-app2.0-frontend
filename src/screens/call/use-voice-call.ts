@@ -132,6 +132,7 @@ export const useVoiceCall = ({
     setTranscript(transcriptRef.current);
   }, []);
 
+  // A call reply asks the cloud for its expressive rendering of the voice.
   const speak = useCallback(async (text: string) => {
     setReply(text);
     setPhase("speaking");
@@ -139,6 +140,7 @@ export const useVoiceCall = ({
       id: `call-${Date.now()}`,
       text,
       voiceId: inputRef.current.voiceId,
+      expressive: true,
     });
   }, []);
 

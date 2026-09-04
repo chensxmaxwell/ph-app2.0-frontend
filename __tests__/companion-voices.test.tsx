@@ -540,6 +540,9 @@ describe("Listen speaks with the person's voice", () => {
     const amandaCall = speak.mock.calls[0][0];
     expect(amandaCall.voiceId).toBe(SEED_VOICES.amanda);
     expect(genderOf(amandaCall.voiceId)).toBe("female");
+    // Listen reads bubbles with the standard rendering; the expressive
+    // model is for call replies.
+    expect(amandaCall.expressive ?? false).toBe(false);
 
     act(() => {
       chat!.setListen("amanda", false);
