@@ -201,9 +201,11 @@ const flush = async () => {
   }
 };
 const settle = () => act(flush);
+// Sync rings for RING_DURATION_MS before it reads as connected (a silent
+// 1.6 s connect, the calls' today, is over well before that).
 const connect = async () => {
   act(() => {
-    jest.advanceTimersByTime(CALL_CONNECT_DELAY_MS + 100);
+    jest.advanceTimersByTime(RING_DURATION_MS + 100);
   });
   await settle();
 };
@@ -738,6 +740,15 @@ const connectAndGreet = async () => {
 
 const loveMessages = () => session?.chat?.messages ?? [];
 
+// The Sync clock runs from the moment the overlay opens (ring included), as
+// the Love call's does: what it reads after `connect()` plus `extraMs`.
+const clockAfter = (extraMs: number) => {
+  const seconds = Math.floor((RING_DURATION_MS + 100 + extraMs) / 1000);
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(
+    seconds % 60
+  ).padStart(2, "0")}`;
+};
+
 const micButton = (root: ReactTestInstance) => touchable(root, "love-sync-mic");
 const speakerButton = (root: ReactTestInstance) =>
   touchable(root, "love-sync-speaker");
@@ -799,6 +810,93 @@ describe("Love Sync voice", () => {
     expect(texts(tree.root).join("\n")).not.toMatch(
       /Hold to talk|Tap to talk|Tap to resume/i
     );
+  });
+
+  it("rings for about four seconds before Chad greets: the ring-back tone plays once and Connecting… holds well past the calls' 1.6 s", async () => {
+    await saveArkKey();
+    const tree = await openLoveOriginSync();
+    expect(ringPlay).toHaveBeenCalledTimes(1);
+    expect(ringPlay.mock.calls[0][0]).toEqual([ringbackToneWav(RING_DURATION_MS)]);
+    expect(RING_DURATION_MS).toBeGreaterThanOrEqual(3000);
+    expect(RING_DURATION_MS).toBeLessThanOrEqual(5000);
+
+    act(() => {
+      jest.advanceTimersByTime(CALL_CONNECT_DELAY_MS + 100);
+    });
+    await settle();
+    expect(texts(tree.root)).toContain(
+      syncStatusLabel({ phase: "connecting", name: "Chad" })
+    );
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    act(() => {
+      jest.advanceTimersByTime(RING_DURATION_MS - CALL_CONNECT_DELAY_MS);
+    });
+    await settle();
+    // Ring over → player silenced → the opener, spoken.
+    expect(nativeStop).toHaveBeenCalled();
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("Chad is speaking");
+    expect(ringPlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("red X during the ring silences it, no greeting ever comes, and the Sync layer is cleaned up", async () => {
+    await saveArkKey();
+    const tree = await openLoveOriginSync();
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    await settle();
+    const loveBefore = loveMessages();
+
+    press(touchable(tree.root, "love-sync-hangup"));
+    await settle();
+    expect(nativeStop).toHaveBeenCalled();
+    expect(session?.layer).toBe("chat");
+    expect(session?.chat?.synced).toBe(false);
+    expect(session?.syncStartedAt).toBeNull();
+    expect(mockNavigation.goBack).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      jest.advanceTimersByTime(RING_DURATION_MS * 2);
+    });
+    await settle();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).not.toHaveBeenCalled();
+    expect(loveMessages()).toEqual(loveBefore);
+  });
+
+  it("minimize during the ring silences it; the pill brings Sync back without ringing or greeting again, listening at once", async () => {
+    await saveArkKey();
+    const tree = await openLoveOriginSync();
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    await settle();
+
+    press(touchable(tree.root, "love-sync-minimize"));
+    await settle();
+    await show(tree, null);
+    expect(nativeStop).toHaveBeenCalled();
+    expect(session).toMatchObject({ layer: "sync", minimized: true });
+    act(() => {
+      jest.advanceTimersByTime(RING_DURATION_MS * 2);
+    });
+    await settle();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    ringPlay.mockClear();
+    act(() => {
+      session!.restore();
+    });
+    await showLoveSync(tree, chad);
+    expect(ringPlay).not.toHaveBeenCalled();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("Listening…");
   });
 
   it("without an Ark key Chad still greets with the canned line and Sync shows the Companion AI copy", async () => {
@@ -976,7 +1074,7 @@ describe("Love Sync voice", () => {
     });
     await settle();
     const clock = () => texts(tree.root).find((copy) => /^\d\d:\d\d$/.test(copy));
-    expect(clock()).toBe("00:06");
+    expect(clock()).toBe(clockAfter(5000));
     const startedAt = session!.syncStartedAt;
 
     press(touchable(tree.root, "love-sync-minimize"));
@@ -1010,7 +1108,7 @@ describe("Love Sync voice", () => {
     expect(ttsStopMock).toHaveBeenCalled();
     expect(listenMock).toHaveBeenCalledTimes(1);
     expect(texts(tree.root)).toContain("Listening…");
-    expect(clock()).toBe("00:06");
+    expect(clock()).toBe(clockAfter(5000));
     expect(session?.syncStartedAt).toBe(startedAt);
   });
 
@@ -1073,6 +1171,8 @@ describe("Love Sync voice", () => {
     });
     await showLoveSync(tree, { companionId: "kevin", name: "Kevin" });
 
+    // Already on: no ring-back, no ring, no opener.
+    expect(ringPlay).not.toHaveBeenCalled();
     expect(speakMock).not.toHaveBeenCalled();
     expect(global.fetch).not.toHaveBeenCalled();
     expect(listenMock).toHaveBeenCalledTimes(1);
@@ -1165,6 +1265,65 @@ describe("Control hub Sync voice", () => {
     expect(texts(tree.root).join("\n")).not.toMatch(
       /Hold to talk|Tap to talk|Tap to resume/i
     );
+  });
+
+  it("rings before Amanda greets; red X during the ring silences it, leaves the stack, and no greeting ever comes", async () => {
+    await saveArkKey();
+    const tree = await openControlSync({ companionId: "amanda", name: "Amanda" });
+    expect(ringPlay).toHaveBeenCalledTimes(1);
+    expect(ringPlay.mock.calls[0][0]).toEqual([ringbackToneWav(RING_DURATION_MS)]);
+    act(() => {
+      jest.advanceTimersByTime(CALL_CONNECT_DELAY_MS + 100);
+    });
+    await settle();
+    expect(texts(tree.root)).toContain(
+      syncStatusLabel({ phase: "connecting", name: "Amanda" })
+    );
+    expect(speakMock).not.toHaveBeenCalled();
+
+    press(touchable(tree.root, "control-sync-hangup"));
+    await settle();
+    expect(nativeStop).toHaveBeenCalled();
+    expect(mockMotorStop).toHaveBeenCalled();
+    expect(homeNavigation.goBack).toHaveBeenCalledTimes(1);
+    act(() => {
+      jest.advanceTimersByTime(RING_DURATION_MS * 2);
+    });
+    await settle();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).not.toHaveBeenCalled();
+  });
+
+  it("minimize during the ring silences it and the pill's LoveSync comes back listening, without a second ring", async () => {
+    await saveArkKey();
+    const tree = await openControlSync({ companionId: "kevin", name: "Kevin" });
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    await settle();
+
+    press(touchable(tree.root, "control-sync-minimize"));
+    await settle();
+    await show(tree, null);
+    expect(nativeStop).toHaveBeenCalled();
+    expect(session).toMatchObject({ layer: "sync", minimized: true, surface: "control" });
+    act(() => {
+      jest.advanceTimersByTime(RING_DURATION_MS * 2);
+    });
+    await settle();
+    expect(speakMock).not.toHaveBeenCalled();
+
+    ringPlay.mockClear();
+    act(() => {
+      session!.restore();
+    });
+    mockNavigation = fakeNavigation();
+    await showLoveSync(tree, { companionId: "kevin", name: "Kevin" });
+    expect(ringPlay).not.toHaveBeenCalled();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("Listening…");
   });
 
   it("a spoken turn is answered as Amanda and spoken; her Message thread is untouched, and Sync listens again", async () => {
@@ -1289,7 +1448,7 @@ describe("Control hub Sync voice", () => {
     });
     await settle();
     const clock = () => texts(tree.root).find((copy) => /^\d\d:\d\d$/.test(copy));
-    expect(clock()).toBe("00:06");
+    expect(clock()).toBe(clockAfter(5000));
 
     press(touchable(tree.root, "control-sync-minimize"));
     await settle();
@@ -1320,7 +1479,7 @@ describe("Control hub Sync voice", () => {
     expect(listenMock).toHaveBeenCalledTimes(1);
     expect(texts(tree.root)).toContain("Listening…");
     expect(texts(tree.root)).toContain("Kevin");
-    expect(clock()).toBe("00:06");
+    expect(clock()).toBe(clockAfter(5000));
     // Nothing from Sync reached Kevin's thread on the way.
     expect(chat!.getThread("kevin")!.messages.map((m) => m.text)).not.toContain(
       "你好 Kevin"

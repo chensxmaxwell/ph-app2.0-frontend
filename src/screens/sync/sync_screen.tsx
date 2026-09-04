@@ -15,6 +15,7 @@ import Speaker from "@images/speaker.svg";
 import MicroPhone_unmute from "@images/microphone-unmute.svg";
 import MicroPhone_mute from "@images/microphone-mute.svg";
 import { usePatternPlayer } from "../../hooks/usePatternPlayer";
+import { RING_DURATION_MS } from "../../services/ringtone";
 import { voiceForPerson } from "../../services/voices";
 import { useCompanions } from "../../store/companions";
 import { wavePattern } from "../../store/patterns";
@@ -22,7 +23,7 @@ import { LookFace } from "../avatar/look-face";
 import { usePersonFace } from "../avatar/use-person-face";
 import { CallCaptions } from "../call/captions";
 import { syncStatusLabel } from "../call/status";
-import { CALL_CONNECT_DELAY_MS, useVoiceCall } from "../call/use-voice-call";
+import { useVoiceCall } from "../call/use-voice-call";
 import { useChat } from "../chat/store";
 import { resolveLovePerson } from "../love/partner";
 import { useLoveSession } from "../love/session";
@@ -61,15 +62,16 @@ const SyncScreen = () => {
       })),
     [threadMessages]
   );
-  // Always a fresh start: the pill restores a minimized Sync as LoveSync,
-  // never here.
+  // Always a fresh start, so it always rings first: the pill restores a
+  // minimized Sync as LoveSync, never here.
   const call = useVoiceCall({
     name: partnerName,
     personality,
     story,
     history,
     voiceId: voiceForPerson({ id: partnerId, thread, companion }).id,
-    connectDelayMs: CALL_CONNECT_DELAY_MS,
+    connectDelayMs: RING_DURATION_MS,
+    ringtone: true,
   });
   const { start: startSession, minimize, ensureLayerTimer } = useLoveSession();
   const [syncState, setSyncState] = useState("SYNC_ONGOING");

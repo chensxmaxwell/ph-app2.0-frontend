@@ -16,6 +16,7 @@ import Xmark from "@images/icons/xmark.svg";
 import Speaker from "@images/speaker.svg";
 import MicroPhoneUnmute from "@images/microphone-unmute.svg";
 import MicroPhoneMute from "@images/microphone-mute.svg";
+import { RING_DURATION_MS } from "../../services/ringtone";
 import { voiceForPerson } from "../../services/voices";
 import { useCompanions } from "../../store/companions";
 import { useChat } from "../chat/store";
@@ -24,7 +25,7 @@ import { s } from "../avatar/scale";
 import { usePersonFace } from "../avatar/use-person-face";
 import { CallCaptions } from "../call/captions";
 import { syncStatusLabel } from "../call/status";
-import { CALL_CONNECT_DELAY_MS, useVoiceCall } from "../call/use-voice-call";
+import { useVoiceCall } from "../call/use-voice-call";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
 import { resolveLovePerson } from "./partner";
@@ -103,10 +104,11 @@ export const LoveSyncScreen = () => {
         .map((item) => ({ from: item.from, text: item.text })),
     [chatMessages]
   );
+  // A fresh Sync rings out loud for a few seconds before the greeting.
   // Restored from the pill (or entered while the Control Sync's clock was
   // already running): Sync has been on, no ring and no second greeting.
   const [connectDelayMs] = useState(() =>
-    syncStartedAt ? 0 : CALL_CONNECT_DELAY_MS
+    syncStartedAt ? 0 : RING_DURATION_MS
   );
   const call = useVoiceCall({
     name,
@@ -115,6 +117,7 @@ export const LoveSyncScreen = () => {
     history,
     voiceId: voiceForPerson({ id: partnerId, thread, companion }).id,
     connectDelayMs,
+    ringtone: true,
   });
   const [now, setNow] = useState(Date.now());
   const elapsed = syncStartedAt
