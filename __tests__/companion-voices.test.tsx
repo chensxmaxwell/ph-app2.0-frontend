@@ -210,8 +210,9 @@ describe("seeded people", () => {
 
   it("a thread persisted before voices existed still resolves to a voice of its gender, the same one every time", () => {
     const [kevin, , amanda] = seedThreads().map((thread) => {
-      const { voiceId: _dropped, ...rest } = thread;
-      return rest;
+      const legacy = { ...thread };
+      delete legacy.voiceId;
+      return legacy;
     });
     expect(voiceForPerson({ thread: amanda }).gender).toBe("female");
     expect(voiceForPerson({ thread: kevin }).gender).toBe("male");
