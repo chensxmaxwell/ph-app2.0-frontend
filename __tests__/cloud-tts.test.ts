@@ -233,7 +233,7 @@ describe("speech engine", () => {
     }),
     synthesize: jest.fn(async () => ({ ok: true as const, chunks: ["AAAA"] })),
     playAudio: jest.fn(async () => true),
-    speakOnDevice: jest.fn(async () => true),
+    speakOnDevice: jest.fn(async () => undefined),
     stopOnDevice: jest.fn(async () => undefined),
     ...over,
   });

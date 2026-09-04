@@ -60,10 +60,9 @@ export const speakWithNativeTts = async (
   options: NativeSpeakOptions = {}
 ) => {
   try {
-    return await nativeSpeak(text, options);
+    await nativeSpeak(text, options);
   } catch {
     // Listen must never crash the process.
-    return false;
   }
 };
 

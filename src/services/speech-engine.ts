@@ -21,8 +21,9 @@ export type SpeechEngineDeps = {
   }) => Promise<SynthesisResult>;
   // Resolves when playback ends; false when the binary cannot play audio.
   playAudio: (chunks: string[]) => Promise<boolean>;
-  // AVSpeechSynthesizer with a voice picked by gender + language.
-  speakOnDevice: (text: string, options: DeviceSpeakOptions) => Promise<boolean>;
+  // AVSpeechSynthesizer with a voice picked by gender + language; resolves
+  // when the utterance ends.
+  speakOnDevice: (text: string, options: DeviceSpeakOptions) => Promise<void>;
   stopOnDevice: () => Promise<void>;
 };
 
