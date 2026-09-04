@@ -23,10 +23,17 @@ import {
   ARK_MODEL,
   saveLlmConfig,
 } from "../src/services/llm-config";
+import {
+  RING_DURATION_MS,
+  RING_MIN_MS,
+  ringbackToneWav,
+} from "../src/services/ringtone";
 import { configureTtsEngine } from "../src/services/tts";
 import { SEED_VOICES, voiceById } from "../src/services/voices";
 import {
   listenForUtterance,
+  playAudioWithNative,
+  stopNativeTts,
   stopVoiceInput,
   UtteranceEnd,
   UtteranceResult,
@@ -106,6 +113,7 @@ jest.mock("../src/services/voice-input", () => ({
   listenForUtterance: jest.fn(),
   speakWithNativeTts: jest.fn(),
   stopNativeTts: jest.fn(),
+  playAudioWithNative: jest.fn(),
 }));
 // The mock motor under Sync (Control's HomeScreen context is not mounted
 // here). It keeps running beside the voice; it is not what these tests lock.
@@ -156,6 +164,10 @@ jest.mock("@react-navigation/native", () => {
 
 const listenMock = listenForUtterance as jest.Mock<typeof listenForUtterance>;
 const stopVoice = stopVoiceInput as jest.Mock<typeof stopVoiceInput>;
+// The ring-back tone goes through the native player, the same one the cloud
+// voice uses; stopping it is the same native stop.
+const ringPlay = playAudioWithNative as jest.Mock<typeof playAudioWithNative>;
+const nativeStop = stopNativeTts as jest.Mock<typeof stopNativeTts>;
 // The recognizer resolves the newest listen when the test "says" something.
 let pendingListen: ((result: UtteranceResult) => void) | null = null;
 
@@ -288,6 +300,10 @@ beforeEach(async () => {
   mockMotorStop.mockClear();
   listenMock.mockReset();
   stopVoice.mockReset();
+  ringPlay.mockReset();
+  ringPlay.mockResolvedValue(true);
+  nativeStop.mockReset();
+  nativeStop.mockResolvedValue(undefined);
   pendingListen = null;
   listenMock.mockImplementation(
     () =>
@@ -542,6 +558,115 @@ describe("useVoiceCall as a mute switch (Sync's mic control)", () => {
     expect(voice!.reply).toContain("Chad");
     expect(voice!.phase).toBe("listening");
     expect(listenMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useVoiceCall with a ringtone", () => {
+  it("rings for RING_DURATION_MS before the companion greets — the tone plays once, the old 1.6 s connect is not enough", async () => {
+    await mountVoice({ connectDelayMs: RING_DURATION_MS, ringtone: true });
+    expect(voice!.phase).toBe("connecting");
+    expect(ringPlay).toHaveBeenCalledTimes(1);
+    expect(ringPlay.mock.calls[0][0]).toEqual([
+      ringbackToneWav(RING_DURATION_MS),
+    ]);
+    expect(speakMock).not.toHaveBeenCalled();
+
+    act(() => {
+      jest.advanceTimersByTime(CALL_CONNECT_DELAY_MS + 100);
+    });
+    await settle();
+    expect(voice!.phase).toBe("connecting");
+    expect(speakMock).not.toHaveBeenCalled();
+
+    act(() => {
+      jest.advanceTimersByTime(RING_DURATION_MS - CALL_CONNECT_DELAY_MS);
+    });
+    await settle();
+    // The ring is over: the player is silenced, then the greeting.
+    expect(nativeStop).toHaveBeenCalledTimes(1);
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(voice!.phase).toBe("speaking");
+    await finishSpeech();
+    expect(voice!.phase).toBe("listening");
+    expect(ringPlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("a connect delay shorter than a ring is stretched to the shortest ring", async () => {
+    await mountVoice({ connectDelayMs: CALL_CONNECT_DELAY_MS, ringtone: true });
+    act(() => {
+      jest.advanceTimersByTime(CALL_CONNECT_DELAY_MS + 100);
+    });
+    await settle();
+    expect(voice!.phase).toBe("connecting");
+    act(() => {
+      jest.advanceTimersByTime(RING_MIN_MS - CALL_CONNECT_DELAY_MS);
+    });
+    await settle();
+    expect(voice!.phase).toBe("speaking");
+  });
+
+  it("hang-up during the ring silences it at once and no greeting ever comes", async () => {
+    await saveArkKey();
+    await mountVoice({ connectDelayMs: RING_DURATION_MS, ringtone: true });
+    act(() => {
+      jest.advanceTimersByTime(900);
+    });
+    await settle();
+
+    act(() => {
+      voice!.hangUp();
+    });
+    await settle();
+    expect(nativeStop).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      jest.advanceTimersByTime(RING_DURATION_MS * 2);
+    });
+    await settle();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).not.toHaveBeenCalled();
+    expect(voice!.phase).toBe("ready");
+  });
+
+  it("unmount during the ring (minimize) silences it and nothing runs on after", async () => {
+    await saveArkKey();
+    await mountVoice({ connectDelayMs: RING_DURATION_MS, ringtone: true });
+    act(() => {
+      jest.advanceTimersByTime(900);
+    });
+    await settle();
+
+    act(() => {
+      trees.splice(0).forEach((tree) => tree.unmount());
+    });
+    await settle();
+    expect(nativeStop).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      jest.advanceTimersByTime(RING_DURATION_MS * 2);
+    });
+    await settle();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).not.toHaveBeenCalled();
+  });
+
+  it("an already-running conversation (connectDelayMs 0) never rings", async () => {
+    await mountVoice({ connectDelayMs: 0, ringtone: true });
+    expect(ringPlay).not.toHaveBeenCalled();
+    expect(voice!.phase).toBe("listening");
+  });
+
+  it("without the option the calls connect as before: silent, after CALL_CONNECT_DELAY_MS", async () => {
+    await mountVoice({ connectDelayMs: CALL_CONNECT_DELAY_MS });
+    expect(ringPlay).not.toHaveBeenCalled();
+    act(() => {
+      jest.advanceTimersByTime(CALL_CONNECT_DELAY_MS + 100);
+    });
+    await settle();
+    expect(ringPlay).not.toHaveBeenCalled();
+    expect(speakMock).toHaveBeenCalledTimes(1);
   });
 });
 

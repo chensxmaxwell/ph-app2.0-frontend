@@ -6,6 +6,7 @@ import {
   completeCompanionChat,
 } from "../../services/llm";
 import { hasLlmKey, loadLlmConfig } from "../../services/llm-config";
+import { playRingback, Ringback } from "../../services/ringtone";
 import { ttsSpeak, ttsStop } from "../../services/tts";
 import { ttsCredentialsFromConfig } from "../../services/tts-config";
 import { listenForUtterance, stopVoiceInput } from "../../services/voice-input";
@@ -53,6 +54,11 @@ export type VoiceCallInput = {
   // the mic opens right away. Otherwise the call rings first and the
   // companion greets before anyone is asked to talk.
   connectDelayMs?: number;
+  // Ring out loud while connecting: the ring-back tone plays for the (3–5 s
+  // clamped) connect delay and the greeting follows it. Off, connecting is
+  // the silent `connectDelayMs` wait. Sync passes `RING_DURATION_MS` + true;
+  // the calls are meant to follow.
+  ringtone?: boolean;
 };
 
 export type VoiceCall = {
@@ -142,6 +148,7 @@ export const useVoiceCall = ({
   history,
   voiceId,
   connectDelayMs = CALL_CONNECT_DELAY_MS,
+  ringtone = false,
 }: VoiceCallInput): VoiceCall => {
   // A call already in progress is listening from its first frame; a tap is
   // never what opens the mic.
@@ -173,6 +180,8 @@ export const useVoiceCall = ({
   const stallsRef = useRef(0);
   const stallNoticeRef = useRef<string | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The ring-back playing while connecting, so hang-up can silence it.
+  const ringRef = useRef<Ringback | null>(null);
   const inputRef = useRef({ name, personality, story, history, voiceId });
   inputRef.current = { name, personality, story, history, voiceId };
 
@@ -405,18 +414,38 @@ export const useVoiceCall = ({
       listen(turn);
       return;
     }
-    const timer = setTimeout(() => {
+    const connected = () => {
       if (!current(turn) || phaseRef.current !== "connecting") {
         return;
       }
       setPhase("greeting");
       greetThenListen(turn).catch(swallow);
-    }, connectDelayMs);
+    };
+    if (ringtone) {
+      // The ring owns the wait: the greeting follows the tone, and a ring
+      // stopped early (hang-up, minimize) settles into `connected`, which
+      // then finds its turn gone.
+      const ring = playRingback({ durationMs: connectDelayMs });
+      ringRef.current = ring;
+      ring.done.then(() => {
+        if (ringRef.current === ring) {
+          ringRef.current = null;
+        }
+        connected();
+      });
+      return () => {
+        ring.stop();
+        if (ringRef.current === ring) {
+          ringRef.current = null;
+        }
+      };
+    }
+    const timer = setTimeout(connected, connectDelayMs);
     return () => clearTimeout(timer);
-  }, [connectDelayMs, current, greetThenListen, listen]);
+  }, [connectDelayMs, current, greetThenListen, listen, ringtone]);
 
   // Unmount without hang-up (minimize): close the mic and stop the loop. A
-  // reply already being spoken finishes on its own.
+  // reply already being spoken finishes on its own; a ring does not.
   useEffect(() => {
     return () => {
       aliveRef.current = false;
@@ -425,6 +454,8 @@ export const useVoiceCall = ({
         clearTimeout(retryRef.current);
         retryRef.current = null;
       }
+      ringRef.current?.stop();
+      ringRef.current = null;
       if (phaseRef.current === "listening") {
         stopVoiceInput().catch(swallow);
       }
@@ -528,6 +559,8 @@ export const useVoiceCall = ({
       clearTimeout(retryRef.current);
       retryRef.current = null;
     }
+    ringRef.current?.stop();
+    ringRef.current = null;
     if (phaseRef.current === "listening") {
       stopVoiceInput().catch(swallow);
     }
