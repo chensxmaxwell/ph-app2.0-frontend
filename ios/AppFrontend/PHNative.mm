@@ -3,6 +3,7 @@
 #import <UserNotifications/UserNotifications.h>
 #import <AVFoundation/AVFoundation.h>
 #import <Speech/Speech.h>
+#import <math.h>
 
 @interface PHNative : NSObject <RCTBridgeModule, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate>
 @end
@@ -16,9 +17,63 @@
 @property (nonatomic, strong) SFSpeechAudioBufferRecognitionRequest *speechRequest;
 @property (nonatomic, strong) SFSpeechRecognitionTask *speechTask;
 @property (nonatomic, strong) AVAudioEngine *audioEngine;
-@property (nonatomic, copy) NSString *transcript;
+// Written on the recognizer's queue, read on main (stopVoiceInput, the
+// hands-free tick).
+@property (atomic, copy) NSString *transcript;
 @property (nonatomic, assign) BOOL voiceRunning;
+// Hands-free listening (listenForUtterance): the pending promise, the
+// end-pointing clock, and the generation that lets a stop or a newer start
+// win over a listen still waiting on the permission prompt.
+@property (nonatomic, copy) RCTPromiseResolveBlock listenResolve;
+@property (nonatomic, strong) dispatch_source_t listenTimer;
+@property (nonatomic, assign) NSUInteger voiceGeneration;
+@property (nonatomic, assign) CFAbsoluteTime listenStartedAt;
+// Written from the audio tap / the recognizer's queue, read on main.
+@property (atomic, assign) CFAbsoluteTime lastVoiceAt;
+@property (atomic, assign) CFAbsoluteTime lastTranscriptAt;
+@property (nonatomic, assign) NSTimeInterval listenSilence;
+@property (nonatomic, assign) NSTimeInterval listenMax;
+@property (nonatomic, assign) NSTimeInterval listenIdle;
 @end
+
+// RMS (full scale 1.0) above which a buffer counts as the user talking. The
+// iPhone mic in Measurement mode sits around 0.002–0.005 in a quiet room and
+// well above 0.03 for speech at arm's length; quiet speech that never
+// clears the floor is still ended by the transcript going quiet.
+static const float PHVoiceRmsFloor = 0.02f;
+static const NSTimeInterval PHListenTickInterval = 0.15;
+
+static double PHNumberOption(NSDictionary *options, NSString *key, double fallback)
+{
+  id value = [options isKindOfClass:[NSDictionary class]] ? options[key] : nil;
+  return [value isKindOfClass:[NSNumber class]] ? [(NSNumber *)value doubleValue] : fallback;
+}
+
+// Root mean square of the first channel; 0 for a format that is neither
+// float32 nor int16 (then only the transcript decides when the user is done).
+static float PHBufferRms(AVAudioPCMBuffer *buffer)
+{
+  AVAudioFrameCount frames = buffer.frameLength;
+  if (frames == 0) {
+    return 0.0f;
+  }
+  double sum = 0.0;
+  if (buffer.floatChannelData) {
+    const float *samples = buffer.floatChannelData[0];
+    for (AVAudioFrameCount index = 0; index < frames; index += 1) {
+      sum += (double)samples[index] * (double)samples[index];
+    }
+  } else if (buffer.int16ChannelData) {
+    const int16_t *samples = buffer.int16ChannelData[0];
+    for (AVAudioFrameCount index = 0; index < frames; index += 1) {
+      double sample = samples[index] / 32768.0;
+      sum += sample * sample;
+    }
+  } else {
+    return 0.0f;
+  }
+  return (float)sqrt(sum / (double)frames);
+}
 
 @implementation PHNative
 
@@ -60,8 +115,95 @@ RCT_EXPORT_MODULE();
   };
 }
 
+// What a hands-free listen resolves with when stopVoiceInput or a newer
+// start took the mic first: nothing to act on.
+- (NSDictionary *)voiceStopped
+{
+  return @{
+    @"ok": @YES,
+    @"text": @"",
+    @"end": @"stopped"
+  };
+}
+
+- (void)stopListenTimer
+{
+  if (self.listenTimer) {
+    dispatch_source_cancel(self.listenTimer);
+    self.listenTimer = nil;
+  }
+}
+
+- (void)startListenTimer
+{
+  [self stopListenTimer];
+  dispatch_source_t timer =
+      dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+  uint64_t interval = (uint64_t)(PHListenTickInterval * NSEC_PER_SEC);
+  dispatch_source_set_timer(timer,
+                            dispatch_time(DISPATCH_TIME_NOW, (int64_t)interval),
+                            interval,
+                            (uint64_t)(0.03 * NSEC_PER_SEC));
+  __weak PHNative *weakSelf = self;
+  dispatch_source_set_event_handler(timer, ^{
+    [weakSelf listenTick];
+  });
+  dispatch_resume(timer);
+  self.listenTimer = timer;
+}
+
+// Settles the pending hands-free listen, if any. `end` is utterance / idle /
+// stopped; `text` is what the recognizer had at that point.
+- (void)settleListen:(NSString *)end text:(NSString *)text
+{
+  [self stopListenTimer];
+  if (self.listenResolve) {
+    RCTPromiseResolveBlock pending = self.listenResolve;
+    self.listenResolve = nil;
+    pending(@{
+      @"ok": @YES,
+      @"text": text ?: @"",
+      @"end": end ?: @"stopped"
+    });
+  }
+}
+
+- (void)finishListen:(NSString *)end
+{
+  NSString *text = self.transcript ?: @"";
+  [self settleListen:end text:text];
+  [self teardownVoiceEngine];
+}
+
+// Runs on the main queue while a hands-free listen is pending. The user has
+// finished when something was recognized and, for silenceMs, no new words
+// arrived and the mic stayed under the voice floor; one utterance is capped
+// at maxMs. An empty listen ends as idle after idleMs so JS can open the mic
+// again under iOS Speech's one-minute request limit.
+- (void)listenTick
+{
+  if (!self.listenResolve) {
+    [self stopListenTimer];
+    return;
+  }
+  CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+  NSTimeInterval sinceStart = now - self.listenStartedAt;
+  NSTimeInterval quietFor = now - MAX(self.lastVoiceAt, self.lastTranscriptAt);
+  NSString *text = self.transcript ?: @"";
+  if (text.length > 0) {
+    if (quietFor >= self.listenSilence || sinceStart >= self.listenMax) {
+      [self finishListen:@"utterance"];
+    }
+    return;
+  }
+  if (sinceStart >= self.listenIdle) {
+    [self finishListen:@"idle"];
+  }
+}
+
 - (void)teardownVoiceEngine
 {
+  [self stopListenTimer];
   @try {
     if (self.audioEngine && self.audioEngine.isRunning) {
       [self.audioEngine stop];
@@ -340,16 +482,61 @@ RCT_REMAP_METHOD(playAudio,
   [self finishPendingSpeak];
 }
 
+// Push-to-talk (the thread composer): open the mic, stopVoiceInput returns
+// the transcript.
 RCT_REMAP_METHOD(startVoiceInput,
                  startVoiceInputWithResolver:(RCTPromiseResolveBlock)resolve
                  rejecter:(RCTPromiseRejectBlock)reject)
 {
   dispatch_async(dispatch_get_main_queue(), ^{
-    [self beginVoiceInput:resolve];
+    [self settleListen:@"stopped" text:@""];
+    self.voiceGeneration += 1;
+    [self beginVoiceInput:resolve generation:self.voiceGeneration];
   });
 }
 
-- (void)beginVoiceInput:(RCTPromiseResolveBlock)resolve
+// Hands-free (a call): open the mic and resolve when the user has finished
+// talking — `{ ok, text, end: "utterance" | "idle" | "stopped" }`. Options:
+// silenceMs (quiet after speech that ends the utterance), maxMs (one
+// utterance at most), idleMs (an empty listen ends as idle). The audio
+// session is Record while listening, exactly as for push-to-talk; the JS
+// loop waits for this to resolve before it speaks the reply, so the
+// recognizer and the synthesizer still never run at the same time
+// (landmine 22).
+RCT_REMAP_METHOD(listenForUtterance,
+                 listenForUtterance:(NSDictionary *)options
+                 resolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject)
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self settleListen:@"stopped" text:@""];
+    self.listenSilence = PHNumberOption(options, @"silenceMs", 1100) / 1000.0;
+    self.listenMax = PHNumberOption(options, @"maxMs", 20000) / 1000.0;
+    self.listenIdle = PHNumberOption(options, @"idleMs", 45000) / 1000.0;
+    self.voiceGeneration += 1;
+    NSUInteger generation = self.voiceGeneration;
+    __weak PHNative *weakSelf = self;
+    [self beginVoiceInput:^(id result) {
+      PHNative *strongSelf = weakSelf;
+      NSDictionary *started =
+          [result isKindOfClass:[NSDictionary class]] ? (NSDictionary *)result : nil;
+      BOOL opened = started != nil && [started[@"ok"] boolValue] && started[@"end"] == nil;
+      if (!strongSelf || !opened) {
+        // Refused, failed, or superseded while the permission prompt was up.
+        resolve(started ?: @{ @"ok": @YES, @"text": @"", @"end": @"stopped" });
+        return;
+      }
+      CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+      strongSelf.listenStartedAt = now;
+      strongSelf.lastVoiceAt = now;
+      strongSelf.lastTranscriptAt = now;
+      strongSelf.listenResolve = resolve;
+      [strongSelf startListenTimer];
+    } generation:generation];
+  });
+}
+
+- (void)beginVoiceInput:(RCTPromiseResolveBlock)resolve generation:(NSUInteger)generation
 {
   @try {
     [self teardownVoiceEngine];
@@ -367,6 +554,12 @@ RCT_REMAP_METHOD(startVoiceInput,
             if (!granted) {
               resolve([self voiceFail:@"permission-denied"
                               message:@"Microphone access is needed to use voice input."]);
+              return;
+            }
+            if (generation != self.voiceGeneration) {
+              // Stopped or superseded while the prompt was up: never open
+              // the mic for a caller that has moved on.
+              resolve([self voiceStopped]);
               return;
             }
             resolve([self startAuthorizedVoiceInput]);
@@ -424,6 +617,9 @@ RCT_REMAP_METHOD(startVoiceInput,
     if (@available(iOS 13, *)) {
       request.requiresOnDeviceRecognition = NO;
     }
+    if (@available(iOS 16, *)) {
+      request.addsPunctuation = YES;
+    }
 
     AVAudioInputNode *input = engine.inputNode;
     AVAudioFormat *format = [input outputFormatForBus:0];
@@ -433,19 +629,35 @@ RCT_REMAP_METHOD(startVoiceInput,
                      message:@"Voice input is not available on this build."];
     }
 
+    // Set before the task exists so a result handler can tell a live request
+    // from one already torn down.
+    self.recognizer = recognizer;
+    self.speechRequest = request;
+
     __weak PHNative *weakSelf = self;
     self.speechTask = [recognizer
         recognitionTaskWithRequest:request
                      resultHandler:^(SFSpeechRecognitionResult *result, NSError *error) {
                        PHNative *strongSelf = weakSelf;
-                       if (!strongSelf) {
+                       if (!strongSelf || strongSelf.speechRequest != request) {
                          return;
                        }
-                       if (result.bestTranscription.formattedString.length) {
-                         strongSelf.transcript = result.bestTranscription.formattedString;
+                       NSString *text = result.bestTranscription.formattedString;
+                       if (text.length && ![text isEqualToString:strongSelf.transcript]) {
+                         strongSelf.transcript = text;
+                         strongSelf.lastTranscriptAt = CFAbsoluteTimeGetCurrent();
                        }
                        if (error && !result) {
                          strongSelf.voiceRunning = NO;
+                         // Hands-free: the recognizer gave up (no speech in
+                         // time, network); hand back what it had so the call
+                         // can open the mic again.
+                         dispatch_async(dispatch_get_main_queue(), ^{
+                           if (strongSelf.listenResolve && strongSelf.speechRequest == request) {
+                             [strongSelf finishListen:strongSelf.transcript.length ? @"utterance"
+                                                                                   : @"idle"];
+                           }
+                         });
                        }
                      }];
 
@@ -454,6 +666,10 @@ RCT_REMAP_METHOD(startVoiceInput,
                     format:format
                      block:^(AVAudioPCMBuffer *buffer, __unused AVAudioTime *when) {
                        [request appendAudioPCMBuffer:buffer];
+                       PHNative *strongSelf = weakSelf;
+                       if (strongSelf && PHBufferRms(buffer) > PHVoiceRmsFloor) {
+                         strongSelf.lastVoiceAt = CFAbsoluteTimeGetCurrent();
+                       }
                      }];
 
     [engine prepare];
@@ -464,8 +680,6 @@ RCT_REMAP_METHOD(startVoiceInput,
                      message:@"Could not start the microphone. Try again."];
     }
 
-    self.recognizer = recognizer;
-    self.speechRequest = request;
     self.audioEngine = engine;
     self.voiceRunning = YES;
     return [self voiceOk:@""];
@@ -476,13 +690,18 @@ RCT_REMAP_METHOD(startVoiceInput,
   }
 }
 
+// Closes the mic. Push-to-talk gets the transcript; a hands-free listen
+// still pending is settled as `stopped` so its promise never hangs, and a
+// listen still waiting on the permission prompt will not open the mic.
 RCT_REMAP_METHOD(stopVoiceInput,
                  stopVoiceInputWithResolver:(RCTPromiseResolveBlock)resolve
                  rejecter:(RCTPromiseRejectBlock)reject)
 {
   dispatch_async(dispatch_get_main_queue(), ^{
     @try {
+      self.voiceGeneration += 1;
       NSString *text = self.transcript ?: @"";
+      [self settleListen:@"stopped" text:@""];
       [self teardownVoiceEngine];
       resolve([self voiceOk:text]);
     } @catch (__unused NSException *exception) {
@@ -587,21 +806,45 @@ RCT_REMAP_METHOD(syncAlarms,
 // the session to themselves. Runs while attached to a window, stops when
 // detached. JS gates on UIManager having "PHCameraPreview" before rendering.
 //
+// The AVCaptureVideoPreviewLayer is this view's own backing layer
+// (+layerClass): it is always exactly the view's bounds, in whatever order
+// RN lays the view out, with no sublayer whose frame has to be copied by
+// hand. TestFlight 1.2 (14) showed an empty dark PiP; 1.2 (15) showed a black
+// one with no copy — JS had been told `running` from
+// AVCaptureSessionDidStartRunning while nothing painted. The session running
+// is not the layer painting: `running` now comes from the layer's own
+// `previewing` flag, which is YES only while it renders frames.
+//
 // Status events: `authorized` (permission granted, session configured),
-// `running` (the session started delivering — only this clears the PiP
-// copy), `interrupted` (system paused the camera), `denied`, `unavailable`
-// (no camera / runtime error, with the reason). TestFlight 1.2 (14) showed
-// an empty dark PiP with nothing to say why; every state now reports.
+// `running` (frames are on screen — only this clears the PiP copy),
+// `interrupted` (the system paused the camera, or the session stopped behind
+// our back), `denied`, `unavailable` (no camera / runtime error, with the
+// reason).
 @interface PHCameraPreviewView : UIView
 @property (nonatomic, copy) NSString *position;
 @property (nonatomic, copy) RCTDirectEventBlock onStatusChange;
+@property (nonatomic, readonly) AVCaptureVideoPreviewLayer *previewLayer;
 @end
+
+static void *PHPreviewingContext = &PHPreviewingContext;
 
 @implementation PHCameraPreviewView {
   AVCaptureSession *_session;
-  AVCaptureVideoPreviewLayer *_previewLayer;
   dispatch_queue_t _sessionQueue;
   BOOL _requesting;
+  // Set around our own stopRunning so DidStopRunning is not reported as an
+  // interruption.
+  BOOL _stoppedByUs;
+}
+
++ (Class)layerClass
+{
+  return [AVCaptureVideoPreviewLayer class];
+}
+
+- (AVCaptureVideoPreviewLayer *)previewLayer
+{
+  return (AVCaptureVideoPreviewLayer *)self.layer;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame
@@ -612,6 +855,13 @@ RCT_REMAP_METHOD(syncAlarms,
     _position = @"front";
     _sessionQueue = dispatch_queue_create("house.pleasure.camera-preview",
                                           DISPATCH_QUEUE_SERIAL);
+    self.previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+    // `previewing` flips to YES only when frames are being rendered; that,
+    // not the session starting, is what clears the PiP copy.
+    [self.previewLayer addObserver:self
+                        forKeyPath:@"previewing"
+                           options:NSKeyValueObservingOptionNew
+                           context:PHPreviewingContext];
     // Back from Settings after allowing the camera, or from a system
     // interruption: try again without the JS side remounting the view.
     [[NSNotificationCenter defaultCenter] addObserver:self
@@ -620,12 +870,6 @@ RCT_REMAP_METHOD(syncAlarms,
                                                object:nil];
   }
   return self;
-}
-
-- (void)layoutSubviews
-{
-  [super layoutSubviews];
-  _previewLayer.frame = self.bounds;
 }
 
 - (void)didMoveToWindow
@@ -645,12 +889,32 @@ RCT_REMAP_METHOD(syncAlarms,
   }
 }
 
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey, id> *)change
+                       context:(void *)context
+{
+  if (context != PHPreviewingContext) {
+    [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+    return;
+  }
+  // Delivered on whatever thread AVFoundation changed it; emitStatus hops to
+  // main. Going dark is reported by the session notifications below.
+  if ([change[NSKeyValueChangeNewKey] boolValue]) {
+    [self emitStatus:@"running" message:@""];
+  }
+}
+
 - (void)observeSession:(AVCaptureSession *)session
 {
   NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
   [center addObserver:self
              selector:@selector(sessionDidStartRunning:)
                  name:AVCaptureSessionDidStartRunningNotification
+               object:session];
+  [center addObserver:self
+             selector:@selector(sessionDidStopRunning:)
+                 name:AVCaptureSessionDidStopRunningNotification
                object:session];
   [center addObserver:self
              selector:@selector(sessionRuntimeError:)
@@ -666,9 +930,28 @@ RCT_REMAP_METHOD(syncAlarms,
                object:session];
 }
 
+// Belt and braces for the KVO above: if the layer was already previewing by
+// the time the session says it started, say so.
+- (void)emitRunningIfPreviewing
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (self.previewLayer.isPreviewing) {
+      [self emitStatus:@"running" message:@""];
+    }
+  });
+}
+
 - (void)sessionDidStartRunning:(__unused NSNotification *)note
 {
-  [self emitStatus:@"running" message:@""];
+  [self emitRunningIfPreviewing];
+}
+
+- (void)sessionDidStopRunning:(__unused NSNotification *)note
+{
+  if (_stoppedByUs) {
+    return;
+  }
+  [self emitStatus:@"interrupted" message:@"Camera paused by the system."];
 }
 
 - (void)sessionRuntimeError:(NSNotification *)note
@@ -686,7 +969,7 @@ RCT_REMAP_METHOD(syncAlarms,
 
 - (void)sessionInterruptionEnded:(__unused NSNotification *)note
 {
-  [self emitStatus:@"running" message:@""];
+  [self emitRunningIfPreviewing];
 }
 
 - (void)emitStatus:(NSString *)status message:(NSString *)message
@@ -710,6 +993,7 @@ RCT_REMAP_METHOD(syncAlarms,
   @try {
     if (_session) {
       AVCaptureSession *session = _session;
+      _stoppedByUs = NO;
       dispatch_async(_sessionQueue, ^{
         if (!session.isRunning) {
           [session startRunning];
@@ -759,53 +1043,66 @@ RCT_REMAP_METHOD(syncAlarms,
   }
 }
 
+// Main thread: create the session and hand it to the layer (UIKit's), then
+// configure and start it on the session queue, the way AVCam does. Nothing
+// here says `running`; the layer does when it paints.
 - (void)configureAndRun
 {
   @try {
     AVCaptureDevicePosition wanted =
         [self.position isEqualToString:@"back"] ? AVCaptureDevicePositionBack
                                                 : AVCaptureDevicePositionFront;
-    AVCaptureDevice *device =
-        [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
-                                           mediaType:AVMediaTypeVideo
-                                            position:wanted];
-    if (!device) {
-      device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
-    }
-    NSError *error = nil;
-    AVCaptureDeviceInput *input =
-        device ? [AVCaptureDeviceInput deviceInputWithDevice:device error:&error] : nil;
     AVCaptureSession *session = [AVCaptureSession new];
     // Never let the capture session reconfigure the voice loop's audio session.
     session.automaticallyConfiguresApplicationAudioSession = NO;
-    if (!input || ![session canAddInput:input]) {
-      [self emitStatus:@"unavailable" message:@"No camera on this device."];
-      return;
-    }
-    [session beginConfiguration];
-    if ([session canSetSessionPreset:AVCaptureSessionPreset640x480]) {
-      session.sessionPreset = AVCaptureSessionPreset640x480;
-    }
-    [session addInput:input];
-    [session commitConfiguration];
-
-    AVCaptureVideoPreviewLayer *layer =
-        [AVCaptureVideoPreviewLayer layerWithSession:session];
-    layer.videoGravity = AVLayerVideoGravityResizeAspectFill;
-    layer.frame = self.bounds;
-    if (layer.connection.isVideoOrientationSupported) {
-      layer.connection.videoOrientation = AVCaptureVideoOrientationPortrait;
-    }
-    [self.layer addSublayer:layer];
-    _previewLayer = layer;
     _session = session;
+    _stoppedByUs = NO;
     [self observeSession:session];
-    // `running` is posted by the session itself once frames flow; a session
-    // that fails to start posts a runtime error instead of staying black.
+    self.previewLayer.session = session;
+
+    __weak PHCameraPreviewView *weakSelf = self;
     dispatch_async(_sessionQueue, ^{
+      AVCaptureDevice *device =
+          [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
+                                             mediaType:AVMediaTypeVideo
+                                              position:wanted];
+      if (!device) {
+        device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+      }
+      NSError *error = nil;
+      AVCaptureDeviceInput *input =
+          device ? [AVCaptureDeviceInput deviceInputWithDevice:device error:&error] : nil;
+      if (!input || ![session canAddInput:input]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          PHCameraPreviewView *strongSelf = weakSelf;
+          if (!strongSelf || strongSelf->_session != session) {
+            return;
+          }
+          strongSelf.previewLayer.session = nil;
+          strongSelf->_session = nil;
+          [strongSelf emitStatus:@"unavailable" message:@"No camera on this device."];
+        });
+        return;
+      }
+      [session beginConfiguration];
+      if ([session canSetSessionPreset:AVCaptureSessionPreset640x480]) {
+        session.sessionPreset = AVCaptureSessionPreset640x480;
+      }
+      [session addInput:input];
+      [session commitConfiguration];
+      dispatch_async(dispatch_get_main_queue(), ^{
+        PHCameraPreviewView *strongSelf = weakSelf;
+        if (!strongSelf || strongSelf->_session != session) {
+          return;
+        }
+        AVCaptureConnection *connection = strongSelf.previewLayer.connection;
+        if (connection.isVideoOrientationSupported) {
+          connection.videoOrientation = AVCaptureVideoOrientationPortrait;
+        }
+        [strongSelf emitStatus:@"authorized" message:@""];
+      });
       [session startRunning];
     });
-    [self emitStatus:@"authorized" message:@""];
   } @catch (__unused NSException *exception) {
     [self emitStatus:@"unavailable" message:@"The camera could not start."];
   }
@@ -817,6 +1114,7 @@ RCT_REMAP_METHOD(syncAlarms,
   if (!session) {
     return;
   }
+  _stoppedByUs = YES;
   dispatch_async(_sessionQueue, ^{
     if (session.isRunning) {
       [session stopRunning];
@@ -827,6 +1125,12 @@ RCT_REMAP_METHOD(syncAlarms,
 - (void)dealloc
 {
   [[NSNotificationCenter defaultCenter] removeObserver:self];
+  @try {
+    [self.previewLayer removeObserver:self
+                           forKeyPath:@"previewing"
+                              context:PHPreviewingContext];
+  } @catch (__unused NSException *exception) {
+  }
   [self stopPreview];
 }
 

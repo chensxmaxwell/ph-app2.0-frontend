@@ -1,5 +1,7 @@
 import {
+  NativeListenOptions,
   NativeSpeakOptions,
+  nativeListenForUtterance,
   nativePlayAudio,
   nativeSpeak,
   nativeStartVoiceInput,
@@ -10,6 +12,15 @@ import {
 export type VoiceInputResult =
   | { ok: true; text: string }
   | { ok: false; reason: string; message: string; text?: string };
+
+export type UtteranceEnd = "utterance" | "idle" | "stopped";
+
+// One hands-free turn of the call: what was heard and why the listen ended.
+export type UtteranceResult =
+  | { ok: true; text: string; end: UtteranceEnd }
+  | { ok: false; reason: string; message: string };
+
+export type UtteranceOptions = NativeListenOptions;
 
 const fallbackDenied: VoiceInputResult = {
   ok: false,
@@ -53,6 +64,33 @@ export const stopVoiceInput = async (): Promise<VoiceInputResult> => {
   } catch {
     return fallbackDenied;
   }
+};
+
+const isUtteranceEnd = (value: unknown): value is UtteranceEnd =>
+  value === "utterance" || value === "idle" || value === "stopped";
+
+// Opens the mic and resolves when the native side decides the user has
+// finished talking (or nothing was said in time, or someone stopped the mic).
+// Never throws: a build without the method reports `unavailable`.
+export const listenForUtterance = async (
+  options: UtteranceOptions = {}
+): Promise<UtteranceResult> => {
+  let raw: unknown;
+  try {
+    raw = await nativeListenForUtterance(options);
+  } catch {
+    return fallbackDenied;
+  }
+  const result = asResult(raw);
+  if (!result.ok) {
+    return { ok: false, reason: result.reason, message: result.message };
+  }
+  const end = (raw as { end?: unknown } | null)?.end;
+  return {
+    ok: true,
+    text: result.text,
+    end: isUtteranceEnd(end) ? end : "utterance",
+  };
 };
 
 export const speakWithNativeTts = async (

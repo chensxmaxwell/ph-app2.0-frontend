@@ -9,7 +9,7 @@ import React, {
   useState,
 } from "react";
 import { ttsSpeak, ttsStop } from "../../services/tts";
-import { voiceForPerson } from "../../services/voices";
+import { refreshedSeedVoiceId, voiceForPerson } from "../../services/voices";
 import {
   companionChatErrorMessage,
   completeCompanionChat,
@@ -43,9 +43,6 @@ type ChatContextValue = {
   deleteThread: (threadId: string) => void;
   sendText: (threadId: string, text: string) => void;
   sendVoice: (threadId: string) => void;
-  // One spoken turn on a voice/video call: what the user said and what the
-  // companion answered, already spoken by the call, written as transcript.
-  recordCallExchange: (threadId: string, userText: string, reply: string) => void;
   editLastMine: (threadId: string, text: string) => void;
   regenerate: (threadId: string) => void;
   speakMessage: (threadId: string, message: ChatBubble) => void;
@@ -180,9 +177,16 @@ const mergeSeedThreads = (
       }
       continue;
     }
+    let next = existing;
+    // A seeded person still on a retired default voice follows the current
+    // one; a voice drawn for a crafted Kevin stays.
+    const voiceId = refreshedSeedVoiceId(seed.id, existing.voiceId);
+    if (voiceId !== existing.voiceId) {
+      next = { ...next, voiceId };
+    }
     if (!existing.messages.length && seed.messages.length) {
-      byId.set(seed.id, {
-        ...existing,
+      next = {
+        ...next,
         preview: existing.preview || seed.preview,
         lastActivityAt: seed.lastActivityAt,
         messages: seed.messages,
@@ -191,7 +195,10 @@ const mergeSeedThreads = (
             ? seed.request
             : existing.request,
         kind: existing.kind === "human" && seed.kind === "bot" ? seed.kind : existing.kind,
-      });
+      };
+    }
+    if (next !== existing) {
+      byId.set(seed.id, next);
     }
   }
   return dedupeThreads(Array.from(byId.values()));
@@ -554,42 +561,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     [replyTo, requestBotReply, threads, updateThread]
   );
 
-  // The call already spoke the reply, so this never goes through replyTo
-  // (which would read it aloud again when Listen is on).
-  const recordCallExchange = useCallback(
-    (threadId: string, userText: string, reply: string) => {
-      const mine = userText.trim();
-      const theirs = reply.trim();
-      if (!mine || !theirs) {
-        return;
-      }
-      const sentAt = Date.now();
-      updateThread(threadId, (thread) => ({
-        ...thread,
-        preview: theirs,
-        lastActivityAt: sentAt,
-        messages: [
-          ...thread.messages,
-          {
-            id: nextId(),
-            from: "me",
-            text: mine,
-            sentAt,
-            synced: thread.synced || undefined,
-          },
-          {
-            id: nextId(),
-            from: "them",
-            text: theirs,
-            sentAt,
-            synced: thread.synced || undefined,
-          },
-        ],
-      }));
-    },
-    [updateThread]
-  );
-
   const editLastMine = useCallback(
     (threadId: string, text: string) => {
       const trimmed = text.trim();
@@ -867,7 +838,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       deleteThread,
       sendText,
       sendVoice,
-      recordCallExchange,
       editLastMine,
       regenerate,
       speakMessage,
@@ -894,7 +864,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       humanLimitReached,
       inCallThreadId,
       isPremium,
-      recordCallExchange,
       regenerate,
       sendFriendRequest,
       sendText,

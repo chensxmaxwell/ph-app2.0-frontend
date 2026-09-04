@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import {
   DOUBAO_TTS_URL,
+  EXPRESSIVE_TTS_MODEL,
   MAX_SYNTHESIS_CHARS,
   buildTtsRequest,
   parseTtsStream,
@@ -58,6 +59,42 @@ describe("Doubao TTS request", () => {
       format: "mp3",
       sample_rate: 24000,
     });
+  });
+
+  it("a call reply asks for the expressive 2.0 model through additions; Listen and everything else send no additions", () => {
+    // Maxwell: the most natural delivery 火山 has. `seed-tts-2.0-expressive`
+    // is what the community measured as the more expressive rendering of
+    // the same 2.0 speakers, passed as `model` inside `additions`; the
+    // resource stays seed-tts-2.0. Off by default so the request shape #34
+    // shipped is unchanged unless a caller asks.
+    const plain = buildTtsRequest({
+      text: "你好",
+      voiceId: female,
+      credentials: { kind: "api-key", apiKey: "speech-key", source: "tts" },
+      requestId: "req-3",
+    });
+    expect(
+      (JSON.parse(plain.body) as { req_params: Record<string, unknown> })
+        .req_params.additions
+    ).toBeUndefined();
+
+    const expressive = buildTtsRequest({
+      text: "你好",
+      voiceId: female,
+      credentials: { kind: "api-key", apiKey: "speech-key", source: "tts" },
+      requestId: "req-4",
+      expressive: true,
+    });
+    expect(expressive.headers["X-Api-Resource-Id"]).toBe("seed-tts-2.0");
+    const body = JSON.parse(expressive.body) as {
+      req_params: { speaker: string; additions?: string };
+    };
+    expect(body.req_params.speaker).toBe(female);
+    expect(typeof body.req_params.additions).toBe("string");
+    expect(JSON.parse(body.req_params.additions as string)).toEqual({
+      model: EXPRESSIVE_TTS_MODEL,
+    });
+    expect(EXPRESSIVE_TTS_MODEL).toBe("seed-tts-2.0-expressive");
   });
 
   it("uses the legacy app id + access token headers when that is what the account has", () => {
@@ -284,6 +321,90 @@ describe("speech engine", () => {
       "again",
       { gender: "male", language: "en-US" },
     ]);
+  });
+
+  it("an expressive reply asks the cloud for the expressive model; Listen does not", async () => {
+    const d = deps();
+    const engine = createSpeechEngine(d);
+    await engine.speak({
+      id: "1",
+      text: "我在呢。",
+      voiceId: SEED_VOICES.kevin,
+      expressive: true,
+    });
+    await engine.speak({
+      id: "2",
+      text: "我在呢。",
+      voiceId: SEED_VOICES.kevin,
+    });
+    const calls = (d.synthesize as jest.Mock).mock.calls as [
+      { expressive?: boolean }
+    ][];
+    expect(calls).toHaveLength(2);
+    expect(calls[0][0].expressive).toBe(true);
+    expect(calls[1][0].expressive ?? false).toBe(false);
+    expect(d.playAudio).toHaveBeenCalledTimes(2);
+    expect(d.speakOnDevice).not.toHaveBeenCalled();
+  });
+
+  it("when the API does not accept the expressive model the reply is retried plain, still in the cloud voice, and the session stops asking", async () => {
+    // "When the API accepts it": an expressive request that fails is not a
+    // reason to fall back to the phone's voice. Retry the same text without
+    // the model once; if that plays, remember for the session.
+    const synthesize = jest.fn(
+      async ({ expressive }: { expressive?: boolean }) =>
+        expressive
+          ? {
+              ok: false as const,
+              reason: "request_failed" as const,
+              message: "invalid params",
+            }
+          : { ok: true as const, chunks: ["CCCC"] }
+    );
+    const d = deps({ synthesize: synthesize as unknown as Deps["synthesize"] });
+    const engine = createSpeechEngine(d);
+    await engine.speak({
+      id: "1",
+      text: "hi",
+      voiceId: SEED_VOICES.kevin,
+      expressive: true,
+    });
+    expect(synthesize).toHaveBeenCalledTimes(2);
+    expect(synthesize.mock.calls[0][0]).toMatchObject({ expressive: true });
+    expect(synthesize.mock.calls[1][0].expressive ?? false).toBe(false);
+    expect(d.playAudio).toHaveBeenCalledWith(["CCCC"]);
+    expect(d.speakOnDevice).not.toHaveBeenCalled();
+
+    // The next expressive reply goes straight to the plain request.
+    await engine.speak({
+      id: "2",
+      text: "again",
+      voiceId: SEED_VOICES.kevin,
+      expressive: true,
+    });
+    expect(synthesize).toHaveBeenCalledTimes(3);
+    expect(synthesize.mock.calls[2][0].expressive ?? false).toBe(false);
+    expect(d.playAudio).toHaveBeenCalledTimes(2);
+    expect(d.speakOnDevice).not.toHaveBeenCalled();
+  });
+
+  it("an expressive request refused for the key or the speaker is not retried as plain", async () => {
+    const synthesize = jest.fn(async () => ({
+      ok: false as const,
+      reason: "auth" as const,
+      message: "refused",
+      status: 401,
+    }));
+    const d = deps({ synthesize });
+    const engine = createSpeechEngine(d);
+    await engine.speak({
+      id: "1",
+      text: "hi",
+      voiceId: SEED_VOICES.kevin,
+      expressive: true,
+    });
+    expect(synthesize).toHaveBeenCalledTimes(1);
+    expect(d.speakOnDevice).toHaveBeenCalledTimes(1);
   });
 
   it("a speaker the account has not enabled falls back for that voice only", async () => {

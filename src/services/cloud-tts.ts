@@ -23,6 +23,12 @@ export const resourceIdForVoice = (voiceId: string) =>
     ? "seed-tts-2.0"
     : "seed-tts-1.0";
 
+// The more expressive rendering of the same 2.0 speakers. The official doc
+// lists `model` for voice cloning; the community measured it on stock 2.0
+// speakers when passed as `model` inside `additions` (the engine retries a
+// reply without it if the API turns it down). The resource id is unchanged.
+export const EXPRESSIVE_TTS_MODEL = "seed-tts-2.0-expressive";
+
 export type TtsRequest = {
   url: string;
   headers: Record<string, string>;
@@ -34,11 +40,13 @@ export const buildTtsRequest = ({
   voiceId,
   credentials,
   requestId,
+  expressive = false,
 }: {
   text: string;
   voiceId: string;
   credentials: TtsCredentials;
   requestId: string;
+  expressive?: boolean;
 }): TtsRequest => {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -58,16 +66,21 @@ export const buildTtsRequest = ({
       return exhaustive;
     }
   }
+  const reqParams: Record<string, unknown> = {
+    text,
+    speaker: voiceId,
+    audio_params: { format: "mp3", sample_rate: 24000 },
+  };
+  if (expressive) {
+    // `additions` is a JSON string by contract.
+    reqParams.additions = JSON.stringify({ model: EXPRESSIVE_TTS_MODEL });
+  }
   return {
     url: DOUBAO_TTS_URL,
     headers,
     body: JSON.stringify({
       user: { uid: APP_UID },
-      req_params: {
-        text,
-        speaker: voiceId,
-        audio_params: { format: "mp3", sample_rate: 24000 },
-      },
+      req_params: reqParams,
     }),
   };
 };
@@ -216,12 +229,14 @@ export const synthesizeSpeech = async ({
   voiceId,
   credentials,
   signal,
+  expressive = false,
   fetchImpl = fetch,
 }: {
   text: string;
   voiceId: string;
   credentials: TtsCredentials;
   signal?: AbortSignal;
+  expressive?: boolean;
   fetchImpl?: typeof fetch;
 }): Promise<SynthesisResult> => {
   const request = buildTtsRequest({
@@ -229,6 +244,7 @@ export const synthesizeSpeech = async ({
     voiceId,
     credentials,
     requestId: requestId(),
+    expressive,
   });
   let response: Response;
   try {

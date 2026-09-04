@@ -208,6 +208,40 @@ describe("companion chat send path", () => {
     });
   });
 
+  it("an opener request ends with the stage direction as a system turn and carries no user turn", async () => {
+    // The call's greeting: the companion speaks first, so there is nothing
+    // the user said yet. The instruction rides as the last system message
+    // after the thread history, and the recent history still grounds it.
+    await saveLlmConfig({
+      apiKey: "ark-device-key",
+      baseUrl: ARK_BASE_URL,
+      model: ARK_MODEL,
+    });
+    const fetchMock = global.fetch as unknown as {
+      mockImplementation: (impl: () => Promise<unknown>) => void;
+      mock: { calls: [string, { body: string }][] };
+    };
+    fetchMock.mockImplementation(() =>
+      jsonResponse({ choices: [{ message: { content: "Hey you." } }] })
+    );
+
+    const reply = await completeCompanionChat({
+      ...kevinInput,
+      userText: "",
+      history: [{ from: "me", text: "Just got home." }],
+      instruction: "Greet them first.",
+    });
+    expect(reply).toBe("Hey you.");
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body) as {
+      messages: { role: string; content: string }[];
+    };
+    expect(body.messages.slice(-2)).toEqual([
+      { role: "user", content: "Just got home." },
+      { role: "system", content: "Greet them first." },
+    ]);
+    expect(body.messages.filter((m) => m.content === "")).toEqual([]);
+  });
+
   it("does not invent a canned Kevin reply when the key is refused", async () => {
     await saveLlmConfig({
       apiKey: "bad-key",
