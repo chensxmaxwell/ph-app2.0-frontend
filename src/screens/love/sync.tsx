@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import { BlurView } from "@react-native-community/blur";
@@ -16,15 +16,20 @@ import Xmark from "@images/icons/xmark.svg";
 import Speaker from "@images/speaker.svg";
 import MicroPhoneUnmute from "@images/microphone-unmute.svg";
 import MicroPhoneMute from "@images/microphone-mute.svg";
+import { voiceForPerson } from "../../services/voices";
 import { useCompanions } from "../../store/companions";
 import { useChat } from "../chat/store";
 import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
 import { usePersonFace } from "../avatar/use-person-face";
+import { CallCaptions } from "../call/captions";
+import { syncStatusLabel } from "../call/status";
+import { CALL_CONNECT_DELAY_MS, useVoiceCall } from "../call/use-voice-call";
 import { LovePill } from "./pill";
 import { dismissLoveOverlays } from "./overlay";
 import { resolveLovePerson } from "./partner";
 import { useLoveSession } from "./session";
+import type { LoveBubble } from "./types";
 import { usePatternPlayer } from "../../hooks/usePatternPlayer";
 import { wavePattern } from "../../store/patterns";
 
@@ -43,6 +48,14 @@ const formatElapsed = (seconds: number) => {
     .padStart(2, "0")}`;
 };
 
+// Sync inside a Love session: the companion talks while (one day) it drives
+// the toy over Bluetooth. There is no product yet, so the talk is what Sync
+// is: the same hands-free loop as a call — the companion greets, the mic
+// opens on its own, Ark answers as this person, the reply is spoken in their
+// voice, the mic opens again — beside the mock motor. Minimize keeps the
+// session (the pill restores this overlay already listening); the red X
+// ends the Sync layer. The Love chat grounds the replies; nothing said here
+// is written into it (landmine 26).
 export const LoveSyncScreen = () => {
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
   const insets = useSafeAreaInsets();
@@ -61,7 +74,14 @@ export const LoveSyncScreen = () => {
     ensureLayerTimer,
     clearLayerTimer,
   } = useLoveSession();
-  const { companionId: partnerId, name } = resolveLovePerson({
+  const {
+    companion,
+    thread,
+    companionId: partnerId,
+    name,
+    personality,
+    story,
+  } = resolveLovePerson({
     companionId: companionId ?? route.params?.companionId ?? chat?.companionId,
     name: route.params?.name,
     companions,
@@ -75,12 +95,31 @@ export const LoveSyncScreen = () => {
     "sync",
     true
   );
+  const chatMessages = chat?.messages;
+  const history = useMemo(
+    () =>
+      (chatMessages ?? [])
+        .filter((item): item is LoveBubble => item.kind === "bubble")
+        .map((item) => ({ from: item.from, text: item.text })),
+    [chatMessages]
+  );
+  // Restored from the pill (or entered while the Control Sync's clock was
+  // already running): Sync has been on, no ring and no second greeting.
+  const [connectDelayMs] = useState(() =>
+    syncStartedAt ? 0 : CALL_CONNECT_DELAY_MS
+  );
+  const call = useVoiceCall({
+    name,
+    personality,
+    story,
+    history,
+    voiceId: voiceForPerson({ id: partnerId, thread, companion }).id,
+    connectDelayMs,
+  });
   const [now, setNow] = useState(Date.now());
-  const [muted, setMuted] = useState(false);
   const elapsed = syncStartedAt
     ? Math.max(0, Math.floor((now - syncStartedAt) / 1000))
     : 0;
-  const [speakerOn, setSpeakerOn] = useState(true);
 
   useEffect(() => {
     start({
@@ -99,6 +138,7 @@ export const LoveSyncScreen = () => {
   }, []);
 
   const hangUp = () => {
+    call.hangUp();
     patchChat({ synced: false });
     if (partnerId) {
       setSynced(partnerId, false);
@@ -176,13 +216,21 @@ export const LoveSyncScreen = () => {
         <View style={styles.glow} />
         <LookFace look={face.look} size={s(100)} fallbackSource={face.source} />
         <Text style={styles.caption}>Syncing</Text>
+        <CallCaptions
+          name={name}
+          status={syncStatusLabel({ phase: call.phase, name })}
+          call={call}
+          centered
+        />
       </View>
       <View style={[styles.controls, { bottom: insets.bottom + s(26) }]}>
         <TouchableOpacity
-          style={[styles.round, muted ? styles.roundOn : styles.roundOff]}
-          onPress={() => setMuted((current) => !current)}
+          testID="love-sync-mic"
+          accessibilityLabel={call.muted ? "Unmute" : "Mute"}
+          style={[styles.round, call.muted ? styles.roundOn : styles.roundOff]}
+          onPress={() => call.setMuted(!call.muted)}
         >
-          {muted ? (
+          {call.muted ? (
             <MicroPhoneMute width={s(35)} height={s(35)} />
           ) : (
             <MicroPhoneUnmute width={s(35)} height={s(35)} />
@@ -196,8 +244,13 @@ export const LoveSyncScreen = () => {
           <Xmark width={s(20)} height={s(20)} />
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.round, speakerOn ? styles.roundOn : styles.roundOff]}
-          onPress={() => setSpeakerOn((current) => !current)}
+          testID="love-sync-speaker"
+          accessibilityLabel={call.speakerOn ? "Speaker off" : "Speaker on"}
+          style={[
+            styles.round,
+            call.speakerOn ? styles.roundOn : styles.roundOff,
+          ]}
+          onPress={() => call.setSpeakerOn(!call.speakerOn)}
         >
           <Speaker width={s(35)} height={s(35)} />
         </TouchableOpacity>
