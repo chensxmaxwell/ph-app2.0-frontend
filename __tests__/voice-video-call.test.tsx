@@ -1721,9 +1721,9 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
     // view detached and reattached) must not leave JS believing `running`.
     expect(camera).toContain("AVCaptureSessionDidStopRunningNotification");
     expect(camera).toContain('emitStatus:@"interrupted"');
-    // Session configuration and start/stop run on the session queue, never
-    // the main thread.
-    expect(camera).toContain("dispatch_async(_sessionQueue");
+    // Session configuration and start/stop run on the (one, shared) session
+    // queue, never the main thread.
+    expect(camera).toContain("dispatch_async(PHCameraSessionQueue()");
     // Coming back from Settings after granting access starts the preview
     // without a remount.
     expect(camera).toContain("UIApplicationDidBecomeActiveNotification");
