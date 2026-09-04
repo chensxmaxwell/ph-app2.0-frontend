@@ -1041,7 +1041,7 @@ describe("Message thread voice call", () => {
     ]);
     expect(imageUris(tree.root).filter(isKevinPhoto)).toEqual([]);
     expect(cameraHosts(tree.root)).toHaveLength(1);
-    expect(cameraHosts(tree.root)[0].props.position).toBe("front");
+    expect(cameraHosts(tree.root)[0].props.facing).toBe("front");
     // The loop did not restart or lose its captions.
     const copy = texts(tree.root);
     expect(copy).toContain("Amanda is speaking");

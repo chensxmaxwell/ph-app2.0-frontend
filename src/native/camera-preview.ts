@@ -31,8 +31,17 @@ export type CameraPreviewStatusEvent = {
   nativeEvent: { status: CameraPreviewStatus; message?: string };
 };
 
+// Which camera. Named `facing`, not `position`: RN flattens `style` and the
+// component's own props into one payload and the base view manager already
+// owns `position` as the Yoga layout prop (absolute / relative), so a camera
+// prop of that name overwrote the style's `absolute` with "front" and the
+// view was laid out 0×0 (TestFlight 1.2 (15)–(19); landmine 29). Never name a
+// native prop after a style attribute — `__tests__/camera-pip-layout.test.tsx`
+// fails on any collision.
+export type CameraFacing = "front" | "back";
+
 export type NativeCameraPreviewProps = ViewProps & {
-  position?: "front" | "back";
+  facing?: CameraFacing;
   onStatusChange?: (event: CameraPreviewStatusEvent) => void;
 };
 
