@@ -13,6 +13,9 @@ import { localOpener, OPENER_INSTRUCTION } from "./opener";
 import { CallPhase, micButtonEnabled, voiceKeyHint } from "./status";
 
 export const CALL_CONNECT_DELAY_MS = 1600;
+// The mic is inert while the companion's opener is on its way, so that wait
+// is bounded: past this, the canned line is spoken and the loop goes on.
+export const OPENER_TIMEOUT_MS = 6000;
 // End-pointing handed to the native recognizer: how long the user must be
 // quiet before what they said is sent, the longest single utterance, and how
 // long an empty listen runs before it is started again (iOS Speech caps one
@@ -20,15 +23,18 @@ export const CALL_CONNECT_DELAY_MS = 1600;
 export const LISTEN_SILENCE_MS = 1100;
 export const LISTEN_MAX_MS = 20000;
 export const LISTEN_IDLE_MS = 45000;
-// An empty listen that ends this soon after it opened did not run its idle
-// window: the recognizer gave up (iOS Speech with no network errors right
-// after it starts). Reopen after a pause, and stop after a few in a row
-// instead of tearing the audio engine down and up in a tight loop.
+// A listen that ends without having run — empty this soon after it opened
+// (iOS Speech with no network errors right after it starts), or refused for
+// a reason that passes — is a stall: reopen after a pause rather than tear
+// the audio engine down and up in a tight loop. After a few in a row the
+// call says so and keeps trying at a slower pace. It never stops to wait
+// for a tap (Maxwell, TestFlight 1.2 (18)).
 export const LISTEN_FAST_EMPTY_MS = 1000;
 export const LISTEN_RETRY_DELAY_MS = 1500;
-export const LISTEN_MAX_FAST_EMPTIES = 3;
+export const LISTEN_MAX_STALLS = 3;
+export const LISTEN_RECOVER_DELAY_MS = 5000;
 export const LISTEN_UNRESPONSIVE_COPY =
-  "Voice input isn't responding. Tap the mic to try again.";
+  "Voice input isn't responding. Trying again…";
 
 export type CallTurn = { from: "me" | "them"; text: string };
 
@@ -71,15 +77,37 @@ export type VoiceCall = {
 
 const swallow = () => undefined;
 
+// Settles like `promise`, or rejects once `ms` have passed without it.
+const within = <T>(promise: Promise<T>, ms: number): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Timed out after ${ms} ms`)),
+      ms
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+
 /**
  * The conversation behind a voice or video call, hands-free. The loop is
  * still strictly sequential — PHNative's iOS Speech recognizer owns
  * AVAudioSession while the mic is open and the synthesizer needs it back for
  * the reply — but the turns take themselves: the companion greets, the mic
  * opens, the native side reports when the user has finished, the reply is
- * spoken, the mic opens again. The mic is never open while the companion is
+ * spoken, the mic opens again. No tap is ever needed to talk: the mic is
+ * inert until the companion has greeted, and a recognizer that stalls is
+ * reopened by the loop itself. The mic is never open while the companion is
  * talking (it would hear itself), so barge-in is a tap: stop the voice, open
- * the mic.
+ * the mic. The only stops that wait for a tap are the ones only the user can
+ * clear: mute, the mic permission, a missing Ark key.
  *
  * Every user action bumps a turn token; an async step only applies its
  * result if the token it started with is still current, so a tap, mute or
@@ -95,8 +123,10 @@ export const useVoiceCall = ({
   voiceId,
   connectDelayMs = CALL_CONNECT_DELAY_MS,
 }: VoiceCallInput): VoiceCall => {
+  // A call already in progress is listening from its first frame; a tap is
+  // never what opens the mic.
   const [phase, setPhase] = useState<CallPhase>(
-    connectDelayMs > 0 ? "connecting" : "ready"
+    connectDelayMs > 0 ? "connecting" : "listening"
   );
   const [keyMissing, setKeyMissing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -116,8 +146,10 @@ export const useVoiceCall = ({
   // Bumped by every user action; an async step only applies its result when
   // the token it started with is still current.
   const turnRef = useRef(0);
-  // Empty listens that ended almost as soon as they opened, in a row.
-  const fastEmptiesRef = useRef(0);
+  // Listens that ended without running, in a row, and the notice they put
+  // up (taken down again once a listen runs).
+  const stallsRef = useRef(0);
+  const stallNoticeRef = useRef<string | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef({ name, personality, story, history, voiceId });
   inputRef.current = { name, personality, story, history, voiceId };
@@ -144,13 +176,43 @@ export const useVoiceCall = ({
     });
   }, []);
 
+  // The recognizer ran (it heard something, or listened for its whole
+  // window): forget the stalls and take down the notice they raised.
+  const recovered = useCallback(() => {
+    stallsRef.current = 0;
+    const stale = stallNoticeRef.current;
+    if (stale !== null) {
+      stallNoticeRef.current = null;
+      setNotice((now) => (now === stale ? null : now));
+    }
+  }, []);
+
   // Open the mic for one utterance, answer it, speak, and open the mic
-  // again — until the token changes or the recognizer reports a failure.
+  // again — until the token changes or the recognizer is refused for
+  // something only the user can fix.
   const listen = useCallback(
     (turn: number) => {
       if (!current(turn) || mutedRef.current) {
         return;
       }
+      // The listen ended without running: reopen after a pause, slower and
+      // with a notice once it keeps happening. The call stays `listening` —
+      // the mic is armed and the loop, not a tap, brings it back.
+      const stalled = (copy: string) => {
+        stallsRef.current += 1;
+        const unresponsive = stallsRef.current >= LISTEN_MAX_STALLS;
+        if (unresponsive) {
+          stallNoticeRef.current = copy;
+          setNotice(copy);
+        }
+        retryRef.current = setTimeout(
+          () => {
+            retryRef.current = null;
+            listen(turn);
+          },
+          unresponsive ? LISTEN_RECOVER_DELAY_MS : LISTEN_RETRY_DELAY_MS
+        );
+      };
       setPhase("listening");
       const openedAt = Date.now();
       listenForUtterance({
@@ -162,8 +224,14 @@ export const useVoiceCall = ({
           return;
         }
         if (!result.ok) {
-          setNotice(result.message);
-          setPhase("ready");
+          if (result.reason === "permission-denied") {
+            // Only Settings can change this; retrying would be refused at
+            // once every time. The loop stops and the mic offers Resume.
+            setNotice(result.message);
+            setPhase("ready");
+            return;
+          }
+          stalled(result.message);
           return;
         }
         if (result.end === "stopped") {
@@ -173,24 +241,14 @@ export const useVoiceCall = ({
         const userText = result.text.trim();
         if (!userText) {
           if (Date.now() - openedAt >= LISTEN_FAST_EMPTY_MS) {
-            fastEmptiesRef.current = 0;
+            recovered();
             listen(turn);
             return;
           }
-          fastEmptiesRef.current += 1;
-          if (fastEmptiesRef.current >= LISTEN_MAX_FAST_EMPTIES) {
-            fastEmptiesRef.current = 0;
-            setNotice(LISTEN_UNRESPONSIVE_COPY);
-            setPhase("ready");
-            return;
-          }
-          retryRef.current = setTimeout(() => {
-            retryRef.current = null;
-            listen(turn);
-          }, LISTEN_RETRY_DELAY_MS);
+          stalled(LISTEN_UNRESPONSIVE_COPY);
           return;
         }
-        fastEmptiesRef.current = 0;
+        recovered();
         setHeard(userText);
         setNotice(null);
         setPhase("thinking");
@@ -233,11 +291,12 @@ export const useVoiceCall = ({
         }
       });
     },
-    [current, record, speak]
+    [current, record, recovered, speak]
   );
 
   // The companion speaks first: Ark's opener in character when a key is
-  // saved, a canned line in their name otherwise. Then the mic opens.
+  // saved, a canned line in their name otherwise (or when Ark is slow — the
+  // mic is inert until this line is spoken). Then the mic opens.
   const greetThenListen = useCallback(
     async (turn: number) => {
       const input = inputRef.current;
@@ -253,14 +312,17 @@ export const useVoiceCall = ({
       }
       if (hasKey) {
         try {
-          opener = await completeCompanionChat({
-            name: input.name,
-            userText: "",
-            instruction: OPENER_INSTRUCTION,
-            history: input.history,
-            personality: input.personality,
-            story: input.story,
-          });
+          opener = await within(
+            completeCompanionChat({
+              name: input.name,
+              userText: "",
+              instruction: OPENER_INSTRUCTION,
+              history: input.history,
+              personality: input.personality,
+              story: input.story,
+            }),
+            OPENER_TIMEOUT_MS
+          );
         } catch {
           opener = localOpener(input.name);
         }
@@ -314,7 +376,7 @@ export const useVoiceCall = ({
       if (!current(turn) || phaseRef.current !== "connecting") {
         return;
       }
-      setPhase("ready");
+      setPhase("greeting");
       greetThenListen(turn).catch(swallow);
     }, connectDelayMs);
     return () => clearTimeout(timer);
@@ -345,7 +407,7 @@ export const useVoiceCall = ({
       clearTimeout(retryRef.current);
       retryRef.current = null;
     }
-    fastEmptiesRef.current = 0;
+    recovered();
     setNotice(null);
     if (mutedRef.current) {
       mutedRef.current = false;
@@ -377,7 +439,7 @@ export const useVoiceCall = ({
         return exhaustive;
       }
     }
-  }, [listen]);
+  }, [listen, recovered]);
 
   const hangUp = useCallback(() => {
     aliveRef.current = false;
