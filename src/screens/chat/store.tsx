@@ -28,12 +28,25 @@ import {
 
 export const FREE_HUMAN_MESSAGE_LIMIT = 1;
 
+type MessageCall = {
+  threadId: string;
+  startedAt: number | null;
+  minimized: boolean;
+};
+
 type ChatContextValue = {
   threads: ChatThread[];
   directory: DirectoryPerson[];
   isPremium: boolean;
   speakingId: string | null;
+  // The Message call in progress, if any. It outlives the call screen: the
+  // top-left minimize takes the screen down and leaves the call flagged here,
+  // with its clock, behind a floating face pill (Maxwell, 1.2 (18)).
   inCallThreadId: string | null;
+  // When the call connected; the clock on the call screen and on the pill.
+  inCallStartedAt: number | null;
+  // The call screen is down and the pill is up.
+  callMinimized: boolean;
   getThread: (id: string) => ChatThread | undefined;
   setListen: (threadId: string, listen: boolean) => void;
   setPinned: (threadId: string, pinned: boolean) => void;
@@ -51,7 +64,13 @@ type ChatContextValue = {
   sendFriendRequest: (person: DirectoryPerson) => string;
   cancelFriendRequest: (threadId: string) => void;
   setPremium: (value: boolean) => void;
+  // Flag a call on a thread (the call screen mounting — a restore keeps the
+  // clock), or end it with null. Idempotent for the same thread.
   setInCall: (threadId: string | null) => void;
+  // The call connected: start its clock unless it is already running.
+  startCallTimer: (threadId: string) => void;
+  // The call screen is going away with the call still on.
+  minimizeCall: () => void;
   updateBot: (
     threadId: string,
     input: {
@@ -210,7 +229,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
   const [directory] = useState<DirectoryPerson[]>(seedDirectory);
   const [isPremium, setIsPremium] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
-  const [inCallThreadId, setInCallThreadId] = useState<string | null>(null);
+  const [call, setCall] = useState<MessageCall | null>(null);
+  const inCallThreadId = call?.threadId ?? null;
   const [hydrated, setHydrated] = useState(false);
   const [chatNotices, setChatNotices] = useState<Record<string, string>>({});
 
@@ -409,7 +429,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         stopSpeaking();
       }
       if (inCallThreadId === threadId) {
-        setInCallThreadId(null);
+        setCall(null);
       }
       setThreads((current) => current.filter((item) => item.id !== threadId));
       setDeletedThreadIds((current) =>
@@ -444,6 +464,32 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     },
     [inCallThreadId, speakMessage, updateThread]
   );
+
+  const setInCall = useCallback((threadId: string | null) => {
+    setCall((current) => {
+      if (threadId === null) {
+        return null;
+      }
+      if (current?.threadId === threadId) {
+        return current.minimized ? { ...current, minimized: false } : current;
+      }
+      return { threadId, startedAt: null, minimized: false };
+    });
+  }, []);
+
+  const startCallTimer = useCallback((threadId: string) => {
+    setCall((current) =>
+      current?.threadId === threadId && current.startedAt === null
+        ? { ...current, startedAt: Date.now() }
+        : current
+    );
+  }, []);
+
+  const minimizeCall = useCallback(() => {
+    setCall((current) =>
+      current && !current.minimized ? { ...current, minimized: true } : current
+    );
+  }, []);
 
   const clearChatNotice = useCallback((threadId: string) => {
     setChatNotices((current) => {
@@ -829,6 +875,8 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       isPremium,
       speakingId,
       inCallThreadId,
+      inCallStartedAt: call?.startedAt ?? null,
+      callMinimized: call?.minimized ?? false,
       getThread,
       setListen,
       setPinned,
@@ -846,13 +894,16 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       sendFriendRequest,
       cancelFriendRequest,
       setPremium: setIsPremium,
-      setInCall: setInCallThreadId,
+      setInCall,
+      startCallTimer,
+      minimizeCall,
       updateBot,
       upsertCompanionThread,
       humanLimitReached,
       chatNotice,
     }),
     [
+      call,
       cancelFriendRequest,
       chatNotice,
       deleteThread,
@@ -864,11 +915,13 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       humanLimitReached,
       inCallThreadId,
       isPremium,
+      minimizeCall,
       regenerate,
       sendFriendRequest,
       sendText,
       sendVoice,
       setAvatar,
+      setInCall,
       setListen,
       setPinned,
       setRequest,
@@ -876,6 +929,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       setUnread,
       speakMessage,
       speakingId,
+      startCallTimer,
       stopSpeaking,
       threads,
     ]

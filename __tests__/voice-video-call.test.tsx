@@ -14,7 +14,7 @@ import {
   it,
   jest,
 } from "@jest/globals";
-import { readFileSync } from "fs";
+import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SCREENS } from "../src/common/constant";
@@ -46,6 +46,7 @@ import {
 } from "../src/screens/love/session";
 import { clearLoveSessionBoot } from "../src/screens/love/session-persist";
 import { ChatCallScreen } from "../src/screens/chat/call";
+import { GlobalMessageCallPill } from "../src/screens/chat/call-pill";
 import { LoveCallScreen } from "../src/screens/love/call";
 import { LoveChatScreen } from "../src/screens/love/chat";
 import { AvatarPreview } from "../src/screens/avatar/engine/AvatarPreview";
@@ -55,17 +56,22 @@ import { DEFAULT_DRAFT } from "../src/screens/avatar/context";
 import {
   CALL_CONNECT_DELAY_MS,
   LISTEN_IDLE_MS,
+  LISTEN_RECOVER_DELAY_MS,
   LISTEN_RETRY_DELAY_MS,
   LISTEN_SILENCE_MS,
   LISTEN_UNRESPONSIVE_COPY,
+  OPENER_TIMEOUT_MS,
+  useVoiceCall,
 } from "../src/screens/call/use-voice-call";
 import {
   CAMERA_START_TIMEOUT_MS,
   CAMERA_STARTING_COPY,
 } from "../src/screens/call/camera-preview";
-import { OPENER_INSTRUCTION } from "../src/screens/call/opener";
+import { localOpener, OPENER_INSTRUCTION } from "../src/screens/call/opener";
 import {
+  CALL_PHASES,
   callStatusLabel,
+  micButtonEnabled,
   micButtonLabel,
   modeToggle,
   voiceKeyHint,
@@ -499,7 +505,8 @@ describe("Message thread voice call", () => {
 
     await finishSpeech();
 
-    // Hands-free: the mic opens on its own once he has finished.
+    // Hands-free: the mic opens on its own once he has finished — no tap
+    // was simulated anywhere between the ring and this listen.
     expect(listenMock).toHaveBeenCalledTimes(1);
     expect(listenMock.mock.calls[0][0]).toMatchObject({
       silenceMs: LISTEN_SILENCE_MS,
@@ -509,9 +516,92 @@ describe("Message thread voice call", () => {
     expect(texts(tree.root)).toContain(
       micButtonLabel({ phase: "listening", muted: false })
     );
-    // No hold-to-talk control anywhere on the call.
+    // No hold-to-talk control anywhere on the call, and nothing ever asked
+    // for a tap to talk.
     expect(holdControls(tree.root)).toHaveLength(0);
-    expect(texts(tree.root).join("\n")).not.toMatch(/Hold to talk/);
+    expect(texts(tree.root).join("\n")).not.toMatch(
+      /Hold to talk|Tap to talk/i
+    );
+  });
+
+  it("while Kevin's opener is still on its way the call reads Connected with an inert mic that says Connecting… — never Tap to talk", async () => {
+    // Maxwell, TestFlight 1.2 (18), Chad call at 00:01: status Connected,
+    // mic label "Tap to talk". That is the window between the ring and the
+    // opener coming back from Ark; it must read as the mic connecting.
+    await saveArkKey();
+    let deliverOpener: ((value: unknown) => void) | null = null;
+    (global.fetch as jest.Mock).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          deliverOpener = resolve;
+        })
+    );
+    const tree = await mountMessageCall("kevin");
+    await connect();
+
+    // Connected, timer showing, nothing spoken or heard yet.
+    expect(texts(tree.root)).toContain("Connected");
+    expect(texts(tree.root)).toContain("00:00");
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).not.toHaveBeenCalled();
+    expect(texts(tree.root)).toContain(
+      micButtonLabel({ phase: "greeting", muted: false })
+    );
+    expect(texts(tree.root).join("\n")).not.toMatch(/Tap to talk/i);
+    expect(micButton(tree.root).props.disabled).toBe(true);
+    // A tap now must not skip the greeting or open the mic.
+    press(micButton(tree.root));
+    await settle();
+    expect(listenMock).not.toHaveBeenCalled();
+
+    act(() => {
+      deliverOpener?.(arkReply("Hey you."));
+    });
+    await settle();
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("Kevin is speaking");
+    expect(micButton(tree.root).props.disabled).toBe(false);
+    expect(texts(tree.root)).toContain(
+      micButtonLabel({ phase: "speaking", muted: false })
+    );
+
+    await finishSpeech();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("Listening…");
+  });
+
+  it("an opener Companion AI never delivers is replaced by the canned line after OPENER_TIMEOUT_MS, and the mic then opens on its own", async () => {
+    // The mic is inert while the opener is on its way, so that wait must be
+    // bounded: a stalled request cannot leave the call with no way to talk.
+    await saveArkKey();
+    (global.fetch as jest.Mock).mockImplementationOnce(
+      () => new Promise(() => undefined)
+    );
+    const tree = await mountMessageCall("kevin");
+    await connect();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(OPENER_TIMEOUT_MS).toBeGreaterThanOrEqual(3000);
+    expect(OPENER_TIMEOUT_MS).toBeLessThanOrEqual(10000);
+
+    act(() => {
+      jest.advanceTimersByTime(OPENER_TIMEOUT_MS - 10);
+    });
+    await settle();
+    expect(speakMock).not.toHaveBeenCalled();
+    act(() => {
+      jest.advanceTimersByTime(20);
+    });
+    await settle();
+
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(speakMock.mock.calls[0][0]).toMatchObject({
+      text: localOpener("Kevin"),
+      voiceId: SEED_VOICES.kevin,
+    });
+    expect(texts(tree.root)).toContain("Kevin is speaking");
+    await finishSpeech();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("Listening…");
   });
 
   it("a spoken turn: recognized speech goes to Ark as Kevin, the reply is spoken while the face shows speaking, then the call listens again", async () => {
@@ -629,11 +719,12 @@ describe("Message thread voice call", () => {
     expect(texts(tree.root).join("\n")).not.toMatch(/Didn't catch that/);
   });
 
-  it("a recognizer that gives up at once is retried with a pause, then the loop stops with a notice instead of hammering the mic", async () => {
+  it("a recognizer that gives up at once is retried with a pause; after three in a row the call says so and keeps trying on its own, slower — no tap needed", async () => {
     // iOS Speech without a network errors out right after it starts; the
     // native side hands that back as an empty listen. Reopening the mic in
     // a tight loop would tear the audio engine down and up dozens of times
-    // a second.
+    // a second — but stopping and asking for a tap (1.2 (16)) made the call
+    // push-to-talk again the moment the recognizer hiccupped.
     await saveArkKey();
     const tree = await mountMessageCall("kevin");
     await connectAndGreet();
@@ -657,18 +748,118 @@ describe("Message thread voice call", () => {
     expect(listenMock).toHaveBeenCalledTimes(3);
 
     await say("", "idle");
+    // Three instant give-ups in a row: say so, and stay the call's job.
+    expect(texts(tree.root)).toContain(LISTEN_UNRESPONSIVE_COPY);
+    expect(LISTEN_UNRESPONSIVE_COPY).not.toMatch(/tap/i);
+    expect(texts(tree.root)).toContain("Listening…");
+    expect(texts(tree.root).join("\n")).not.toMatch(
+      /Tap to talk|Tap to resume/i
+    );
     act(() => {
       jest.advanceTimersByTime(LISTEN_RETRY_DELAY_MS + 10);
     });
     await settle();
-    // Three instant give-ups in a row: stop and say so.
+    // Not at the quick pace any more…
+    expect(listenMock).toHaveBeenCalledTimes(3);
+    act(() => {
+      jest.advanceTimersByTime(LISTEN_RECOVER_DELAY_MS - LISTEN_RETRY_DELAY_MS);
+    });
+    await settle();
+    // …but it does try again, with no tap.
+    expect(LISTEN_RECOVER_DELAY_MS).toBeGreaterThan(LISTEN_RETRY_DELAY_MS);
+    expect(listenMock).toHaveBeenCalledTimes(4);
+
+    // A listen that runs its whole window means the recognizer is back: the
+    // notice goes away on its own.
+    act(() => {
+      jest.advanceTimersByTime(LISTEN_IDLE_MS);
+    });
+    await say("", "idle");
+    expect(listenMock).toHaveBeenCalledTimes(5);
+    expect(texts(tree.root)).not.toContain(LISTEN_UNRESPONSIVE_COPY);
+    expect(texts(tree.root)).toContain("Listening…");
+  });
+
+  it("a tap while the call is nursing an unresponsive recognizer mutes it and the retries stop; the next tap listens at once", async () => {
+    await saveArkKey();
+    const tree = await mountMessageCall("kevin");
+    await connectAndGreet();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await say("", "idle");
+      if (attempt < 2) {
+        act(() => {
+          jest.advanceTimersByTime(LISTEN_RETRY_DELAY_MS + 10);
+        });
+        await settle();
+      }
+    }
     expect(listenMock).toHaveBeenCalledTimes(3);
     expect(texts(tree.root)).toContain(LISTEN_UNRESPONSIVE_COPY);
-    expect(texts(tree.root)).toContain("Connected");
-    // A tap tries again.
+
+    press(micButton(tree.root));
+    await settle();
+    expect(texts(tree.root)).toContain(
+      micButtonLabel({ phase: "ready", muted: true })
+    );
+    expect(texts(tree.root)).not.toContain(LISTEN_UNRESPONSIVE_COPY);
+    act(() => {
+      jest.advanceTimersByTime(LISTEN_RECOVER_DELAY_MS * 3);
+    });
+    await settle();
+    expect(listenMock).toHaveBeenCalledTimes(3);
+
     press(micButton(tree.root));
     await settle();
     expect(listenMock).toHaveBeenCalledTimes(4);
+    expect(texts(tree.root)).toContain("Listening…");
+  });
+
+  it("a recognizer that fails for a reason that can pass is reopened on its own after a pause; the failure is only shown once it keeps failing", async () => {
+    // `unavailable` (no network for iOS Speech, no input format) and
+    // `start-failed` (the audio session was busy) clear up on their own;
+    // only the permission needs the user.
+    await saveArkKey();
+    const tree = await mountMessageCall("kevin");
+    await connectAndGreet();
+    const unavailable = "Voice input is not available on this build.";
+
+    await failListen(unavailable, "unavailable");
+    expect(texts(tree.root)).toContain("Listening…");
+    expect(texts(tree.root)).not.toContain(unavailable);
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    act(() => {
+      jest.advanceTimersByTime(LISTEN_RETRY_DELAY_MS + 10);
+    });
+    await settle();
+    expect(listenMock).toHaveBeenCalledTimes(2);
+
+    await failListen(
+      "Could not start the microphone. Try again.",
+      "start-failed"
+    );
+    act(() => {
+      jest.advanceTimersByTime(LISTEN_RETRY_DELAY_MS + 10);
+    });
+    await settle();
+    expect(listenMock).toHaveBeenCalledTimes(3);
+
+    await failListen(unavailable, "unavailable");
+    // Three in a row: the call shows the failure and keeps trying, slower.
+    expect(texts(tree.root)).toContain(unavailable);
+    expect(texts(tree.root).join("\n")).not.toMatch(
+      /Tap to talk|Tap to resume/i
+    );
+    act(() => {
+      jest.advanceTimersByTime(LISTEN_RECOVER_DELAY_MS + 10);
+    });
+    await settle();
+    expect(listenMock).toHaveBeenCalledTimes(4);
+
+    // The recognizer is back and hears something: the notice goes and the
+    // turn is answered as usual.
+    await say("你好 Kevin");
+    expect(texts(tree.root)).not.toContain(unavailable);
+    expect(texts(tree.root)).toContain("Kevin is speaking");
   });
 
   it("tapping the mic while Kevin speaks interrupts him and listens right away", async () => {
@@ -730,10 +921,44 @@ describe("Message thread voice call", () => {
     expect(texts(tree.root)).toContain("Connected");
     expect(listenMock).toHaveBeenCalledTimes(1);
     expect(chat!.inCallThreadId).toBe("kevin");
-    // A tap on the mic tries again.
+    // Only Settings can fix this, so retrying on a timer would fail at once
+    // every time: the loop stays stopped…
+    act(() => {
+      jest.advanceTimersByTime(LISTEN_RECOVER_DELAY_MS * 3);
+    });
+    await settle();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    // …and the last-resort tap reads as resuming, never as tapping to talk.
+    expect(texts(tree.root)).toContain(
+      micButtonLabel({ phase: "ready", muted: false })
+    );
+    expect(texts(tree.root)).toContain("Tap to resume");
+    expect(texts(tree.root).join("\n")).not.toMatch(/Tap to talk/i);
     press(micButton(tree.root));
     await settle();
     expect(listenMock).toHaveBeenCalledTimes(2);
+    expect(texts(tree.root)).toContain("Listening…");
+  });
+
+  it("a call that is already running is listening from its very first frame — no resume label ever flashes", async () => {
+    const phases: string[] = [];
+    const PhaseProbe = () => {
+      const call = useVoiceCall({
+        name: "Chad",
+        history: [],
+        connectDelayMs: 0,
+      });
+      phases.push(call.phase);
+      return null;
+    };
+    act(() => {
+      trees.push(renderer.create(<PhaseProbe />));
+    });
+    await settle();
+
+    expect(phases[0]).toBe("listening");
+    expect(new Set(phases)).toEqual(new Set(["listening"]));
+    expect(listenMock).toHaveBeenCalledTimes(1);
   });
 
   it("re-entering a Message call that is already in progress neither rings nor greets again", async () => {
@@ -1124,6 +1349,122 @@ describe("Message thread voice call", () => {
     expect(mockNavigation.goBack).toHaveBeenCalledTimes(1);
     expect(chat!.inCallThreadId).toBe("kevin");
   });
+
+  it("minimize leaves a floating face pill over the thread that keeps the call's clock; tapping it restores the call with no ring and no second greeting; hang-up clears it", async () => {
+    // Maxwell, TestFlight 1.2 (18): top-left minimize on the Chad call
+    // landed on the plain Chad thread — no 头像小窗, nothing to say a call
+    // was on, no way back but the drawer. Love has its pill; Message gets
+    // one of its own, global like Love's, wearing this person's face and the
+    // running call time.
+    await saveArkKey();
+    const tree = await mountMessageCall("kevin");
+    await connectAndGreet();
+    await say("你好 Kevin");
+    await finishSpeech();
+    expect(speakMock).toHaveBeenCalledTimes(2);
+    const before = chat!.getThread("kevin")!;
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+    await settle();
+    const clock = (root: ReactTestInstance) =>
+      texts(root).find((copy) => /^\d\d:\d\d$/.test(copy));
+    const onCall = clock(tree.root);
+    expect(onCall).toBe("00:05");
+    // No pill while the call screen itself is up.
+    const pill = () =>
+      tree.root.findAll(
+        (node) => node.props?.testID === "message-call-pill"
+      )[0];
+    act(() => {
+      tree.update(
+        <Providers>
+          <ChatCallScreen />
+          <GlobalMessageCallPill />
+        </Providers>
+      );
+    });
+    await settle();
+    expect(pill()).toBeUndefined();
+
+    press(touchable(tree.root, "call-minimize"));
+    expect(mockNavigation.goBack).toHaveBeenCalledTimes(1);
+    expect(chat!.inCallThreadId).toBe("kevin");
+    // goBack took the call screen down; the thread is what is left, and the
+    // pill floats over it.
+    stopVoice.mockClear();
+    act(() => {
+      tree.update(
+        <Providers>
+          <GlobalMessageCallPill />
+        </Providers>
+      );
+    });
+    await settle();
+    // The screen going away closes the mic (the thread has its own).
+    expect(stopVoice).toHaveBeenCalledTimes(1);
+    expect(pill()).toBeTruthy();
+    expect(imageUris(pill()).some(isKevinPhoto)).toBe(true);
+    expect(clock(pill())).toBe("00:05");
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+    await settle();
+    expect(clock(pill())).toBe("00:08");
+
+    // Back to the call through the pill: no ring, no opener, listening at
+    // once, the clock where it was, the pill gone.
+    speakMock.mockClear();
+    listenMock.mockClear();
+    (global.fetch as jest.Mock).mockClear();
+    press(pill());
+    expect(mockNavigation.navigate).toHaveBeenCalledWith(SCREENS.CHAT_CALL, {
+      threadId: "kevin",
+    });
+    act(() => {
+      tree.update(
+        <Providers>
+          <ChatCallScreen />
+          <GlobalMessageCallPill />
+        </Providers>
+      );
+    });
+    await settle();
+    expect(texts(tree.root)).not.toContain("Calling Kevin");
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("Listening…");
+    expect(texts(tree.root).join("\n")).not.toMatch(/Tap to talk/i);
+    expect(clock(tree.root)).toBe("00:08");
+    expect(pill()).toBeUndefined();
+
+    press(touchable(tree.root, "call-hangup"));
+    await settle();
+    expect(chat!.inCallThreadId).toBeNull();
+    act(() => {
+      tree.update(
+        <Providers>
+          <GlobalMessageCallPill />
+        </Providers>
+      );
+    });
+    await settle();
+    expect(pill()).toBeUndefined();
+    // Nothing from the call, before or after the minimize, is in the thread.
+    const after = chat!.getThread("kevin")!;
+    expect(after.messages).toEqual(before.messages);
+    expect(after.messages.map((m) => m.text)).not.toContain("你好 Kevin");
+  });
+
+  it("the Message call pill is mounted globally, beside Love's, so it shows on the thread and on every other screen", () => {
+    const source = readFileSync(
+      join(__dirname, "../navigations/home-stack.tsx"),
+      "utf8"
+    );
+    expect(source).toContain("<GlobalSessionLovePill />");
+    expect(source).toContain("<GlobalMessageCallPill />");
+  });
 });
 
 describe("Love voice call", () => {
@@ -1290,6 +1631,10 @@ describe("call status copy", () => {
     expect(callStatusLabel({ phase: "connecting", name: "Kevin" })).toBe(
       "Calling Kevin"
     );
+    // The companion's first line is on its way: connected, timer running.
+    expect(callStatusLabel({ phase: "greeting", name: "Kevin" })).toBe(
+      "Connected"
+    );
     expect(callStatusLabel({ phase: "ready", name: "Kevin" })).toBe("Connected");
     expect(callStatusLabel({ phase: "listening", name: "Kevin" })).toBe(
       "Listening…"
@@ -1307,8 +1652,12 @@ describe("call status copy", () => {
     expect(modeToggle(true)).toEqual({ target: "voice", label: "Voice" });
   });
 
-  it("labels the mic button by phase, never as hold-to-talk", () => {
+  it("labels the mic button by phase: the mic is connecting until the companion has greeted, then it listens on its own", () => {
     expect(micButtonLabel({ phase: "connecting", muted: false })).toBe(
+      "Connecting…"
+    );
+    // The opener is on its way (Ark): the mic will open by itself after it.
+    expect(micButtonLabel({ phase: "greeting", muted: false })).toBe(
       "Connecting…"
     );
     expect(micButtonLabel({ phase: "listening", muted: false })).toBe(
@@ -1320,11 +1669,45 @@ describe("call status copy", () => {
     expect(micButtonLabel({ phase: "speaking", muted: false })).toBe(
       "Tap to interrupt"
     );
+    // The loop stopped for something only the user can fix (mic permission,
+    // no Ark key): the last-resort tap resumes, it never "starts" talking.
     expect(micButtonLabel({ phase: "ready", muted: false })).toBe(
-      "Tap to talk"
+      "Tap to resume"
     );
     expect(micButtonLabel({ phase: "ready", muted: true })).toBe("Muted");
     expect(micButtonLabel({ phase: "speaking", muted: true })).toBe("Muted");
+  });
+
+  it("no phase, muted or not, ever reads Tap to talk or Hold to talk (Maxwell, TestFlight 1.2 (18): 「还是有tap to talk」)", () => {
+    expect(CALL_PHASES).toEqual(
+      expect.arrayContaining([
+        "connecting",
+        "greeting",
+        "listening",
+        "thinking",
+        "speaking",
+        "ready",
+      ])
+    );
+    CALL_PHASES.forEach((phase) => {
+      [false, true].forEach((muted) => {
+        expect(micButtonLabel({ phase, muted })).not.toMatch(
+          /tap to talk|hold to talk|to talk/i
+        );
+        expect(callStatusLabel({ phase, name: "Chad" })).not.toMatch(
+          /tap to talk|hold to talk|to talk/i
+        );
+      });
+    });
+  });
+
+  it("the mic control is inert while the call rings and while the opener is on its way, live from the first spoken word", () => {
+    expect(micButtonEnabled("connecting")).toBe(false);
+    expect(micButtonEnabled("greeting")).toBe(false);
+    expect(micButtonEnabled("speaking")).toBe(true);
+    expect(micButtonEnabled("listening")).toBe(true);
+    expect(micButtonEnabled("thinking")).toBe(true);
+    expect(micButtonEnabled("ready")).toBe(true);
   });
 
   it("names the Voice key the cloud voice needs", () => {
@@ -1365,6 +1748,22 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
     expect(source).not.toContain("onPressIn");
     expect(source).not.toContain("onPressOut");
     expect(source).toContain('testID="call-mic"');
+  });
+
+  it("no call source carries tap-to-talk or hold-to-talk copy, in any casing", () => {
+    // Maxwell, TestFlight 1.2 (18): 「还是有tap to talk」. The words must not
+    // come back through any file the call renders.
+    const callDir = join(__dirname, "../src/screens/call");
+    const files = [
+      ...readdirSync(callDir).map((file) => join(callDir, file)),
+      join(__dirname, "../src/screens/chat/call.tsx"),
+      join(__dirname, "../src/screens/love/call.tsx"),
+    ];
+    expect(files.length).toBeGreaterThan(5);
+    const offenders = files.filter((file) =>
+      /tap[ -]to[ -]talk|hold[ -]to[ -]talk/i.test(readFileSync(file, "utf8"))
+    );
+    expect(offenders).toEqual([]);
   });
 
   it("PHNative listens for one utterance at a time and decides natively when the user has finished", () => {
@@ -1439,9 +1838,9 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
     // view detached and reattached) must not leave JS believing `running`.
     expect(camera).toContain("AVCaptureSessionDidStopRunningNotification");
     expect(camera).toContain('emitStatus:@"interrupted"');
-    // Session configuration and start/stop run on the session queue, never
-    // the main thread.
-    expect(camera).toContain("dispatch_async(_sessionQueue");
+    // Session configuration and start/stop run on the (one, shared) session
+    // queue, never the main thread.
+    expect(camera).toContain("dispatch_async(PHCameraSessionQueue()");
     // Coming back from Settings after granting access starts the preview
     // without a remount.
     expect(camera).toContain("UIApplicationDidBecomeActiveNotification");

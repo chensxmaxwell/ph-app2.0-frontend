@@ -812,14 +812,23 @@ RCT_REMAP_METHOD(syncAlarms,
 // hand. TestFlight 1.2 (14) showed an empty dark PiP; 1.2 (15) showed a black
 // one with no copy — JS had been told `running` from
 // AVCaptureSessionDidStartRunning while nothing painted. The session running
-// is not the layer painting: `running` now comes from the layer's own
-// `previewing` flag, which is YES only while it renders frames.
+// is not the layer painting: `running` means the layer's own `previewing`
+// flag is YES, which it is only while it renders frames.
+//
+// 1.2 (18): Camera authorized in Settings and the PiP still never cleared its
+// copy. `previewing` had been trusted to key-value observing, and Apple
+// documents it as observable only through the connection's `enabled`; a
+// notification that never comes leaves `running` unsent over a preview that
+// is in fact painting. So `previewing` is polled on main after startRunning
+// (the KVO stays as a fast path), and a session that runs for
+// PHCameraFirstFrameTimeout without a frame reports which half failed, with
+// the layer's size, instead of leaving JS to time out on its own.
 //
 // Status events: `authorized` (permission granted, session configured),
 // `running` (frames are on screen — only this clears the PiP copy),
-// `interrupted` (the system paused the camera, or the session stopped behind
-// our back), `denied`, `unavailable` (no camera / runtime error, with the
-// reason).
+// `interrupted` (the system paused the camera, with the reason, or the
+// session stopped behind our back), `denied`, `unavailable` (no camera / the
+// session failed or never drew, with the reason).
 @interface PHCameraPreviewView : UIView
 @property (nonatomic, copy) NSString *position;
 @property (nonatomic, copy) RCTDirectEventBlock onStatusChange;
@@ -828,13 +837,62 @@ RCT_REMAP_METHOD(syncAlarms,
 
 static void *PHPreviewingContext = &PHPreviewingContext;
 
+// How long a running session gets to put its first frame on the layer, and
+// how often the layer is asked meanwhile. Once the stall has been reported
+// the layer is still watched — a first frame that is merely late clears the
+// copy — but less often.
+static const NSTimeInterval PHCameraFirstFrameTimeout = 4.0;
+static const NSTimeInterval PHCameraFramePollInterval = 0.2;
+static const NSTimeInterval PHCameraLateFramePollInterval = 1.0;
+
+// One serial queue for every preview view. A replacement view (Retry, video
+// toggled off and on, the call re-entered) configures and starts its session
+// only after the view it replaces has finished stopping: two sessions on the
+// same camera interrupt each other (VideoDeviceInUseByAnotherClient) and the
+// survivor is often black.
+static dispatch_queue_t PHCameraSessionQueue(void)
+{
+  static dispatch_queue_t queue;
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    queue = dispatch_queue_create("house.pleasure.camera-preview", DISPATCH_QUEUE_SERIAL);
+  });
+  return queue;
+}
+
+// The system's reason for pausing the camera, as copy the PiP can show.
+static NSString *PHCameraInterruptionCopy(NSNumber *reasonValue)
+{
+  if (![reasonValue isKindOfClass:[NSNumber class]]) {
+    return @"Camera paused by the system.";
+  }
+  switch ((AVCaptureSessionInterruptionReason)reasonValue.integerValue) {
+    case AVCaptureSessionInterruptionReasonVideoDeviceNotAvailableInBackground:
+      return @"Camera pauses while the app is in the background.";
+    case AVCaptureSessionInterruptionReasonAudioDeviceInUseByAnotherClient:
+      return @"Camera paused: the audio device is in use elsewhere.";
+    case AVCaptureSessionInterruptionReasonVideoDeviceInUseByAnotherClient:
+      return @"Camera is in use by another app or session.";
+    case AVCaptureSessionInterruptionReasonVideoDeviceNotAvailableWithMultipleForegroundApps:
+      return @"Camera needs the app full screen.";
+    case AVCaptureSessionInterruptionReasonVideoDeviceNotAvailableDueToSystemPressure:
+      return @"Camera paused: the system is under pressure.";
+    default:
+      return @"Camera paused by the system.";
+  }
+}
+
 @implementation PHCameraPreviewView {
   AVCaptureSession *_session;
-  dispatch_queue_t _sessionQueue;
   BOOL _requesting;
-  // Set around our own stopRunning so DidStopRunning is not reported as an
-  // interruption.
-  BOOL _stoppedByUs;
+  // YES from startPreview to stopPreview: this view wants frames. A session
+  // that stops while this is YES stopped behind our back. Main thread only.
+  BOOL _wantsRunning;
+  // Bumped by every start and stop; a frame poll from an earlier one is
+  // stale and does nothing.
+  NSUInteger _startGeneration;
+  // `running` goes out once per run of the session.
+  BOOL _reportedRunning;
 }
 
 + (Class)layerClass
@@ -853,11 +911,9 @@ static void *PHPreviewingContext = &PHPreviewingContext;
     self.backgroundColor = [UIColor blackColor];
     self.clipsToBounds = YES;
     _position = @"front";
-    _sessionQueue = dispatch_queue_create("house.pleasure.camera-preview",
-                                          DISPATCH_QUEUE_SERIAL);
     self.previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
-    // `previewing` flips to YES only when frames are being rendered; that,
-    // not the session starting, is what clears the PiP copy.
+    // Fast path only: if AVFoundation does post this, `running` goes out at
+    // once. The poll in expectFramesFrom: is what the PiP relies on.
     [self.previewLayer addObserver:self
                         forKeyPath:@"previewing"
                            options:NSKeyValueObservingOptionNew
@@ -882,6 +938,16 @@ static void *PHPreviewingContext = &PHPreviewingContext;
   }
 }
 
+// Belt and braces for didMoveToWindow: a view that is on screen with a size
+// and was never asked to start, starts now.
+- (void)layoutSubviews
+{
+  [super layoutSubviews];
+  if (self.window && !_wantsRunning && !CGRectIsEmpty(self.bounds)) {
+    [self startPreview];
+  }
+}
+
 - (void)applicationDidBecomeActive:(__unused NSNotification *)note
 {
   if (self.window) {
@@ -898,11 +964,86 @@ static void *PHPreviewingContext = &PHPreviewingContext;
     [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
     return;
   }
-  // Delivered on whatever thread AVFoundation changed it; emitStatus hops to
-  // main. Going dark is reported by the session notifications below.
+  // Delivered on whatever thread AVFoundation changed it. Going dark is
+  // reported by the session notifications below.
   if ([change[NSKeyValueChangeNewKey] boolValue]) {
-    [self emitStatus:@"running" message:@""];
+    [self reportRunning];
   }
+}
+
+// Report `running` once per run of the session. Main thread.
+- (void)reportRunning
+{
+  if (![NSThread isMainThread]) {
+    __weak PHCameraPreviewView *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [weakSelf reportRunning];
+    });
+    return;
+  }
+  if (_reportedRunning || !_wantsRunning) {
+    return;
+  }
+  _reportedRunning = YES;
+  [self emitStatus:@"running" message:@""];
+}
+
+// Main thread. After startRunning (and again when an interruption ends):
+// watch the layer for its first frame and report `running` when it comes.
+// If none comes in time, say which half failed; the poll goes on after that,
+// slower, so a frame that is merely late still clears the copy.
+- (void)expectFramesFrom:(AVCaptureSession *)session
+{
+  NSUInteger generation = ++_startGeneration;
+  [self pollFramesFrom:session
+            generation:generation
+              deadline:[NSDate dateWithTimeIntervalSinceNow:PHCameraFirstFrameTimeout]];
+}
+
+- (void)pollFramesFrom:(AVCaptureSession *)session
+            generation:(NSUInteger)generation
+              deadline:(NSDate *)deadline
+{
+  if (generation != _startGeneration || session != _session || !_wantsRunning) {
+    return;
+  }
+  if (self.previewLayer.isPreviewing) {
+    [self reportRunning];
+    return;
+  }
+  if (deadline && [deadline timeIntervalSinceNow] <= 0) {
+    [self reportNoFramesFrom:session];
+    deadline = nil;
+  }
+  NSTimeInterval interval = deadline ? PHCameraFramePollInterval : PHCameraLateFramePollInterval;
+  __weak PHCameraPreviewView *weakSelf = self;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(interval * NSEC_PER_SEC)),
+                 dispatch_get_main_queue(), ^{
+    [weakSelf pollFramesFrom:session generation:generation deadline:deadline];
+  });
+}
+
+// Main thread. The session had its chance and the layer never drew: tell JS
+// which half failed, with the numbers that decide it, so a screenshot of the
+// PiP is a diagnosis.
+- (void)reportNoFramesFrom:(AVCaptureSession *)session
+{
+  CGSize size = self.bounds.size;
+  AVCaptureConnection *connection = self.previewLayer.connection;
+  NSString *message;
+  if (!session.isRunning) {
+    message = @"Camera didn't start.";
+  } else if (size.width < 1 || size.height < 1) {
+    message = @"Camera is on but has no room to draw.";
+  } else if (!connection) {
+    message = @"Camera is on but not connected to the preview.";
+  } else if (!connection.isEnabled || !connection.isActive) {
+    message = @"Camera is on but the preview is switched off.";
+  } else {
+    message = [NSString stringWithFormat:@"Camera is on but not drawing (%.0f×%.0f).",
+                                         size.width, size.height];
+  }
+  [self emitStatus:@"unavailable" message:message];
 }
 
 - (void)observeSession:(AVCaptureSession *)session
@@ -930,46 +1071,101 @@ static void *PHPreviewingContext = &PHPreviewingContext;
                object:session];
 }
 
-// Belt and braces for the KVO above: if the layer was already previewing by
-// the time the session says it started, say so.
-- (void)emitRunningIfPreviewing
+// The session notifications arrive on AVFoundation's threads; the view's
+// state is main-thread only, so each hops there and checks the session is
+// still this view's before acting.
+- (void)sessionDidStartRunning:(NSNotification *)note
 {
+  AVCaptureSession *session = note.object;
+  __weak PHCameraPreviewView *weakSelf = self;
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (self.previewLayer.isPreviewing) {
-      [self emitStatus:@"running" message:@""];
+    PHCameraPreviewView *strongSelf = weakSelf;
+    if (strongSelf && session == strongSelf->_session) {
+      [strongSelf expectFramesFrom:session];
     }
   });
 }
 
-- (void)sessionDidStartRunning:(__unused NSNotification *)note
+- (void)sessionDidStopRunning:(NSNotification *)note
 {
-  [self emitRunningIfPreviewing];
-}
-
-- (void)sessionDidStopRunning:(__unused NSNotification *)note
-{
-  if (_stoppedByUs) {
-    return;
-  }
-  [self emitStatus:@"interrupted" message:@"Camera paused by the system."];
+  AVCaptureSession *session = note.object;
+  __weak PHCameraPreviewView *weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    PHCameraPreviewView *strongSelf = weakSelf;
+    if (!strongSelf || session != strongSelf->_session || !strongSelf->_wantsRunning) {
+      // Our own stop, or a session that is no longer this view's.
+      return;
+    }
+    strongSelf->_reportedRunning = NO;
+    // Not asked for. A reparent stops and restarts on the queue back to
+    // back: look again once the queue has drained before calling it a stop.
+    dispatch_async(PHCameraSessionQueue(), ^{
+      BOOL running = session.isRunning;
+      dispatch_async(dispatch_get_main_queue(), ^{
+        PHCameraPreviewView *again = weakSelf;
+        if (!again || running || session != again->_session || !again->_wantsRunning) {
+          return;
+        }
+        [again emitStatus:@"interrupted" message:@"Camera stopped."];
+      });
+    });
+  });
 }
 
 - (void)sessionRuntimeError:(NSNotification *)note
 {
+  AVCaptureSession *session = note.object;
   NSError *error = note.userInfo[AVCaptureSessionErrorKey];
-  NSString *reason = [error isKindOfClass:[NSError class]] ? error.localizedDescription : nil;
-  [self emitStatus:@"unavailable"
-           message:reason.length ? reason : @"The camera could not start."];
+  BOOL isError = [error isKindOfClass:[NSError class]];
+  NSString *reason = isError ? error.localizedDescription : nil;
+  BOOL servicesReset = isError && [error.domain isEqualToString:AVFoundationErrorDomain] &&
+                       error.code == AVErrorMediaServicesWereReset;
+  __weak PHCameraPreviewView *weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    PHCameraPreviewView *strongSelf = weakSelf;
+    if (!strongSelf || session != strongSelf->_session) {
+      return;
+    }
+    strongSelf->_reportedRunning = NO;
+    if (servicesReset && strongSelf->_wantsRunning) {
+      // Media services came back; start the session again (AVCam's shape).
+      dispatch_async(PHCameraSessionQueue(), ^{
+        if (!session.isRunning) {
+          [session startRunning];
+        }
+      });
+      return;
+    }
+    [strongSelf emitStatus:@"unavailable"
+                   message:reason.length ? reason : @"The camera could not start."];
+  });
 }
 
-- (void)sessionWasInterrupted:(__unused NSNotification *)note
+- (void)sessionWasInterrupted:(NSNotification *)note
 {
-  [self emitStatus:@"interrupted" message:@"Camera paused by the system."];
+  AVCaptureSession *session = note.object;
+  NSString *copy = PHCameraInterruptionCopy(note.userInfo[AVCaptureSessionInterruptionReasonKey]);
+  __weak PHCameraPreviewView *weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    PHCameraPreviewView *strongSelf = weakSelf;
+    if (!strongSelf || session != strongSelf->_session) {
+      return;
+    }
+    strongSelf->_reportedRunning = NO;
+    [strongSelf emitStatus:@"interrupted" message:copy];
+  });
 }
 
-- (void)sessionInterruptionEnded:(__unused NSNotification *)note
+- (void)sessionInterruptionEnded:(NSNotification *)note
 {
-  [self emitRunningIfPreviewing];
+  AVCaptureSession *session = note.object;
+  __weak PHCameraPreviewView *weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    PHCameraPreviewView *strongSelf = weakSelf;
+    if (strongSelf && session == strongSelf->_session) {
+      [strongSelf expectFramesFrom:session];
+    }
+  });
 }
 
 - (void)emitStatus:(NSString *)status message:(NSString *)message
@@ -991,13 +1187,20 @@ static void *PHPreviewingContext = &PHPreviewingContext;
 - (void)startPreview
 {
   @try {
+    _wantsRunning = YES;
     if (_session) {
       AVCaptureSession *session = _session;
-      _stoppedByUs = NO;
-      dispatch_async(_sessionQueue, ^{
+      __weak PHCameraPreviewView *weakSelf = self;
+      dispatch_async(PHCameraSessionQueue(), ^{
         if (!session.isRunning) {
           [session startRunning];
         }
+        dispatch_async(dispatch_get_main_queue(), ^{
+          PHCameraPreviewView *strongSelf = weakSelf;
+          if (strongSelf && session == strongSelf->_session) {
+            [strongSelf expectFramesFrom:session];
+          }
+        });
       });
       return;
     }
@@ -1044,8 +1247,8 @@ static void *PHPreviewingContext = &PHPreviewingContext;
 }
 
 // Main thread: create the session and hand it to the layer (UIKit's), then
-// configure and start it on the session queue, the way AVCam does. Nothing
-// here says `running`; the layer does when it paints.
+// configure and start it on the shared session queue, the way AVCam does.
+// Nothing here says `running`; the layer does when it paints (expectFrames).
 - (void)configureAndRun
 {
   @try {
@@ -1053,15 +1256,16 @@ static void *PHPreviewingContext = &PHPreviewingContext;
         [self.position isEqualToString:@"back"] ? AVCaptureDevicePositionBack
                                                 : AVCaptureDevicePositionFront;
     AVCaptureSession *session = [AVCaptureSession new];
-    // Never let the capture session reconfigure the voice loop's audio session.
+    // Never let the capture session reconfigure the voice loop's audio
+    // session (it has no audio input to configure it for anyway).
     session.automaticallyConfiguresApplicationAudioSession = NO;
     _session = session;
-    _stoppedByUs = NO;
+    _reportedRunning = NO;
     [self observeSession:session];
     self.previewLayer.session = session;
 
     __weak PHCameraPreviewView *weakSelf = self;
-    dispatch_async(_sessionQueue, ^{
+    dispatch_async(PHCameraSessionQueue(), ^{
       AVCaptureDevice *device =
           [AVCaptureDevice defaultDeviceWithDeviceType:AVCaptureDeviceTypeBuiltInWideAngleCamera
                                              mediaType:AVMediaTypeVideo
@@ -1102,6 +1306,12 @@ static void *PHPreviewingContext = &PHPreviewingContext;
         [strongSelf emitStatus:@"authorized" message:@""];
       });
       [session startRunning];
+      dispatch_async(dispatch_get_main_queue(), ^{
+        PHCameraPreviewView *strongSelf = weakSelf;
+        if (strongSelf && session == strongSelf->_session) {
+          [strongSelf expectFramesFrom:session];
+        }
+      });
     });
   } @catch (__unused NSException *exception) {
     [self emitStatus:@"unavailable" message:@"The camera could not start."];
@@ -1110,12 +1320,14 @@ static void *PHPreviewingContext = &PHPreviewingContext;
 
 - (void)stopPreview
 {
+  _wantsRunning = NO;
+  _reportedRunning = NO;
+  _startGeneration += 1;
   AVCaptureSession *session = _session;
   if (!session) {
     return;
   }
-  _stoppedByUs = YES;
-  dispatch_async(_sessionQueue, ^{
+  dispatch_async(PHCameraSessionQueue(), ^{
     if (session.isRunning) {
       [session stopRunning];
     }

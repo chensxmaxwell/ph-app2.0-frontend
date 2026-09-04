@@ -2,6 +2,7 @@ import React from "react";
 import { StyleSheet, View } from "react-native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { COMMON_HEADER_OPTIONS_CONFIG, SCREENS } from "../src/common/constant";
+import { GlobalMessageCallPill } from "../src/screens/chat/call-pill";
 import { GlobalSessionLovePill } from "../src/screens/love/pill";
 import { bindHomeStackNavigation } from "../src/screens/love/overlay";
 import { NavBar } from "@common/components/nav-bar/nav-bar";
@@ -113,6 +114,7 @@ export const HomeStack = () => (
     <Stack.Screen name={SCREENS.PREMIUM} component={PremiumScreen} />
     </Stack.Navigator>
     <GlobalSessionLovePill />
+    <GlobalMessageCallPill />
   </View>
 );
 

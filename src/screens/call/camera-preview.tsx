@@ -20,11 +20,17 @@ export const CAMERA_DENIED_COPY =
   "Camera access is needed for video. Allow it in Settings.";
 export const CAMERA_UNAVAILABLE_COPY =
   "Camera preview isn't available on this build.";
+// The native view never said a word: the session was not even configured.
 export const CAMERA_STALLED_COPY = "Camera didn't start.";
+// The session was configured and started, and no frame reached the layer:
+// a different failure, so it reads differently.
+export const CAMERA_NO_FRAMES_COPY = "Camera is on but not drawing.";
 export const CAMERA_INTERRUPTED_COPY = "Camera paused by the system.";
 const NO_CAMERA_COPY = "No camera on this device.";
 // How long the PiP waits for the native session to report `running` before
-// it stops pretending a black rectangle is a camera.
+// it stops pretending a black rectangle is a camera. The native view has its
+// own, shorter watch (PHCameraFirstFrameTimeout) that says which half failed;
+// this is the fallback for a view that never reported at all.
 export const CAMERA_START_TIMEOUT_MS = 6000;
 
 // `starting`: mounted, no word from the native view yet. `stalled`: neither
@@ -35,14 +41,32 @@ type CameraPreviewProps = {
   style?: StyleProp<ViewStyle>;
 };
 
+const Failure = ({ copy, onRetry }: { copy: string; onRetry: () => void }) => (
+  <>
+    <Text style={styles.copy}>{copy}</Text>
+    <TouchableOpacity
+      testID="call-camera-retry"
+      onPress={onRetry}
+      style={styles.button}
+      hitSlop={8}
+    >
+      <Text style={styles.buttonText}>Retry</Text>
+    </TouchableOpacity>
+  </>
+);
+
 // The user's front camera as a picture-in-picture. Video only: the native
 // view never adds an audio input, so the voice loop keeps AVAudioSession.
-// Every state but `running` carries copy — on TestFlight 1.2 (14) the PiP
-// was an empty dark box with nothing to say why.
+// Every state but `running` carries copy, and every failure carries Retry —
+// on TestFlight 1.2 (14) the PiP was an empty dark box with nothing to say
+// why, and on 1.2 (18) it failed with the camera authorized in Settings, so
+// the copy has to say which half failed. The native view's own words win.
 export const CameraPreview = ({ style }: CameraPreviewProps) => {
   const Native = useMemo(() => nativeCameraPreview(), []);
   const [status, setStatus] = useState<PipStatus>("starting");
   const [message, setMessage] = useState("");
+  // Whether the native view got as far as a configured session this attempt.
+  const [configured, setConfigured] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   const waiting = status === "starting" || status === "authorized";
@@ -66,6 +90,7 @@ export const CameraPreview = ({ style }: CameraPreviewProps) => {
 
   const retry = () => {
     setMessage("");
+    setConfigured(false);
     setStatus("starting");
     setAttempt((current) => current + 1);
   };
@@ -78,20 +103,15 @@ export const CameraPreview = ({ style }: CameraPreviewProps) => {
       case "authorized":
         return <Text style={styles.copy}>{CAMERA_STARTING_COPY}</Text>;
       case "interrupted":
-        return <Text style={styles.copy}>{CAMERA_INTERRUPTED_COPY}</Text>;
+        return (
+          <Failure copy={message || CAMERA_INTERRUPTED_COPY} onRetry={retry} />
+        );
       case "stalled":
         return (
-          <>
-            <Text style={styles.copy}>{CAMERA_STALLED_COPY}</Text>
-            <TouchableOpacity
-              testID="call-camera-retry"
-              onPress={retry}
-              style={styles.button}
-              hitSlop={8}
-            >
-              <Text style={styles.buttonText}>Retry</Text>
-            </TouchableOpacity>
-          </>
+          <Failure
+            copy={configured ? CAMERA_NO_FRAMES_COPY : CAMERA_STALLED_COPY}
+            onRetry={retry}
+          />
         );
       case "denied":
         return (
@@ -107,7 +127,7 @@ export const CameraPreview = ({ style }: CameraPreviewProps) => {
           </>
         );
       case "unavailable":
-        return <Text style={styles.copy}>{message || NO_CAMERA_COPY}</Text>;
+        return <Failure copy={message || NO_CAMERA_COPY} onRetry={retry} />;
       default: {
         const exhaustive: never = status;
         return exhaustive;
@@ -124,6 +144,9 @@ export const CameraPreview = ({ style }: CameraPreviewProps) => {
         position="front"
         onStatusChange={(event) => {
           const next = event.nativeEvent.status;
+          if (next === "authorized") {
+            setConfigured(true);
+          }
           setStatus((previous) =>
             // "Configured" arriving after frames already paint changes
             // nothing; only a real state change may cover a live preview.
