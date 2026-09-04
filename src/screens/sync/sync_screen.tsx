@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { View, Text, StyleSheet, Image, TouchableOpacity } from "react-native";
 import { ScreenWrapper } from "@common/components/screen-wrapper";
 import { colors } from "@common/styles/colors";
@@ -15,13 +15,25 @@ import Speaker from "@images/speaker.svg";
 import MicroPhone_unmute from "@images/microphone-unmute.svg";
 import MicroPhone_mute from "@images/microphone-mute.svg";
 import { usePatternPlayer } from "../../hooks/usePatternPlayer";
+import { voiceForPerson } from "../../services/voices";
+import { useCompanions } from "../../store/companions";
 import { wavePattern } from "../../store/patterns";
 import { LookFace } from "../avatar/look-face";
 import { usePersonFace } from "../avatar/use-person-face";
+import { CallCaptions } from "../call/captions";
+import { syncStatusLabel } from "../call/status";
+import { CALL_CONNECT_DELAY_MS, useVoiceCall } from "../call/use-voice-call";
+import { useChat } from "../chat/store";
+import { resolveLovePerson } from "../love/partner";
 import { useLoveSession } from "../love/session";
 
 const AVATAR_SIZE = 100;
 
+// The Control hub's Sync (Maxwell calls this tab "Playground"): the person
+// picked on the selection screen, the mock motor, and — since there is no
+// toy to drive yet — the same hands-free conversation as a call, grounded in
+// their Message thread and personality (nothing said here is written to it).
+// No Love session exists until minimize hands the Sync to the pill.
 const SyncScreen = () => {
   const navigation = useNavigation<NavigationProp<ParamListBase>>();
   const route = useRoute();
@@ -31,6 +43,34 @@ const SyncScreen = () => {
   const partnerName = params?.name?.trim() || "Kevin";
   const partnerId = params?.companionId?.trim() || `sync-${partnerName}`;
   const { face } = usePersonFace(partnerId);
+  const { companions, activeCompanion } = useCompanions();
+  const { threads } = useChat();
+  const { companion, thread, personality, story } = resolveLovePerson({
+    companionId: partnerId,
+    name: partnerName,
+    companions,
+    threads,
+    activeCompanion,
+  });
+  const threadMessages = thread?.messages;
+  const history = useMemo(
+    () =>
+      (threadMessages ?? []).map((item) => ({
+        from: item.from,
+        text: item.text,
+      })),
+    [threadMessages]
+  );
+  // Always a fresh start: the pill restores a minimized Sync as LoveSync,
+  // never here.
+  const call = useVoiceCall({
+    name: partnerName,
+    personality,
+    story,
+    history,
+    voiceId: voiceForPerson({ id: partnerId, thread, companion }).id,
+    connectDelayMs: CALL_CONNECT_DELAY_MS,
+  });
   const { start: startSession, minimize, ensureLayerTimer } = useLoveSession();
   const [syncState, setSyncState] = useState("SYNC_ONGOING");
   const { start, stop } = usePatternPlayer(wavePattern(72), "sync");
@@ -41,8 +81,6 @@ const SyncScreen = () => {
   //   SYNC_ACTIVE_CONFIRMATION
   //   SYNC_ONGOING
 
-  const [isMuted, setIsMuted] = useState(false);
-  const [speakerOn, setSpeakerOn] = useState(true);
   const [elapsedTime, setElapsedTime] = useState(0);
 
   const leaveSyncStack = () => {
@@ -55,6 +93,7 @@ const SyncScreen = () => {
   };
 
   const hangupSync = () => {
+    call.hangUp();
     stop();
     leaveSyncStack();
   };
@@ -281,7 +320,13 @@ const SyncScreen = () => {
         );
       case "SYNC_ONGOING":
         return (
-          <View style={[styles.footer, { justifyContent: "flex-end" }]}>
+          <View style={[styles.footer, { justifyContent: "space-between" }]}>
+            <CallCaptions
+              name={partnerName}
+              status={syncStatusLabel({ phase: call.phase, name: partnerName })}
+              call={call}
+              centered
+            />
             <View
               style={{
                 flexDirection: "row",
@@ -289,6 +334,8 @@ const SyncScreen = () => {
               }}
             >
               <TouchableOpacity
+                testID="control-sync-mic"
+                accessibilityLabel={call.muted ? "Unmute" : "Mute"}
                 style={[
                   {
                     height: 73,
@@ -299,12 +346,14 @@ const SyncScreen = () => {
                     justifyContent: "center",
                   },
                   {
-                    backgroundColor: isMuted ? colors.grayLightest: colors.grayLighter,
+                    backgroundColor: call.muted
+                      ? colors.grayLightest
+                      : colors.grayLighter,
                   },
                 ]}
-                onPress={() => setIsMuted(!isMuted)}
+                onPress={() => call.setMuted(!call.muted)}
               >
-                {isMuted ? (
+                {call.muted ? (
                   <MicroPhone_mute width={35} height={35} />
                 ) : (
                   <MicroPhone_unmute width={35} height={35} />
@@ -325,17 +374,21 @@ const SyncScreen = () => {
                 <Xmark width={20} height={20}></Xmark>
               </TouchableOpacity>
               <TouchableOpacity
+                testID="control-sync-speaker"
+                accessibilityLabel={
+                  call.speakerOn ? "Speaker off" : "Speaker on"
+                }
                 style={{
                   height: 73,
                   width: 73,
                   borderRadius: 100,
-                  backgroundColor: speakerOn
+                  backgroundColor: call.speakerOn
                     ? colors.grayLightest
                     : colors.grayLighter,
                   alignItems: "center",
                   justifyContent: "center",
                 }}
-                onPress={() => setSpeakerOn((current) => !current)}
+                onPress={() => call.setSpeakerOn(!call.speakerOn)}
               >
                 <Speaker width={35} height={35}></Speaker>
               </TouchableOpacity>

@@ -13,6 +13,8 @@ import {
   it,
   jest,
 } from "@jest/globals";
+import { readFileSync } from "fs";
+import { join } from "path";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { SCREENS } from "../src/common/constant";
 import { writeSessionUser } from "../src/backend/session";
@@ -38,6 +40,10 @@ import {
 } from "../src/screens/love/session";
 import { clearLoveSessionBoot } from "../src/screens/love/session-persist";
 import { LoveSyncScreen } from "../src/screens/love/sync";
+import SyncScreen from "../src/screens/sync/sync_screen";
+import { saveCompanions } from "../src/backend/store";
+import { Companion } from "../src/store/companions";
+import { DEFAULT_DRAFT } from "../src/screens/avatar/context";
 import {
   CALL_CONNECT_DELAY_MS,
   LISTEN_IDLE_MS,
@@ -958,6 +964,283 @@ describe("Love Sync voice", () => {
     expect(session?.chat).toBeNull();
     expect(mockNavigation.dispatch).toHaveBeenCalled();
     expect(mockNavigation.goBack).not.toHaveBeenCalled();
+  });
+});
+
+// Control hub → Sync card → picker row → SyncScreen inside the SyncStack
+// (a plain stack, no Love session yet). `getParent()` is the Home stack.
+const SYNC_SCREEN = String(SCREENS.SYNC_SCREEN);
+let homeNavigation: FakeNavigation = fakeNavigation();
+const openControlSync = async (person: { companionId: string; name: string }) => {
+  const tree = await mountProviders();
+  homeNavigation = fakeNavigation();
+  mockNavigation = fakeNavigation(homeNavigation);
+  mockRoute = { name: SYNC_SCREEN, params: person };
+  await show(tree, <SyncScreen />);
+  return tree;
+};
+
+const controlMic = (root: ReactTestInstance) =>
+  touchable(root, "control-sync-mic");
+const controlSpeaker = (root: ReactTestInstance) =>
+  touchable(root, "control-sync-speaker");
+
+const nova: Companion = {
+  ...DEFAULT_DRAFT,
+  id: "companion-nova",
+  name: "Nova",
+  birthday: "01/01/2000",
+  gender: "Male",
+  personalities: ["Playful & whimsical"],
+  story: "Made in the avatar wizard.",
+};
+
+describe("Control hub Sync voice", () => {
+  it("connects, Amanda greets in a woman's voice grounded in her Message thread, then the mic opens on its own — no tap, no hold", async () => {
+    await saveArkKey();
+    (global.fetch as jest.Mock).mockImplementationOnce(() =>
+      Promise.resolve(arkReply("There you are."))
+    );
+    const tree = await openControlSync({ companionId: "amanda", name: "Amanda" });
+
+    expect(texts(tree.root)).toContain("Amanda");
+    expect(texts(tree.root)).toContain(
+      syncStatusLabel({ phase: "connecting", name: "Amanda" })
+    );
+    expect(texts(tree.root)).not.toContain("Calling Amanda");
+    expect(listenMock).not.toHaveBeenCalled();
+    // Control Sync starts no Love session until it is minimized.
+    expect(session?.layer).toBeNull();
+
+    await connect();
+
+    const [body] = arkBodies();
+    expect(body.messages[0].content).toContain("You are Amanda");
+    expect(body.messages.map((m) => m.content)).toContain(
+      "Don't act surprised. You always come back."
+    );
+    expect(body.messages[body.messages.length - 1]).toEqual({
+      role: "system",
+      content: OPENER_INSTRUCTION,
+    });
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(speakMock.mock.calls[0][0]).toMatchObject({
+      text: "There you are.",
+      voiceId: SEED_VOICES.amanda,
+      expressive: true,
+    });
+    expect(voiceById(SEED_VOICES.amanda)?.gender).toBe("female");
+    expect(texts(tree.root)).toContain("Amanda is speaking");
+    expect(listenMock).not.toHaveBeenCalled();
+
+    await finishSpeech();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("Listening…");
+    expect(holdControls(tree.root)).toHaveLength(0);
+    expect(texts(tree.root).join("\n")).not.toMatch(
+      /Hold to talk|Tap to talk|Tap to resume/i
+    );
+  });
+
+  it("a spoken turn is answered as Amanda and spoken; her Message thread is untouched, and Sync listens again", async () => {
+    await saveArkKey();
+    const tree = await openControlSync({ companionId: "amanda", name: "Amanda" });
+    await connectAndGreet();
+    const before = chat!.getThread("amanda")!;
+
+    await say("Hi Amanda");
+
+    const [, body] = arkBodies();
+    expect(body.messages[0].content).toContain("You are Amanda");
+    expect(body.messages[body.messages.length - 1]).toEqual({
+      role: "user",
+      content: "Hi Amanda",
+    });
+    expect(speakMock).toHaveBeenCalledTimes(2);
+    expect(speakMock.mock.calls[1][0]).toMatchObject({
+      text: "我在呢。",
+      voiceId: SEED_VOICES.amanda,
+    });
+    expect(texts(tree.root)).toContain("Hi Amanda");
+    expect(texts(tree.root)).toContain("我在呢。");
+    const after = chat!.getThread("amanda")!;
+    expect(after.messages).toEqual(before.messages);
+    expect(after.preview).toBe(before.preview);
+    expect(after.lastActivityAt).toBe(before.lastActivityAt);
+
+    await finishSpeech();
+    expect(listenMock).toHaveBeenCalledTimes(2);
+    expect(texts(tree.root)).toContain("Listening…");
+  });
+
+  it("a crafted companion is answered as themselves: their personality and story ground the opener, and they speak in a voice of their gender", async () => {
+    await saveArkKey();
+    await saveCompanions("demo", {
+      companions: [nova],
+      activeCompanionId: null,
+    });
+    const tree = await openControlSync({ companionId: nova.id, name: nova.name });
+    expect(texts(tree.root)).toContain("Nova");
+    await connect();
+
+    const [body] = arkBodies();
+    expect(body.messages[0].content).toContain("You are Nova");
+    expect(body.messages[0].content).toContain("Playful & whimsical");
+    expect(body.messages[0].content).toContain("Made in the avatar wizard.");
+    const spoken = speakMock.mock.calls[0][0] as { voiceId?: string };
+    expect(voiceById(spoken.voiceId)?.gender).toBe("male");
+  });
+
+  it("mute really closes the mic and the button reads Unmute; unmute listens again", async () => {
+    await saveArkKey();
+    const tree = await openControlSync({ companionId: "kevin", name: "Kevin" });
+    await connectAndGreet();
+    expect(controlMic(tree.root).props.accessibilityLabel).toBe("Mute");
+
+    press(controlMic(tree.root));
+    await settle();
+    expect(stopVoice).toHaveBeenCalledTimes(1);
+    expect(controlMic(tree.root).props.accessibilityLabel).toBe("Unmute");
+    (global.fetch as jest.Mock).mockClear();
+    await say("你好 Kevin");
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+
+    press(controlMic(tree.root));
+    await settle();
+    expect(listenMock).toHaveBeenCalledTimes(2);
+    expect(texts(tree.root)).toContain("Listening…");
+  });
+
+  it("speaker off keeps Kevin's reply on screen unspoken and the mic open", async () => {
+    await saveArkKey();
+    const tree = await openControlSync({ companionId: "kevin", name: "Kevin" });
+    await connectAndGreet();
+    expect(controlSpeaker(tree.root).props.accessibilityLabel).toBe(
+      "Speaker off"
+    );
+    press(controlSpeaker(tree.root));
+    await settle();
+    expect(controlSpeaker(tree.root).props.accessibilityLabel).toBe(
+      "Speaker on"
+    );
+
+    await say("你好 Kevin");
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("我在呢。");
+    expect(texts(tree.root)).toContain("Listening…");
+    expect(listenMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("red X stops the mic, the voice and the motor and leaves the Sync stack; a late utterance is dropped", async () => {
+    await saveArkKey();
+    const tree = await openControlSync({ companionId: "kevin", name: "Kevin" });
+    await connectAndGreet();
+    stopVoice.mockClear();
+    (global.fetch as jest.Mock).mockClear();
+
+    press(touchable(tree.root, "control-sync-hangup"));
+    await settle();
+
+    expect(stopVoice).toHaveBeenCalledTimes(1);
+    expect(ttsStopMock).toHaveBeenCalled();
+    expect(mockMotorStop).toHaveBeenCalled();
+    expect(homeNavigation.goBack).toHaveBeenCalledTimes(1);
+    expect(session?.layer).toBeNull();
+    await say("one more thing");
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("minimize keeps a Control Sync session with its clock and closes the mic; the pill's LoveSync comes back listening at once with the clock kept", async () => {
+    await saveArkKey();
+    const tree = await openControlSync({ companionId: "kevin", name: "Kevin" });
+    await connectAndGreet();
+    await say("你好 Kevin");
+    await finishSpeech();
+    expect(speakMock).toHaveBeenCalledTimes(2);
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+    await settle();
+    const clock = () => texts(tree.root).find((copy) => /^\d\d:\d\d$/.test(copy));
+    expect(clock()).toBe("00:06");
+
+    press(touchable(tree.root, "control-sync-minimize"));
+    await settle();
+    expect(session).toMatchObject({
+      layer: "sync",
+      minimized: true,
+      surface: "control",
+      companionId: "kevin",
+    });
+    expect(session?.chat?.synced).toBe(true);
+    expect(typeof session?.syncStartedAt).toBe("number");
+    expect(homeNavigation.goBack).toHaveBeenCalledTimes(1);
+    stopVoice.mockClear();
+    await show(tree, null);
+    expect(stopVoice).toHaveBeenCalledTimes(1);
+
+    speakMock.mockClear();
+    listenMock.mockClear();
+    (global.fetch as jest.Mock).mockClear();
+    act(() => {
+      session!.restore();
+    });
+    mockNavigation = fakeNavigation();
+    await showLoveSync(tree, { companionId: "kevin", name: "Kevin" });
+
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain("Listening…");
+    expect(texts(tree.root)).toContain("Kevin");
+    expect(clock()).toBe("00:06");
+    // Nothing from Sync reached Kevin's thread on the way.
+    expect(chat!.getThread("kevin")!.messages.map((m) => m.text)).not.toContain(
+      "你好 Kevin"
+    );
+  });
+});
+
+describe("both Sync surfaces run the one voice engine", () => {
+  const SYNC_SOURCES = [
+    "src/screens/love/sync.tsx",
+    "src/screens/sync/sync_screen.tsx",
+  ];
+
+  it.each(SYNC_SOURCES)(
+    "%s drives useVoiceCall and never opens the mic or the voice on its own",
+    (file) => {
+      const source = readFileSync(join(__dirname, "..", file), "utf8");
+      expect(source).toContain("useVoiceCall(");
+      expect(source).toContain("voiceForPerson(");
+      // No second engine: speech and TTS are reached only through the hook.
+      expect(source).not.toContain("listenForUtterance");
+      expect(source).not.toContain("startVoiceInput");
+      expect(source).not.toContain("ttsSpeak");
+      // The mic control is a switch on the hook's mute, not local state.
+      expect(source).not.toMatch(/useState\((false|true)\)/);
+    }
+  );
+
+  it.each([...SYNC_SOURCES, "src/screens/call/captions.tsx"])(
+    "%s has no press-and-hold control and no tap-to-talk copy",
+    (file) => {
+      const source = readFileSync(join(__dirname, "..", file), "utf8");
+      expect(source).not.toContain("onPressIn");
+      expect(source).not.toContain("onPressOut");
+      expect(source).not.toMatch(/tap[ -]to[ -]talk|hold[ -]to[ -]talk/i);
+    }
+  );
+
+  it("the Love Sync overlay resolves its person's face and voice, never a stock portrait", () => {
+    const source = readFileSync(
+      join(__dirname, "../src/screens/love/sync.tsx"),
+      "utf8"
+    );
+    expect(source).not.toContain("faceSourceForId(");
+    expect(source).not.toContain("call-face.png");
   });
 });
 
