@@ -27,7 +27,12 @@ import {
 } from "../src/services/llm-config";
 import { configureTtsEngine } from "../src/services/tts";
 import { SEED_VOICES, voiceById } from "../src/services/voices";
-import { startVoiceInput, stopVoiceInput } from "../src/services/voice-input";
+import {
+  listenForUtterance,
+  stopVoiceInput,
+  UtteranceEnd,
+  UtteranceResult,
+} from "../src/services/voice-input";
 import {
   Companion,
   CompanionsProvider,
@@ -47,23 +52,32 @@ import { AvatarPreview } from "../src/screens/avatar/engine/AvatarPreview";
 import { useAvatarEngine } from "../src/screens/avatar/engine/AvatarEngineHost";
 import { InlineAvatarViewer } from "../src/screens/avatar/engine/InlineAvatarViewer";
 import { DEFAULT_DRAFT } from "../src/screens/avatar/context";
-import { CALL_CONNECT_DELAY_MS } from "../src/screens/call/use-voice-call";
+import {
+  CALL_CONNECT_DELAY_MS,
+  LISTEN_IDLE_MS,
+  LISTEN_SILENCE_MS,
+} from "../src/screens/call/use-voice-call";
 import {
   CAMERA_START_TIMEOUT_MS,
   CAMERA_STARTING_COPY,
 } from "../src/screens/call/camera-preview";
+import { OPENER_INSTRUCTION } from "../src/screens/call/opener";
 import {
   callStatusLabel,
-  holdButtonLabel,
+  micButtonLabel,
   modeToggle,
+  voiceKeyHint,
 } from "../src/screens/call/status";
 
 /**
  * The phone icon on a Message thread and on Love chat used to open a timer
  * and a face with no audio behind it. These tests drive the real call
  * screens inside the app's providers with the speech, Ark and TTS edges
- * mocked, and check the loop: hold → recognized text → Ark reply → spoken,
- * plus the video stage, the missing-key copy and hang-up.
+ * mocked, and check the hands-free loop Maxwell asked for on TestFlight
+ * 1.2 (15): the companion greets first, then the call listens on its own
+ * (no hold-to-talk) → recognized text → Ark reply → spoken → listens again,
+ * plus barge-in by tap, mute, the video stage, the missing-key copy and
+ * hang-up. Nothing said on the call reaches a chat.
  */
 
 jest.mock("@react-native-async-storage/async-storage", () =>
@@ -93,12 +107,15 @@ jest.mock("../src/native/ph-native", () => ({
   nativeStopSpeaking: jest.fn(),
   nativeStartVoiceInput: jest.fn(),
   nativeStopVoiceInput: jest.fn(),
+  nativeListenForUtterance: jest.fn(),
 }));
-// iOS Speech framework through PHNative: hold starts it, release returns the
-// transcript. Mocked at the service edge so the loop above it is real.
+// iOS Speech framework through PHNative: the call asks for one utterance at
+// a time and the native side decides when the user has finished talking.
+// Mocked at the service edge so the loop above it is real.
 jest.mock("../src/services/voice-input", () => ({
   startVoiceInput: jest.fn(),
   stopVoiceInput: jest.fn(),
+  listenForUtterance: jest.fn(),
   speakWithNativeTts: jest.fn(),
   stopNativeTts: jest.fn(),
 }));
@@ -151,8 +168,10 @@ jest.mock("@react-navigation/native", () => {
   };
 });
 
-const startVoice = startVoiceInput as jest.Mock<typeof startVoiceInput>;
+const listenMock = listenForUtterance as jest.Mock<typeof listenForUtterance>;
 const stopVoice = stopVoiceInput as jest.Mock<typeof stopVoiceInput>;
+// The recognizer resolves the newest listen when the test "says" something.
+let pendingListen: ((result: UtteranceResult) => void) | null = null;
 
 type ChatApi = ReturnType<typeof useChat>;
 type SessionApi = ReturnType<typeof useLoveSession>;
@@ -240,18 +259,16 @@ const touchable = (root: ReactTestInstance, testID: string) => {
   return match;
 };
 
-// The hold-to-talk control is a Pressable (press in / press out).
-const holdButton = (root: ReactTestInstance) => {
-  const match = root.findAll(
+// The mic control: tap to interrupt while the companion speaks, tap to mute
+// while listening, tap to resume. There is no hold-to-talk any more.
+const micButton = (root: ReactTestInstance) => touchable(root, "call-mic");
+
+const holdControls = (root: ReactTestInstance) =>
+  root.findAll(
     (node) =>
-      node.props?.testID === "call-hold" &&
-      typeof node.props.onPressIn === "function"
-  )[0];
-  if (!match) {
-    throw new Error("No hold-to-talk control (testID call-hold)");
-  }
-  return match;
-};
+      node.props?.testID === "call-hold" ||
+      typeof node.props?.onPressIn === "function"
+  );
 
 const press = (node: ReactTestInstance) => {
   act(() => {
@@ -259,16 +276,44 @@ const press = (node: ReactTestInstance) => {
   });
 };
 
-const holdAndRelease = async (root: ReactTestInstance) => {
-  const hold = holdButton(root);
+// The user talks: the newest listen resolves with what the recognizer heard.
+const say = async (text: string, end: UtteranceEnd = "utterance") => {
+  const deliver = pendingListen;
+  pendingListen = null;
+  if (!deliver) {
+    throw new Error("The call is not listening");
+  }
   act(() => {
-    hold.props.onPressIn();
+    deliver({ ok: true, text, end });
   });
   await settle();
+};
+
+const failListen = async (message: string, reason = "permission-denied") => {
+  const deliver = pendingListen;
+  pendingListen = null;
+  if (!deliver) {
+    throw new Error("The call is not listening");
+  }
   act(() => {
-    holdButton(root).props.onPressOut();
+    deliver({ ok: false, reason, message });
   });
   await settle();
+};
+
+// The companion finishes what it is saying.
+const finishSpeech = async () => {
+  act(() => {
+    finishSpeaking?.();
+    finishSpeaking = null;
+  });
+  await settle();
+};
+
+// Ring → connected → the companion's opener is spoken → listening.
+const connectAndGreet = async () => {
+  await connect();
+  await finishSpeech();
 };
 
 const uriOf = (source: unknown) =>
@@ -351,10 +396,16 @@ beforeEach(async () => {
   session = null;
   engine = null;
   mockCameraAvailable = true;
-  startVoice.mockReset();
+  listenMock.mockReset();
   stopVoice.mockReset();
-  startVoice.mockResolvedValue({ ok: true, text: "" });
-  stopVoice.mockResolvedValue({ ok: true, text: "你好 Kevin" });
+  pendingListen = null;
+  listenMock.mockImplementation(
+    () =>
+      new Promise<UtteranceResult>((resolve) => {
+        pendingListen = resolve;
+      })
+  );
+  stopVoice.mockResolvedValue({ ok: true, text: "" });
   global.fetch = jest.fn(() =>
     Promise.resolve(arkReply("我在呢。"))
   ) as unknown as typeof fetch;
@@ -389,7 +440,7 @@ afterEach(() => {
 });
 
 describe("Message thread voice call", () => {
-  it("starts without an Ark key: shows the Companion AI settings copy and does not crash", async () => {
+  it("starts without an Ark key: greets with a local opener, shows the Companion AI settings copy and does not crash", async () => {
     const tree = await mountMessageCall("kevin");
     await connect();
 
@@ -398,65 +449,108 @@ describe("Message thread voice call", () => {
     expect(copy).toMatch(/Companion AI/);
     expect(copy).toMatch(/Add a key/);
     expect(global.fetch).not.toHaveBeenCalled();
-    // The call is still a call: connected, timer running, hang-up available.
-    expect(texts(tree.root)).toContain("Connected");
+    // The call is still a call: connected, timer running, hang-up available,
+    // and Kevin still says hello (a canned line, in his voice).
+    expect(texts(tree.root)).toContain("Kevin is speaking");
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(speakMock.mock.calls[0][0]).toMatchObject({
+      voiceId: SEED_VOICES.kevin,
+    });
+    expect((speakMock.mock.calls[0][0] as { text: string }).text).toContain(
+      "Kevin"
+    );
     expect(() => touchable(tree.root, "call-hangup")).not.toThrow();
   });
 
-  it("a held turn: recognized speech goes to Ark as Kevin and the reply is spoken while the face shows speaking", async () => {
+  it("on connect Kevin speaks first, in his own voice, and only then starts listening", async () => {
     await saveArkKey();
+    (global.fetch as jest.Mock).mockImplementationOnce(() =>
+      Promise.resolve(arkReply("Hey you. Took you long enough."))
+    );
     const tree = await mountMessageCall("kevin");
+    expect(texts(tree.root)).toContain("Calling Kevin");
+    expect(listenMock).not.toHaveBeenCalled();
+
     await connect();
-    expect(texts(tree.root)).toContain("Connected");
 
-    const hold = holdButton(tree.root);
-    act(() => {
-      hold.props.onPressIn();
-    });
-    await settle();
-    expect(startVoice).toHaveBeenCalledTimes(1);
-    expect(texts(tree.root)).toContain("Listening…");
-    expect(texts(tree.root)).toContain("Release to send");
-
-    act(() => {
-      holdButton(tree.root).props.onPressOut();
-    });
-    await settle();
-
-    expect(stopVoice).toHaveBeenCalledTimes(1);
+    // The opener is asked of Ark as Kevin, with the thread as context and a
+    // stage direction instead of a user turn.
     const [body] = arkBodies();
-    expect(body.model).toBe(ARK_MODEL);
-    expect(body.messages[0].role).toBe("system");
     expect(body.messages[0].content).toContain("You are Kevin");
     expect(body.messages[body.messages.length - 1]).toEqual({
-      role: "user",
-      content: "你好 Kevin",
+      role: "system",
+      content: OPENER_INSTRUCTION,
     });
-    // Kevin's seeded thread history rides along as context.
     expect(body.messages.length).toBeGreaterThan(2);
-
+    // Spoken before anyone is asked to talk, in Kevin's own (male) voice.
     expect(speakMock).toHaveBeenCalledTimes(1);
-    // Spoken in Kevin's own (male) voice, not the system default.
     expect(speakMock.mock.calls[0][0]).toMatchObject({
-      text: "我在呢。",
+      text: "Hey you. Took you long enough.",
       voiceId: SEED_VOICES.kevin,
     });
     expect(voiceById(SEED_VOICES.kevin)?.gender).toBe("male");
+    expect(texts(tree.root)).toContain("Kevin is speaking");
+    expect(texts(tree.root)).toContain("Hey you. Took you long enough.");
+    expect(listenMock).not.toHaveBeenCalled();
+
+    await finishSpeech();
+
+    // Hands-free: the mic opens on its own once he has finished.
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(listenMock.mock.calls[0][0]).toMatchObject({
+      silenceMs: LISTEN_SILENCE_MS,
+      idleMs: LISTEN_IDLE_MS,
+    });
+    expect(texts(tree.root)).toContain("Listening…");
+    expect(texts(tree.root)).toContain(
+      micButtonLabel({ phase: "listening", muted: false })
+    );
+    // No hold-to-talk control anywhere on the call.
+    expect(holdControls(tree.root)).toHaveLength(0);
+    expect(texts(tree.root).join("\n")).not.toMatch(/Hold to talk/);
+  });
+
+  it("a spoken turn: recognized speech goes to Ark as Kevin, the reply is spoken while the face shows speaking, then the call listens again", async () => {
+    await saveArkKey();
+    (global.fetch as jest.Mock).mockImplementationOnce(() =>
+      Promise.resolve(arkReply("Hey you."))
+    );
+    const tree = await mountMessageCall("kevin");
+    await connectAndGreet();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+
+    await say("你好 Kevin");
+
+    const [, body] = arkBodies();
+    expect(body.model).toBe(ARK_MODEL);
+    expect(body.messages[0].role).toBe("system");
+    expect(body.messages[0].content).toContain("You are Kevin");
+    // Kevin's seeded thread history rides along, then what was said on this
+    // call so far (his opener), then the new line.
+    expect(body.messages.length).toBeGreaterThan(3);
+    expect(body.messages.slice(-2)).toEqual([
+      { role: "assistant", content: "Hey you." },
+      { role: "user", content: "你好 Kevin" },
+    ]);
+
+    expect(speakMock).toHaveBeenCalledTimes(2);
+    expect(speakMock.mock.calls[1][0]).toMatchObject({
+      text: "我在呢。",
+      voiceId: SEED_VOICES.kevin,
+    });
     const copy = texts(tree.root);
     expect(copy).toContain("Kevin is speaking");
     expect(copy).toContain("你好 Kevin");
     expect(copy).toContain("我在呢。");
+    expect(copy).toContain(micButtonLabel({ phase: "speaking", muted: false }));
     // The spoken turn stays on the call: the Message thread is untouched.
     const kevin = chat!.getThread("kevin")!;
     expect(kevin.messages.map((m) => m.text)).not.toContain("你好 Kevin");
     expect(kevin.messages.map((m) => m.text)).not.toContain("我在呢。");
 
-    act(() => {
-      finishSpeaking?.();
-    });
-    await settle();
-    expect(texts(tree.root)).toContain("Connected");
-    expect(texts(tree.root)).toContain("Hold to talk");
+    await finishSpeech();
+    expect(listenMock).toHaveBeenCalledTimes(2);
+    expect(texts(tree.root)).toContain("Listening…");
   });
 
   it("what is said on a call never enters the Message thread, not during the call and not on hang-up", async () => {
@@ -465,14 +559,11 @@ describe("Message thread voice call", () => {
     // UI only; the thread must read exactly as it did before the call.
     await saveArkKey();
     const tree = await mountMessageCall("kevin");
-    await connect();
+    await connectAndGreet();
     const before = chat!.getThread("kevin")!;
-    await holdAndRelease(tree.root);
+    await say("你好 Kevin");
     expect(texts(tree.root)).toContain("我在呢。");
-    act(() => {
-      finishSpeaking?.();
-    });
-    await settle();
+    await finishSpeech();
 
     press(touchable(tree.root, "call-hangup"));
     await settle();
@@ -487,24 +578,19 @@ describe("Message thread voice call", () => {
   it("the second turn is still grounded in the first, from the call's own transcript", async () => {
     await saveArkKey();
     (global.fetch as jest.Mock)
+      .mockImplementationOnce(() => Promise.resolve(arkReply("Hi.")))
       .mockImplementationOnce(() => Promise.resolve(arkReply("Hey you.")))
       .mockImplementationOnce(() => Promise.resolve(arkReply("Still here.")));
-    stopVoice
-      .mockResolvedValueOnce({ ok: true, text: "Hello Kevin" })
-      .mockResolvedValueOnce({ ok: true, text: "What did I just say?" });
     const tree = await mountMessageCall("kevin");
-    await connect();
+    await connectAndGreet();
 
-    await holdAndRelease(tree.root);
-    act(() => {
-      finishSpeaking?.();
-    });
-    await settle();
-    await holdAndRelease(tree.root);
+    await say("Hello Kevin");
+    await finishSpeech();
+    await say("What did I just say?");
 
-    const [, second] = arkBodies();
-    const tail = second.messages.slice(-3);
-    expect(tail).toEqual([
+    const [, , third] = arkBodies();
+    expect(third.messages.slice(-4)).toEqual([
+      { role: "assistant", content: "Hi." },
       { role: "user", content: "Hello Kevin" },
       { role: "assistant", content: "Hey you." },
       { role: "user", content: "What did I just say?" },
@@ -512,53 +598,157 @@ describe("Message thread voice call", () => {
     expect(chat!.getThread("kevin")!.messages.map((m) => m.text)).not.toContain(
       "Hello Kevin"
     );
+    expect(tree.root).toBeTruthy();
   });
 
-  it("a release with nothing recognized asks to try again instead of calling Ark", async () => {
+  it("a listen that ends with nothing said is simply restarted, with no nagging and no Ark call", async () => {
     await saveArkKey();
-    stopVoice.mockResolvedValue({ ok: true, text: "   " });
     const tree = await mountMessageCall("kevin");
-    await connect();
+    await connectAndGreet();
+    (global.fetch as jest.Mock).mockClear();
 
-    await holdAndRelease(tree.root);
+    await say("", "idle");
+    await say("   ");
 
     expect(global.fetch).not.toHaveBeenCalled();
-    expect(speakMock).not.toHaveBeenCalled();
-    expect(texts(tree.root).join("\n")).toMatch(/Didn't catch that/);
+    expect(speakMock).toHaveBeenCalledTimes(1);
+    expect(listenMock).toHaveBeenCalledTimes(3);
+    expect(texts(tree.root)).toContain("Listening…");
+    expect(texts(tree.root).join("\n")).not.toMatch(/Didn't catch that/);
   });
 
-  it("a denied microphone shows the permission copy and stays on the call", async () => {
+  it("tapping the mic while Kevin speaks interrupts him and listens right away", async () => {
     await saveArkKey();
-    startVoice.mockResolvedValue({
-      ok: false,
-      reason: "permission-denied",
-      message: "Microphone access is needed to use voice input.",
-    });
     const tree = await mountMessageCall("kevin");
-    await connect();
+    await connectAndGreet();
+    await say("你好 Kevin");
+    expect(texts(tree.root)).toContain("Kevin is speaking");
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    ttsStopMock.mockClear();
 
-    const hold = holdButton(tree.root);
-    act(() => {
-      hold.props.onPressIn();
-    });
+    press(micButton(tree.root));
     await settle();
+
+    expect(ttsStopMock).toHaveBeenCalledTimes(1);
+    expect(listenMock).toHaveBeenCalledTimes(2);
+    expect(texts(tree.root)).toContain("Listening…");
+    // The interrupted reply stays in the transcript as what he got to say.
+    expect(texts(tree.root)).toContain("我在呢。");
+  });
+
+  it("tapping the mic while listening mutes the call; tapping again resumes", async () => {
+    await saveArkKey();
+    const tree = await mountMessageCall("kevin");
+    await connectAndGreet();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+
+    press(micButton(tree.root));
+    await settle();
+
+    expect(stopVoice).toHaveBeenCalledTimes(1);
+    expect(texts(tree.root)).toContain(
+      micButtonLabel({ phase: "ready", muted: true })
+    );
+    expect(texts(tree.root)).toContain("Connected");
+    // Whatever the recognizer still returns for the muted listen is dropped:
+    // no Ark call, no new listen.
+    (global.fetch as jest.Mock).mockClear();
+    await say("你好 Kevin");
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+
+    press(micButton(tree.root));
+    await settle();
+    expect(listenMock).toHaveBeenCalledTimes(2);
+    expect(texts(tree.root)).toContain("Listening…");
+  });
+
+  it("a denied microphone shows the permission copy and stays on the call without looping", async () => {
+    await saveArkKey();
+    const tree = await mountMessageCall("kevin");
+    await connectAndGreet();
+
+    await failListen("Microphone access is needed to use voice input.");
 
     expect(texts(tree.root)).toContain(
       "Microphone access is needed to use voice input."
     );
     expect(texts(tree.root)).toContain("Connected");
+    expect(listenMock).toHaveBeenCalledTimes(1);
     expect(chat!.inCallThreadId).toBe("kevin");
+    // A tap on the mic tries again.
+    press(micButton(tree.root));
+    await settle();
+    expect(listenMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-entering a Message call that is already in progress neither rings nor greets again", async () => {
+    await saveArkKey();
+    mockNavigation = fakeNavigation();
+    mockRoute = {
+      name: String(SCREENS.CHAT_CALL),
+      params: { threadId: "kevin" },
+    };
+    let tree: ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<Providers>{null}</Providers>);
+    });
+    trees.push(tree!);
+    await settle();
+    act(() => {
+      chat!.setInCall("kevin");
+    });
+    act(() => {
+      tree.update(
+        <Providers>
+          <ChatCallScreen />
+        </Providers>
+      );
+    });
+    await settle();
+
+    // Straight into the call: no ring, no opener, the mic already open.
+    expect(texts(tree!.root)).not.toContain("Calling Kevin");
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree!.root)).toContain("Listening…");
+    expect(texts(tree!.root)).toContain("00:00");
+  });
+
+  it("says it is using the phone's voice until a Voice key is saved in Companion AI", async () => {
+    await saveArkKey();
+    const tree = await mountMessageCall("kevin");
+    await connectAndGreet();
+    expect(texts(tree.root)).toContain(voiceKeyHint("Kevin"));
+    expect(voiceKeyHint("Kevin")).toMatch(/Voice key/);
+    expect(voiceKeyHint("Kevin")).toMatch(/Companion AI/);
+    act(() => {
+      trees.splice(0).forEach((item) => item.unmount());
+    });
+
+    await saveLlmConfig({
+      apiKey: "ark-device-key",
+      baseUrl: ARK_BASE_URL,
+      model: ARK_MODEL,
+      ttsApiKey: "speech-console-key",
+    });
+    const withKey = await mountMessageCall("kevin");
+    await connectAndGreet();
+    expect(texts(withKey.root)).not.toContain(voiceKeyHint("Kevin"));
   });
 
   it("switching video on and off keeps the conversation and shows Amanda, not Kevin's stock face", async () => {
     await saveArkKey();
-    stopVoice.mockResolvedValue({ ok: true, text: "Hi Amanda" });
     const tree = await mountMessageCall("amanda");
-    await connect();
-    await holdAndRelease(tree.root);
+    await connectAndGreet();
+    await say("Hi Amanda");
     expect(texts(tree.root)).toContain("Amanda is speaking");
-    // Amanda answers in a woman's voice.
+    // Amanda greets and answers in a woman's voice.
     expect(speakMock.mock.calls[0][0]).toMatchObject({
+      voiceId: SEED_VOICES.amanda,
+    });
+    expect(speakMock.mock.calls[1][0]).toMatchObject({
       voiceId: SEED_VOICES.amanda,
     });
     expect(voiceById(SEED_VOICES.amanda)?.gender).toBe("female");
@@ -578,8 +768,9 @@ describe("Message thread voice call", () => {
     expect(copy).toContain("Amanda is speaking");
     expect(copy).toContain("Hi Amanda");
     expect(copy).toContain("我在呢。");
-    expect(speakMock).toHaveBeenCalledTimes(1);
-    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(speakMock).toHaveBeenCalledTimes(2);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(listenMock).toHaveBeenCalledTimes(1);
 
     press(touchable(tree.root, "call-video-toggle"));
     await settle();
@@ -806,19 +997,17 @@ describe("Message thread voice call", () => {
     ]);
   });
 
-  it("hang-up stops the mic and the voice, clears in-call and leaves", async () => {
+  it("hang-up stops the mic and the voice, clears in-call and leaves; a late utterance is dropped", async () => {
     await saveArkKey();
     const tree = await mountMessageCall("kevin");
-    await connect();
-    await holdAndRelease(tree.root);
-    expect(speakMock).toHaveBeenCalledTimes(1);
-
-    // Start another hold so the mic is live at hang-up.
-    act(() => {
-      holdButton(tree.root).props.onPressIn();
-    });
-    await settle();
+    await connectAndGreet();
+    await say("你好 Kevin");
+    await finishSpeech();
+    expect(speakMock).toHaveBeenCalledTimes(2);
+    // The call is listening again when the user hangs up.
+    expect(texts(tree.root)).toContain("Listening…");
     stopVoice.mockClear();
+    (global.fetch as jest.Mock).mockClear();
 
     press(touchable(tree.root, "call-hangup"));
     await settle();
@@ -827,10 +1016,16 @@ describe("Message thread voice call", () => {
     expect(ttsStopMock).toHaveBeenCalled();
     expect(chat!.inCallThreadId).toBeNull();
     expect(mockNavigation.goBack).toHaveBeenCalledTimes(1);
+    // What the recognizer returns after that goes nowhere.
+    await say("one more thing");
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(listenMock).toHaveBeenCalledTimes(2);
   });
 
   it("a reply that arrives after hang-up is not spoken", async () => {
     await saveArkKey();
+    const tree = await mountMessageCall("kevin");
+    await connectAndGreet();
     let deliver: ((value: unknown) => void) | null = null;
     (global.fetch as jest.Mock).mockImplementation(
       () =>
@@ -838,10 +1033,9 @@ describe("Message thread voice call", () => {
           deliver = resolve;
         })
     );
-    const tree = await mountMessageCall("kevin");
-    await connect();
-    await holdAndRelease(tree.root);
+    await say("你好 Kevin");
     expect(texts(tree.root)).toContain("Thinking…");
+    speakMock.mockClear();
 
     press(touchable(tree.root, "call-hangup"));
     await settle();
@@ -907,21 +1101,20 @@ describe("Love voice call", () => {
 
   it("a spoken turn is answered as Chad on the call and never written to the Love chat", async () => {
     await saveArkKey();
-    stopVoice.mockResolvedValue({ ok: true, text: "Hey Chad" });
     const tree = await mountLoveCall("chad", "Chad");
-    await connect();
+    await connectAndGreet();
     const before = session!.chat!.messages;
 
-    await holdAndRelease(tree.root);
+    await say("Hey Chad");
 
-    const [body] = arkBodies();
+    const [, body] = arkBodies();
     expect(body.messages[0].content).toContain("You are Chad");
     expect(body.messages[body.messages.length - 1]).toEqual({
       role: "user",
       content: "Hey Chad",
     });
-    expect(speakMock).toHaveBeenCalledTimes(1);
-    expect(speakMock.mock.calls[0][0]).toMatchObject({
+    expect(speakMock).toHaveBeenCalledTimes(2);
+    expect(speakMock.mock.calls[1][0]).toMatchObject({
       text: "我在呢。",
       voiceId: SEED_VOICES.chad,
     });
@@ -929,14 +1122,49 @@ describe("Love voice call", () => {
     expect(texts(tree.root)).toContain("Chad is speaking");
     expect(session!.chat!.messages).toEqual(before);
 
-    act(() => {
-      finishSpeaking?.();
-    });
-    await settle();
+    await finishSpeech();
     press(touchable(tree.root, "call-hangup"));
     await settle();
     expect(session!.chat!.messages).toEqual(before);
     expect(session!.chat!.inCall).toBe(false);
+  });
+
+  it("a Love call restored from the pill is already on: no ring, no second greeting, listening at once", async () => {
+    await saveArkKey();
+    mockNavigation = fakeNavigation();
+    mockRoute = {
+      name: String(SCREENS.LOVE_CALL),
+      params: { companionId: "chad", name: "Chad" },
+    };
+    let tree: ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<Providers>{null}</Providers>);
+    });
+    trees.push(tree!);
+    await settle();
+    // The session was minimized mid-call: the call timer is already running.
+    act(() => {
+      session!.start({ layer: "call", companionId: "chad", name: "Chad" });
+      session!.ensureLayerTimer("call");
+    });
+    await settle();
+    act(() => {
+      tree.update(
+        <Providers>
+          <LoveCallScreen />
+        </Providers>
+      );
+    });
+    await settle();
+
+    expect(texts(tree!.root)).not.toContain("Calling Chad");
+    expect(speakMock).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+    // Whatever was still being said when the pill took over is cut before
+    // the mic opens, so the recognizer never hears the companion.
+    expect(ttsStopMock).toHaveBeenCalled();
+    expect(listenMock).toHaveBeenCalledTimes(1);
+    expect(texts(tree!.root)).toContain("Listening…");
   });
 
   it("video mode on a Love call shows a crafted companion's look and the front camera", async () => {
@@ -1012,12 +1240,30 @@ describe("call status copy", () => {
     expect(modeToggle(true)).toEqual({ target: "voice", label: "Voice" });
   });
 
-  it("labels the hold button by phase", () => {
-    expect(holdButtonLabel("connecting")).toBe("Connecting…");
-    expect(holdButtonLabel("ready")).toBe("Hold to talk");
-    expect(holdButtonLabel("listening")).toBe("Release to send");
-    expect(holdButtonLabel("thinking")).toBe("Hold to talk");
-    expect(holdButtonLabel("speaking")).toBe("Hold to interrupt");
+  it("labels the mic button by phase, never as hold-to-talk", () => {
+    expect(micButtonLabel({ phase: "connecting", muted: false })).toBe(
+      "Connecting…"
+    );
+    expect(micButtonLabel({ phase: "listening", muted: false })).toBe(
+      "Listening"
+    );
+    expect(micButtonLabel({ phase: "thinking", muted: false })).toBe(
+      "Thinking…"
+    );
+    expect(micButtonLabel({ phase: "speaking", muted: false })).toBe(
+      "Tap to interrupt"
+    );
+    expect(micButtonLabel({ phase: "ready", muted: false })).toBe(
+      "Tap to talk"
+    );
+    expect(micButtonLabel({ phase: "ready", muted: true })).toBe("Muted");
+    expect(micButtonLabel({ phase: "speaking", muted: true })).toBe("Muted");
+  });
+
+  it("names the Voice key the cloud voice needs", () => {
+    expect(voiceKeyHint("Amanda")).toBe(
+      "Using the phone's voice. Add a Voice key in Companion AI for Amanda's real voice."
+    );
   });
 });
 
@@ -1042,6 +1288,43 @@ describe("no call surface hard-codes a stock face or an unguarded native view", 
     expect(source.indexOf("getViewManagerConfig")).toBeLessThan(
       source.indexOf("requireNativeComponent<")
     );
+  });
+
+  it("the call body has no press-and-hold control", () => {
+    const source = readFileSync(
+      join(__dirname, "../src/screens/call/call-body.tsx"),
+      "utf8"
+    );
+    expect(source).not.toContain("onPressIn");
+    expect(source).not.toContain("onPressOut");
+    expect(source).toContain('testID="call-mic"');
+  });
+
+  it("PHNative listens for one utterance at a time and decides natively when the user has finished", () => {
+    const source = readFileSync(
+      join(__dirname, "../ios/AppFrontend/PHNative.mm"),
+      "utf8"
+    );
+    expect(source).toContain("RCT_REMAP_METHOD(listenForUtterance,");
+    // End of speech = the recognizer's transcript stopped changing and the
+    // mic went quiet (RMS below the voice floor) for silenceMs; an empty
+    // listen ends as `idle` before iOS Speech's one-minute cap so JS can
+    // start it again.
+    expect(source).toContain("silenceMs");
+    expect(source).toContain("idleMs");
+    expect(source).toContain('@"idle"');
+    expect(source).toContain('@"utterance"');
+    // Hang-up / mute stop the mic through stopVoiceInput and must settle a
+    // pending listen instead of leaving its promise hanging.
+    const stop = source.slice(
+      source.indexOf("RCT_REMAP_METHOD(stopVoiceInput,"),
+      source.indexOf("RCT_REMAP_METHOD(requestNotifications,")
+    );
+    expect(stop).toContain("settleListen");
+    // Speech and the synthesizer still never overlap: the mic is closed
+    // before the reply is spoken (the loop is sequential in JS) and a listen
+    // superseded during the permission prompt never opens the mic.
+    expect(source).toContain("voiceGeneration");
   });
 
   it("PHNative hosts the front-camera preview without touching the voice audio session, and speak() leaves Record", () => {

@@ -1,15 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  CompanionChatError,
   companionChatErrorMessage,
   companionChatFailureMessage,
   completeCompanionChat,
 } from "../../services/llm";
 import { hasLlmKey, loadLlmConfig } from "../../services/llm-config";
 import { ttsSpeak, ttsStop } from "../../services/tts";
-import { startVoiceInput, stopVoiceInput } from "../../services/voice-input";
-import { CallPhase, NOTHING_HEARD_COPY } from "./status";
+import { ttsCredentialsFromConfig } from "../../services/tts-config";
+import { listenForUtterance, stopVoiceInput } from "../../services/voice-input";
+import { localOpener, OPENER_INSTRUCTION } from "./opener";
+import { CallPhase, voiceKeyHint } from "./status";
 
 export const CALL_CONNECT_DELAY_MS = 1600;
+// End-pointing handed to the native recognizer: how long the user must be
+// quiet before what they said is sent, the longest single utterance, and how
+// long an empty listen runs before it is started again (iOS Speech caps one
+// request at about a minute).
+export const LISTEN_SILENCE_MS = 1100;
+export const LISTEN_MAX_MS = 20000;
+export const LISTEN_IDLE_MS = 45000;
 
 export type CallTurn = { from: "me" | "them"; text: string };
 
@@ -17,14 +27,16 @@ export type VoiceCallInput = {
   name: string;
   personality?: string;
   story?: string;
-  // The live transcript the reply is grounded in: the Message thread's
-  // bubbles or the Love chat's, including turns this call already wrote.
+  // The chat the replies are grounded in: the Message thread's bubbles or the
+  // Love chat's. Read-only for the call — nothing said here is written back.
   history: CallTurn[];
   // The person's assigned voice (src/services/voices.ts); every reply is
   // spoken with it.
   voiceId?: string;
-  // 0 when the call is already running (a Love call restored from the pill);
-  // otherwise the call rings first.
+  // 0 when the call is already running (a Love call restored from the pill,
+  // a Message call re-entered from the thread): no ring, no second opener,
+  // the mic opens right away. Otherwise the call rings first and the
+  // companion greets before anyone is asked to talk.
   connectDelayMs?: number;
 };
 
@@ -33,27 +45,38 @@ export type VoiceCall = {
   connected: boolean;
   keyMissing: boolean;
   notice: string | null;
+  // "Using the phone's voice…" while no speech-console key is saved.
+  voiceHint: string | null;
   heard: string | null;
   reply: string | null;
   // What was said on this call, oldest first. It grounds the next reply and
   // lives on the call only: nothing here is ever written to a chat thread
   // (Maxwell, TestFlight 1.2 (15)).
   transcript: CallTurn[];
-  holdStart: () => void;
-  holdEnd: () => void;
+  muted: boolean;
+  // The one mic control: interrupt while the companion speaks, mute while
+  // listening, open the mic again otherwise.
+  pressMic: () => void;
   hangUp: () => void;
 };
 
+const swallow = () => undefined;
+
 /**
- * The conversation behind a voice or video call. Push-to-talk on purpose:
- * PHNative's iOS Speech recognizer owns AVAudioSession while the mic is
- * open, and AVSpeechSynthesizer needs it back for the reply, so the loop is
- * strictly hold → release → reply → speak. Nothing here listens while the
- * companion talks, and the avatar WebView never sees the audio session.
+ * The conversation behind a voice or video call, hands-free. The loop is
+ * still strictly sequential — PHNative's iOS Speech recognizer owns
+ * AVAudioSession while the mic is open and the synthesizer needs it back for
+ * the reply — but the turns take themselves: the companion greets, the mic
+ * opens, the native side reports when the user has finished, the reply is
+ * spoken, the mic opens again. The mic is never open while the companion is
+ * talking (it would hear itself), so barge-in is a tap: stop the voice, open
+ * the mic.
  *
- * Hang-up cancels every in-flight step. Unmounting without hang-up
- * (minimize) only releases the mic: a reply already on its way still lands
- * in the chat and is spoken, because the call is still on.
+ * Every user action bumps a turn token; an async step only applies its
+ * result if the token it started with is still current, so a tap, mute or
+ * hang-up cancels whatever was in flight. Hang-up silences everything.
+ * Unmount without hang-up (minimize) closes the mic and stops the loop; a
+ * restored call mounts a fresh hook with `connectDelayMs` 0.
  */
 export const useVoiceCall = ({
   name,
@@ -68,160 +91,261 @@ export const useVoiceCall = ({
   );
   const [keyMissing, setKeyMissing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [voiceHint, setVoiceHint] = useState<string | null>(null);
   const [heard, setHeard] = useState<string | null>(null);
   const [reply, setReply] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<CallTurn[]>([]);
+  const [muted, setMuted] = useState(false);
 
   const aliveRef = useRef(true);
   const phaseRef = useRef<CallPhase>(phase);
   phaseRef.current = phase;
+  const mutedRef = useRef(false);
   // The transcript the next reply is grounded in, readable from inside an
   // async step without waiting for a render.
   const transcriptRef = useRef<CallTurn[]>([]);
   // Bumped by every user action; an async step only applies its result when
   // the token it started with is still current.
   const turnRef = useRef(0);
-  const inputRef = useRef({
-    name,
-    personality,
-    story,
-    history,
-    voiceId,
-  });
+  const inputRef = useRef({ name, personality, story, history, voiceId });
   inputRef.current = { name, personality, story, history, voiceId };
-
-  const record = useCallback((...turns: CallTurn[]) => {
-    transcriptRef.current = [...transcriptRef.current, ...turns];
-    setTranscript(transcriptRef.current);
-  }, []);
 
   const current = useCallback(
     (turn: number) => aliveRef.current && turnRef.current === turn,
     []
   );
 
+  const record = useCallback((...turns: CallTurn[]) => {
+    transcriptRef.current = [...transcriptRef.current, ...turns];
+    setTranscript(transcriptRef.current);
+  }, []);
+
+  const speak = useCallback(async (text: string) => {
+    setReply(text);
+    setPhase("speaking");
+    await ttsSpeak({
+      id: `call-${Date.now()}`,
+      text,
+      voiceId: inputRef.current.voiceId,
+    });
+  }, []);
+
+  // Open the mic for one utterance, answer it, speak, and open the mic
+  // again — until the token changes or the recognizer reports a failure.
+  const listen = useCallback(
+    (turn: number) => {
+      if (!current(turn) || mutedRef.current) {
+        return;
+      }
+      setPhase("listening");
+      listenForUtterance({
+        silenceMs: LISTEN_SILENCE_MS,
+        maxMs: LISTEN_MAX_MS,
+        idleMs: LISTEN_IDLE_MS,
+      }).then(async (result) => {
+        if (!current(turn)) {
+          return;
+        }
+        if (!result.ok) {
+          setNotice(result.message);
+          setPhase("ready");
+          return;
+        }
+        if (result.end === "stopped") {
+          // Whoever closed the mic owns the phase now.
+          return;
+        }
+        const userText = result.text.trim();
+        if (!userText) {
+          listen(turn);
+          return;
+        }
+        setHeard(userText);
+        setNotice(null);
+        setPhase("thinking");
+        const input = inputRef.current;
+        try {
+          const replyText = await completeCompanionChat({
+            name: input.name,
+            userText,
+            history: [...input.history, ...transcriptRef.current],
+            personality: input.personality,
+            story: input.story,
+          });
+          if (!current(turn)) {
+            return;
+          }
+          record(
+            { from: "me", text: userText },
+            { from: "them", text: replyText }
+          );
+          setNotice(null);
+          await speak(replyText);
+          if (current(turn)) {
+            listen(turn);
+          }
+        } catch (error) {
+          if (!current(turn)) {
+            return;
+          }
+          record({ from: "me", text: userText });
+          setNotice(companionChatErrorMessage(error));
+          if (
+            error instanceof CompanionChatError &&
+            error.code === "missing_key"
+          ) {
+            // Nothing will answer until a key is saved; stop asking.
+            setPhase("ready");
+            return;
+          }
+          listen(turn);
+        }
+      });
+    },
+    [current, record, speak]
+  );
+
+  // The companion speaks first: Ark's opener in character when a key is
+  // saved, a canned line in their name otherwise. Then the mic opens.
+  const greetThenListen = useCallback(
+    async (turn: number) => {
+      const input = inputRef.current;
+      let opener = localOpener(input.name);
+      let hasKey = false;
+      try {
+        hasKey = hasLlmKey(await loadLlmConfig());
+      } catch {
+        hasKey = false;
+      }
+      if (!current(turn)) {
+        return;
+      }
+      if (hasKey) {
+        try {
+          opener = await completeCompanionChat({
+            name: input.name,
+            userText: "",
+            instruction: OPENER_INSTRUCTION,
+            history: input.history,
+            personality: input.personality,
+            story: input.story,
+          });
+        } catch {
+          opener = localOpener(input.name);
+        }
+        if (!current(turn)) {
+          return;
+        }
+      }
+      record({ from: "them", text: opener });
+      await speak(opener);
+      if (current(turn)) {
+        listen(turn);
+      }
+    },
+    [current, listen, record, speak]
+  );
+
   useEffect(() => {
     let mounted = true;
     loadLlmConfig()
       .then((config) => {
-        if (mounted && !hasLlmKey(config)) {
+        if (!mounted) {
+          return;
+        }
+        if (!hasLlmKey(config)) {
           setKeyMissing(true);
           setNotice(companionChatFailureMessage("missing_key"));
         }
+        const credentials = ttsCredentialsFromConfig(config);
+        const cloudVoice =
+          credentials !== null &&
+          (credentials.kind === "app" || credentials.source === "tts");
+        setVoiceHint(cloudVoice ? null : voiceKeyHint(inputRef.current.name));
       })
-      .catch(() => undefined);
+      .catch(swallow);
     return () => {
       mounted = false;
     };
   }, []);
 
   useEffect(() => {
+    const turn = turnRef.current;
     if (connectDelayMs <= 0) {
+      // Already on the call: cut whatever was still being said when the
+      // screen went away (the mic must never hear the companion), then
+      // listen.
+      ttsStop().catch(swallow);
+      listen(turn);
       return;
     }
     const timer = setTimeout(() => {
-      if (aliveRef.current && phaseRef.current === "connecting") {
-        setPhase("ready");
+      if (!current(turn) || phaseRef.current !== "connecting") {
+        return;
       }
+      setPhase("ready");
+      greetThenListen(turn).catch(swallow);
     }, connectDelayMs);
     return () => clearTimeout(timer);
-  }, [connectDelayMs]);
+  }, [connectDelayMs, current, greetThenListen, listen]);
 
-  // Unmount releases the microphone; only hang-up silences the voice.
+  // Unmount without hang-up (minimize): close the mic and stop the loop. A
+  // reply already being spoken finishes on its own.
   useEffect(() => {
     return () => {
+      aliveRef.current = false;
+      turnRef.current += 1;
       if (phaseRef.current === "listening") {
-        stopVoiceInput().catch(() => undefined);
+        stopVoiceInput().catch(swallow);
       }
     };
   }, []);
 
-  const holdStart = useCallback(() => {
+  const pressMic = useCallback(() => {
     if (!aliveRef.current || phaseRef.current === "connecting") {
       return;
     }
     const turn = (turnRef.current += 1);
-    if (phaseRef.current === "speaking") {
-      // Barge-in: the user talks over the reply.
-      ttsStop().catch(() => undefined);
-    }
     setNotice(null);
-    setPhase("listening");
-    startVoiceInput().then((result) => {
-      if (!current(turn) || result.ok) {
-        return;
+    if (mutedRef.current) {
+      mutedRef.current = false;
+      setMuted(false);
+      if (phaseRef.current === "speaking") {
+        ttsStop().catch(swallow);
       }
-      setNotice(result.message);
-      setPhase("ready");
-    });
-  }, [current]);
-
-  const holdEnd = useCallback(() => {
-    if (!aliveRef.current || phaseRef.current !== "listening") {
+      listen(turn);
       return;
     }
-    const turn = (turnRef.current += 1);
-    setPhase("thinking");
-    stopVoiceInput().then(async (result) => {
-      if (!current(turn)) {
-        return;
-      }
-      if (!result.ok) {
-        setNotice(result.message);
+    switch (phaseRef.current) {
+      case "listening":
+        mutedRef.current = true;
+        setMuted(true);
+        stopVoiceInput().catch(swallow);
         setPhase("ready");
         return;
-      }
-      const userText = result.text.trim();
-      if (!userText) {
-        setNotice(NOTHING_HEARD_COPY);
-        setPhase("ready");
+      case "speaking":
+        // Barge-in: the user talks over the reply.
+        ttsStop().catch(swallow);
+        listen(turn);
         return;
+      case "thinking":
+      case "ready":
+        listen(turn);
+        return;
+      default: {
+        const exhaustive: never = phaseRef.current;
+        return exhaustive;
       }
-      setHeard(userText);
-      const input = inputRef.current;
-      try {
-        const replyText = await completeCompanionChat({
-          name: input.name,
-          userText,
-          history: [...input.history, ...transcriptRef.current],
-          personality: input.personality,
-          story: input.story,
-        });
-        if (!current(turn)) {
-          return;
-        }
-        setReply(replyText);
-        setNotice(null);
-        record(
-          { from: "me", text: userText },
-          { from: "them", text: replyText }
-        );
-        setPhase("speaking");
-        await ttsSpeak({
-          id: `call-${Date.now()}`,
-          text: replyText,
-          voiceId: input.voiceId,
-        });
-        if (current(turn)) {
-          setPhase("ready");
-        }
-      } catch (error) {
-        if (!current(turn)) {
-          return;
-        }
-        setNotice(companionChatErrorMessage(error));
-        setPhase("ready");
-      }
-    });
-  }, [current, record]);
+    }
+  }, [listen]);
 
   const hangUp = useCallback(() => {
     aliveRef.current = false;
     turnRef.current += 1;
     if (phaseRef.current === "listening") {
-      stopVoiceInput().catch(() => undefined);
+      stopVoiceInput().catch(swallow);
     }
-    ttsStop().catch(() => undefined);
+    ttsStop().catch(swallow);
     setPhase("ready");
   }, []);
 
@@ -230,11 +354,12 @@ export const useVoiceCall = ({
     connected: phase !== "connecting",
     keyMissing,
     notice,
+    voiceHint,
     heard,
     reply,
     transcript,
-    holdStart,
-    holdEnd,
+    muted,
+    pressMic,
     hangUp,
   };
 };

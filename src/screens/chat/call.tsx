@@ -3,7 +3,7 @@ import { RouteProp, useNavigation, useRoute } from "@react-navigation/native";
 import { voiceForPerson } from "../../services/voices";
 import { usePersonFace } from "../avatar/use-person-face";
 import { CallBody } from "../call/call-body";
-import { useVoiceCall } from "../call/use-voice-call";
+import { CALL_CONNECT_DELAY_MS, useVoiceCall } from "../call/use-voice-call";
 import { ChatGradient } from "./background";
 import { useChat } from "./store";
 
@@ -17,7 +17,8 @@ export const ChatCallScreen = () => {
   const navigation = useNavigation();
   const route = useRoute<CallRoute>();
   const threadId = route.params.threadId;
-  const { getThread, setInCall, setListen, stopSpeaking } = useChat();
+  const { getThread, setInCall, setListen, stopSpeaking, inCallThreadId } =
+    useChat();
   const thread = getThread(threadId);
   const { face } = usePersonFace(threadId, thread?.kind);
   const name = thread?.name ?? "Kevin";
@@ -28,12 +29,18 @@ export const ChatCallScreen = () => {
     () => (messages ?? []).map((item) => ({ from: item.from, text: item.text })),
     [messages]
   );
+  // Re-entered from the thread while the call is flagged: already on, no
+  // ring and no second greeting.
+  const [connectDelayMs] = useState(() =>
+    inCallThreadId === threadId ? 0 : CALL_CONNECT_DELAY_MS
+  );
   const call = useVoiceCall({
     name,
     personality: thread?.personality,
     story: thread?.description,
     history,
     voiceId: voiceForPerson({ id: threadId, thread }).id,
+    connectDelayMs,
   });
   const [video, setVideo] = useState(false);
   const [elapsed, setElapsed] = useState(0);

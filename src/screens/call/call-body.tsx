@@ -1,7 +1,6 @@
 import React, { ReactNode, useEffect, useRef } from "react";
 import {
   Animated,
-  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -11,13 +10,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors } from "@common/styles/colors";
 import Minimize from "@images/minimize.svg";
 import PhoneDown from "@images/love/phone-down.svg";
+import MicroPhoneMute from "@images/microphone-mute.svg";
 import MicroPhoneUnmute from "@images/microphone-unmute.svg";
 import PhoneUp from "@images/message/phone.svg";
 import type { CompanionFace } from "../avatar/face";
 import { LookFace } from "../avatar/look-face";
 import { s } from "../avatar/scale";
 import { CameraIcon } from "./camera-icon";
-import { callStatusLabel, holdButtonLabel, modeToggle } from "./status";
+import { callStatusLabel, micButtonLabel, modeToggle } from "./status";
 import type { VoiceCall } from "./use-voice-call";
 import { VideoStage } from "./video-stage";
 
@@ -75,6 +75,11 @@ const Captions = ({
           {call.notice}
         </Text>
       </View>
+    ) : null}
+    {call.voiceHint ? (
+      <Text testID="call-voice-hint" style={styles.hint}>
+        {call.voiceHint}
+      </Text>
     ) : null}
   </View>
 );
@@ -140,7 +145,7 @@ export const CallBody = ({
 }: CallBodyProps) => {
   const insets = useSafeAreaInsets();
   const speaking = call.phase === "speaking";
-  const holding = call.phase === "listening";
+  const listening = call.phase === "listening" && !call.muted;
   const toggle = modeToggle(video);
 
   return (
@@ -191,20 +196,27 @@ export const CallBody = ({
 
       <View style={[styles.controls, { bottom: insets.bottom + s(26) }]}>
         <View style={styles.control}>
-          <Pressable
-            testID="call-hold"
-            onPressIn={call.holdStart}
-            onPressOut={call.holdEnd}
+          <TouchableOpacity
+            testID="call-mic"
+            onPress={call.pressMic}
             disabled={!call.connected}
+            activeOpacity={0.85}
             style={[
               styles.round,
-              holding && styles.roundHot,
+              listening && styles.roundHot,
+              call.muted && styles.roundMuted,
               !call.connected && styles.roundDisabled,
             ]}
           >
-            <MicroPhoneUnmute width={s(35)} height={s(35)} />
-          </Pressable>
-          <Text style={styles.controlLabel}>{holdButtonLabel(call.phase)}</Text>
+            {call.muted ? (
+              <MicroPhoneMute width={s(35)} height={s(35)} />
+            ) : (
+              <MicroPhoneUnmute width={s(35)} height={s(35)} />
+            )}
+          </TouchableOpacity>
+          <Text style={styles.controlLabel}>
+            {micButtonLabel({ phase: call.phase, muted: call.muted })}
+          </Text>
         </View>
         <View style={styles.control}>
           <TouchableOpacity
@@ -331,6 +343,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: "center",
   },
+  hint: {
+    maxWidth: s(300),
+    color: colors.grayLighter,
+    fontFamily: "Quicksand-Bold",
+    fontSize: 11,
+    lineHeight: 15,
+    textAlign: "center",
+    opacity: 0.8,
+  },
   controls: {
     position: "absolute",
     left: s(24),
@@ -361,6 +382,11 @@ const styles = StyleSheet.create({
   },
   roundHot: {
     backgroundColor: colors.accentLightPink,
+  },
+  roundMuted: {
+    backgroundColor: "rgba(20, 16, 40, 0.55)",
+    borderWidth: 2,
+    borderColor: "rgba(243, 243, 243, 0.35)",
   },
   roundOn: {
     borderWidth: 2,
