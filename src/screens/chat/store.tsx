@@ -43,9 +43,6 @@ type ChatContextValue = {
   deleteThread: (threadId: string) => void;
   sendText: (threadId: string, text: string) => void;
   sendVoice: (threadId: string) => void;
-  // One spoken turn on a voice/video call: what the user said and what the
-  // companion answered, already spoken by the call, written as transcript.
-  recordCallExchange: (threadId: string, userText: string, reply: string) => void;
   editLastMine: (threadId: string, text: string) => void;
   regenerate: (threadId: string) => void;
   speakMessage: (threadId: string, message: ChatBubble) => void;
@@ -554,42 +551,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     [replyTo, requestBotReply, threads, updateThread]
   );
 
-  // The call already spoke the reply, so this never goes through replyTo
-  // (which would read it aloud again when Listen is on).
-  const recordCallExchange = useCallback(
-    (threadId: string, userText: string, reply: string) => {
-      const mine = userText.trim();
-      const theirs = reply.trim();
-      if (!mine || !theirs) {
-        return;
-      }
-      const sentAt = Date.now();
-      updateThread(threadId, (thread) => ({
-        ...thread,
-        preview: theirs,
-        lastActivityAt: sentAt,
-        messages: [
-          ...thread.messages,
-          {
-            id: nextId(),
-            from: "me",
-            text: mine,
-            sentAt,
-            synced: thread.synced || undefined,
-          },
-          {
-            id: nextId(),
-            from: "them",
-            text: theirs,
-            sentAt,
-            synced: thread.synced || undefined,
-          },
-        ],
-      }));
-    },
-    [updateThread]
-  );
-
   const editLastMine = useCallback(
     (threadId: string, text: string) => {
       const trimmed = text.trim();
@@ -867,7 +828,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       deleteThread,
       sendText,
       sendVoice,
-      recordCallExchange,
       editLastMine,
       regenerate,
       speakMessage,
@@ -894,7 +854,6 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       humanLimitReached,
       inCallThreadId,
       isPremium,
-      recordCallExchange,
       regenerate,
       sendFriendRequest,
       sendText,

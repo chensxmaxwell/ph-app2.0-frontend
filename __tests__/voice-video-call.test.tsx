@@ -446,12 +446,10 @@ describe("Message thread voice call", () => {
     expect(copy).toContain("Kevin is speaking");
     expect(copy).toContain("你好 Kevin");
     expect(copy).toContain("我在呢。");
-    // The spoken turn lands in the thread as a transcript.
+    // The spoken turn stays on the call: the Message thread is untouched.
     const kevin = chat!.getThread("kevin")!;
-    expect(kevin.messages.slice(-2).map((m) => [m.from, m.text])).toEqual([
-      ["me", "你好 Kevin"],
-      ["them", "我在呢。"],
-    ]);
+    expect(kevin.messages.map((m) => m.text)).not.toContain("你好 Kevin");
+    expect(kevin.messages.map((m) => m.text)).not.toContain("我在呢。");
 
     act(() => {
       finishSpeaking?.();
@@ -459,6 +457,61 @@ describe("Message thread voice call", () => {
     await settle();
     expect(texts(tree.root)).toContain("Connected");
     expect(texts(tree.root)).toContain("Hold to talk");
+  });
+
+  it("what is said on a call never enters the Message thread, not during the call and not on hang-up", async () => {
+    // Maxwell, TestFlight 1.2 (15): the call's You / Kevin lines showed up
+    // in the Message chat afterwards. The conversation belongs to the call
+    // UI only; the thread must read exactly as it did before the call.
+    await saveArkKey();
+    const tree = await mountMessageCall("kevin");
+    await connect();
+    const before = chat!.getThread("kevin")!;
+    await holdAndRelease(tree.root);
+    expect(texts(tree.root)).toContain("我在呢。");
+    act(() => {
+      finishSpeaking?.();
+    });
+    await settle();
+
+    press(touchable(tree.root, "call-hangup"));
+    await settle();
+
+    const after = chat!.getThread("kevin")!;
+    expect(after.messages).toEqual(before.messages);
+    expect(after.preview).toBe(before.preview);
+    expect(after.lastActivityAt).toBe(before.lastActivityAt);
+    expect(chat!.inCallThreadId).toBeNull();
+  });
+
+  it("the second turn is still grounded in the first, from the call's own transcript", async () => {
+    await saveArkKey();
+    (global.fetch as jest.Mock)
+      .mockImplementationOnce(() => Promise.resolve(arkReply("Hey you.")))
+      .mockImplementationOnce(() => Promise.resolve(arkReply("Still here.")));
+    stopVoice
+      .mockResolvedValueOnce({ ok: true, text: "Hello Kevin" })
+      .mockResolvedValueOnce({ ok: true, text: "What did I just say?" });
+    const tree = await mountMessageCall("kevin");
+    await connect();
+
+    await holdAndRelease(tree.root);
+    act(() => {
+      finishSpeaking?.();
+    });
+    await settle();
+    await holdAndRelease(tree.root);
+
+    const [, second] = arkBodies();
+    const tail = second.messages.slice(-3);
+    expect(tail).toEqual([
+      { role: "user", content: "Hello Kevin" },
+      { role: "assistant", content: "Hey you." },
+      { role: "user", content: "What did I just say?" },
+    ]);
+    expect(chat!.getThread("kevin")!.messages.map((m) => m.text)).not.toContain(
+      "Hello Kevin"
+    );
   });
 
   it("a release with nothing recognized asks to try again instead of calling Ark", async () => {
@@ -852,11 +905,12 @@ describe("Love voice call", () => {
     expect(mockNavigation.goBack).not.toHaveBeenCalled();
   });
 
-  it("a spoken turn is answered as Chad and lands in the Love transcript", async () => {
+  it("a spoken turn is answered as Chad on the call and never written to the Love chat", async () => {
     await saveArkKey();
     stopVoice.mockResolvedValue({ ok: true, text: "Hey Chad" });
     const tree = await mountLoveCall("chad", "Chad");
     await connect();
+    const before = session!.chat!.messages;
 
     await holdAndRelease(tree.root);
 
@@ -872,14 +926,17 @@ describe("Love voice call", () => {
       voiceId: SEED_VOICES.chad,
     });
     expect(voiceById(SEED_VOICES.chad)?.gender).toBe("male");
-    const bubbles = (session?.chat?.messages ?? []).filter(
-      (item) => item.kind === "bubble"
-    ) as { from: string; text: string }[];
-    expect(bubbles.slice(-2).map((b) => [b.from, b.text])).toEqual([
-      ["me", "Hey Chad"],
-      ["them", "我在呢。"],
-    ]);
     expect(texts(tree.root)).toContain("Chad is speaking");
+    expect(session!.chat!.messages).toEqual(before);
+
+    act(() => {
+      finishSpeaking?.();
+    });
+    await settle();
+    press(touchable(tree.root, "call-hangup"));
+    await settle();
+    expect(session!.chat!.messages).toEqual(before);
+    expect(session!.chat!.inCall).toBe(false);
   });
 
   it("video mode on a Love call shows a crafted companion's look and the front camera", async () => {

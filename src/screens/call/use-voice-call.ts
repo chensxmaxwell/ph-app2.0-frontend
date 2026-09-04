@@ -23,8 +23,6 @@ export type VoiceCallInput = {
   // The person's assigned voice (src/services/voices.ts); every reply is
   // spoken with it.
   voiceId?: string;
-  // Called once per completed turn so the screen can write it to its chat.
-  onExchange?: (userText: string, reply: string) => void;
   // 0 when the call is already running (a Love call restored from the pill);
   // otherwise the call rings first.
   connectDelayMs?: number;
@@ -37,6 +35,10 @@ export type VoiceCall = {
   notice: string | null;
   heard: string | null;
   reply: string | null;
+  // What was said on this call, oldest first. It grounds the next reply and
+  // lives on the call only: nothing here is ever written to a chat thread
+  // (Maxwell, TestFlight 1.2 (15)).
+  transcript: CallTurn[];
   holdStart: () => void;
   holdEnd: () => void;
   hangUp: () => void;
@@ -59,7 +61,6 @@ export const useVoiceCall = ({
   story,
   history,
   voiceId,
-  onExchange,
   connectDelayMs = CALL_CONNECT_DELAY_MS,
 }: VoiceCallInput): VoiceCall => {
   const [phase, setPhase] = useState<CallPhase>(
@@ -69,10 +70,14 @@ export const useVoiceCall = ({
   const [notice, setNotice] = useState<string | null>(null);
   const [heard, setHeard] = useState<string | null>(null);
   const [reply, setReply] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<CallTurn[]>([]);
 
   const aliveRef = useRef(true);
   const phaseRef = useRef<CallPhase>(phase);
   phaseRef.current = phase;
+  // The transcript the next reply is grounded in, readable from inside an
+  // async step without waiting for a render.
+  const transcriptRef = useRef<CallTurn[]>([]);
   // Bumped by every user action; an async step only applies its result when
   // the token it started with is still current.
   const turnRef = useRef(0);
@@ -82,9 +87,13 @@ export const useVoiceCall = ({
     story,
     history,
     voiceId,
-    onExchange,
   });
-  inputRef.current = { name, personality, story, history, voiceId, onExchange };
+  inputRef.current = { name, personality, story, history, voiceId };
+
+  const record = useCallback((...turns: CallTurn[]) => {
+    transcriptRef.current = [...transcriptRef.current, ...turns];
+    setTranscript(transcriptRef.current);
+  }, []);
 
   const current = useCallback(
     (turn: number) => aliveRef.current && turnRef.current === turn,
@@ -174,7 +183,7 @@ export const useVoiceCall = ({
         const replyText = await completeCompanionChat({
           name: input.name,
           userText,
-          history: input.history,
+          history: [...input.history, ...transcriptRef.current],
           personality: input.personality,
           story: input.story,
         });
@@ -183,7 +192,10 @@ export const useVoiceCall = ({
         }
         setReply(replyText);
         setNotice(null);
-        input.onExchange?.(userText, replyText);
+        record(
+          { from: "me", text: userText },
+          { from: "them", text: replyText }
+        );
         setPhase("speaking");
         await ttsSpeak({
           id: `call-${Date.now()}`,
@@ -201,7 +213,7 @@ export const useVoiceCall = ({
         setPhase("ready");
       }
     });
-  }, [current]);
+  }, [current, record]);
 
   const hangUp = useCallback(() => {
     aliveRef.current = false;
@@ -220,6 +232,7 @@ export const useVoiceCall = ({
     notice,
     heard,
     reply,
+    transcript,
     holdStart,
     holdEnd,
     hangUp,
