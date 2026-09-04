@@ -9,7 +9,7 @@ import React, {
   useState,
 } from "react";
 import { ttsSpeak, ttsStop } from "../../services/tts";
-import { voiceForPerson } from "../../services/voices";
+import { refreshedSeedVoiceId, voiceForPerson } from "../../services/voices";
 import {
   companionChatErrorMessage,
   completeCompanionChat,
@@ -177,9 +177,16 @@ const mergeSeedThreads = (
       }
       continue;
     }
+    let next = existing;
+    // A seeded person still on a retired default voice follows the current
+    // one; a voice drawn for a crafted Kevin stays.
+    const voiceId = refreshedSeedVoiceId(seed.id, existing.voiceId);
+    if (voiceId !== existing.voiceId) {
+      next = { ...next, voiceId };
+    }
     if (!existing.messages.length && seed.messages.length) {
-      byId.set(seed.id, {
-        ...existing,
+      next = {
+        ...next,
         preview: existing.preview || seed.preview,
         lastActivityAt: seed.lastActivityAt,
         messages: seed.messages,
@@ -188,7 +195,10 @@ const mergeSeedThreads = (
             ? seed.request
             : existing.request,
         kind: existing.kind === "human" && seed.kind === "bot" ? seed.kind : existing.kind,
-      });
+      };
+    }
+    if (next !== existing) {
+      byId.set(seed.id, next);
     }
   }
   return dedupeThreads(Array.from(byId.values()));

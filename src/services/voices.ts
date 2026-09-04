@@ -12,6 +12,12 @@ import type { ChatThread } from "../screens/chat/types";
  * Female companions get female voices, Male companions male voices.
  * Non-binary companions draw from both pools (there is no neutral Doubao
  * pool worth the name); the draw is still random and still persisted.
+ *
+ * The pools mix the Chinese 2.0 speakers (they read 中英混 on their own) with
+ * the three American-English 2.0 speakers (Tim, Dacey, Stokie), all on the
+ * same seed-tts-2.0 resource. Maxwell talks to the seeded people in English,
+ * so Kevin and Amanda default to the English speakers (TestFlight 1.2 (15):
+ * a Chinese speaker reading English was part of "the voice sounds bad").
  */
 export type VoiceGender = "female" | "male";
 
@@ -52,6 +58,16 @@ export const FEMALE_VOICES: readonly Voice[] = [
     gender: "female",
   },
   { id: "zh_female_cancan_uranus_bigtts", label: "灿灿 2.0", gender: "female" },
+  {
+    id: "en_female_dacey_uranus_bigtts",
+    label: "Dacey (US English)",
+    gender: "female",
+  },
+  {
+    id: "en_female_stokie_uranus_bigtts",
+    label: "Stokie (US English)",
+    gender: "female",
+  },
 ];
 
 export const MALE_VOICES: readonly Voice[] = [
@@ -69,16 +85,53 @@ export const MALE_VOICES: readonly Voice[] = [
     label: "少年梓辛 2.0",
     gender: "male",
   },
+  {
+    id: "en_male_tim_uranus_bigtts",
+    label: "Tim (US English)",
+    gender: "male",
+  },
 ];
 
 export const VOICES: readonly Voice[] = [...FEMALE_VOICES, ...MALE_VOICES];
 
-// The seeded people's fixed voices: Amanda a woman, Kevin and Chad men.
+// The seeded people's fixed voices. Kevin and Amanda speak American English
+// (Tim: clear, friendly mid-range; Dacey: warm, engaging). Chad, the direct
+// and competitive one, gets 刘飞 — the clear, energetic Chinese 2.0 male; Tim
+// is the only English 2.0 male and Kevin has him.
 export const SEED_VOICES = {
-  kevin: "zh_male_m191_uranus_bigtts",
-  chad: "zh_male_ruyayichen_uranus_bigtts",
-  amanda: "zh_female_xiaohe_uranus_bigtts",
+  kevin: "en_male_tim_uranus_bigtts",
+  chad: "zh_male_liufei_uranus_bigtts",
+  amanda: "en_female_dacey_uranus_bigtts",
 } as const;
+
+// What the seeds used to default to. A seeded thread persisted with one of
+// these never had a voice picked for it (there is no picker), so it follows
+// the current default when the chat hydrates.
+export const RETIRED_SEED_VOICES: Record<
+  keyof typeof SEED_VOICES,
+  readonly string[]
+> = {
+  kevin: ["zh_male_m191_uranus_bigtts"],
+  chad: ["zh_male_ruyayichen_uranus_bigtts"],
+  amanda: ["zh_female_xiaohe_uranus_bigtts"],
+};
+
+// The voice a seeded thread should carry: the current default when it has
+// none or a retired one, otherwise whatever it has. Other threads are left
+// exactly as they are.
+export const refreshedSeedVoiceId = (
+  threadId: string,
+  current: string | undefined
+): string | undefined => {
+  if (!(threadId in SEED_VOICES)) {
+    return current;
+  }
+  const seed = threadId as keyof typeof SEED_VOICES;
+  if (!current || RETIRED_SEED_VOICES[seed].includes(current)) {
+    return SEED_VOICES[seed];
+  }
+  return current;
+};
 
 export const voiceById = (id?: string): Voice | undefined =>
   id ? VOICES.find((voice) => voice.id === id) : undefined;

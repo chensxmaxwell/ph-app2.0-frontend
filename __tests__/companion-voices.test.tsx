@@ -11,12 +11,16 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { writeSessionUser } from "../src/backend/session";
 import { seedThreads } from "../src/backend/chat-seed";
+import { saveChat } from "../src/backend/store";
+import { resourceIdForVoice } from "../src/services/cloud-tts";
 import {
   FEMALE_VOICES,
   MALE_VOICES,
+  RETIRED_SEED_VOICES,
   SEED_VOICES,
   VOICES,
   assignVoiceForGender,
+  refreshedSeedVoiceId,
   voiceById,
   voiceForPerson,
   voiceMatchesGender,
@@ -155,14 +159,32 @@ describe("voice pools", () => {
     expect(FEMALE_VOICES.length).toBeGreaterThanOrEqual(4);
     expect(MALE_VOICES.length).toBeGreaterThanOrEqual(4);
     FEMALE_VOICES.forEach((voice) => {
-      expect(voice.id).toMatch(/^zh_female_[a-z0-9]+_uranus_bigtts$/);
+      expect(voice.id).toMatch(/^(zh|en)_female_[a-z0-9]+_uranus_bigtts$/);
       expect(voice.gender).toBe("female");
+      expect(resourceIdForVoice(voice.id)).toBe("seed-tts-2.0");
     });
     MALE_VOICES.forEach((voice) => {
-      expect(voice.id).toMatch(/^zh_male_[a-z0-9]+_uranus_bigtts$/);
+      expect(voice.id).toMatch(/^(zh|en)_male_[a-z0-9]+_uranus_bigtts$/);
       expect(voice.gender).toBe("male");
+      expect(resourceIdForVoice(voice.id)).toBe("seed-tts-2.0");
     });
     expect(new Set(VOICES.map((voice) => voice.id)).size).toBe(VOICES.length);
+  });
+
+  it("carries the English Seed-TTS 2.0 speakers, one per gender at least", () => {
+    // Maxwell talks to his companions in English (TestFlight 1.2 (15)); a
+    // Chinese speaker reading English is the muddy part of "the voice sounds
+    // bad". Tim / Dacey / Stokie are the 2.0 speakers of American English on
+    // the same seed-tts-2.0 resource.
+    expect(MALE_VOICES.map((voice) => voice.id)).toContain(
+      "en_male_tim_uranus_bigtts"
+    );
+    expect(FEMALE_VOICES.map((voice) => voice.id)).toContain(
+      "en_female_dacey_uranus_bigtts"
+    );
+    expect(FEMALE_VOICES.map((voice) => voice.id)).toContain(
+      "en_female_stokie_uranus_bigtts"
+    );
   });
 
   it("Female draws from the female pool, Male from the male pool, Non-binary from both", () => {
@@ -206,6 +228,57 @@ describe("seeded people", () => {
     expect(byId.get("amanda")?.voiceId).toBe(SEED_VOICES.amanda);
     expect(byId.get("kevin")?.voiceId).toBe(SEED_VOICES.kevin);
     expect(byId.get("chad")?.voiceId).toBe(SEED_VOICES.chad);
+  });
+
+  it("Kevin and Amanda speak American English (Tim, Dacey); Chad the clear, energetic 刘飞", () => {
+    expect(SEED_VOICES.kevin).toBe("en_male_tim_uranus_bigtts");
+    expect(SEED_VOICES.amanda).toBe("en_female_dacey_uranus_bigtts");
+    expect(SEED_VOICES.chad).toBe("zh_male_liufei_uranus_bigtts");
+    // The three seeds never share a voice.
+    expect(new Set(Object.values(SEED_VOICES)).size).toBe(3);
+  });
+
+  it("a seeded thread still on a retired default voice takes the current one; a chosen voice stays", () => {
+    // The voice a seeded person had before this change is not a choice
+    // anyone made (there is no voice picker), so it follows the new default.
+    expect(RETIRED_SEED_VOICES.kevin).toContain("zh_male_m191_uranus_bigtts");
+    expect(RETIRED_SEED_VOICES.amanda).toContain(
+      "zh_female_xiaohe_uranus_bigtts"
+    );
+    expect(RETIRED_SEED_VOICES.chad).toContain(
+      "zh_male_ruyayichen_uranus_bigtts"
+    );
+    expect(refreshedSeedVoiceId("kevin", "zh_male_m191_uranus_bigtts")).toBe(
+      SEED_VOICES.kevin
+    );
+    expect(refreshedSeedVoiceId("kevin", undefined)).toBe(SEED_VOICES.kevin);
+    expect(refreshedSeedVoiceId("kevin", "zh_male_dayi_uranus_bigtts")).toBe(
+      "zh_male_dayi_uranus_bigtts"
+    );
+    expect(
+      refreshedSeedVoiceId("companion-nova", "zh_male_m191_uranus_bigtts")
+    ).toBe("zh_male_m191_uranus_bigtts");
+  });
+
+  it("a chat blob from before the change hydrates Kevin with Tim and leaves a crafted voice alone", async () => {
+    const [kevin, chad, amanda] = seedThreads();
+    await saveChat("demo", {
+      threads: [
+        { ...kevin, voiceId: "zh_male_m191_uranus_bigtts" },
+        { ...chad, voiceId: "zh_male_dayi_uranus_bigtts" },
+        { ...amanda, voiceId: undefined },
+      ],
+      isPremium: false,
+      deletedThreadIds: [],
+    });
+    await mount(<Probe />);
+
+    expect(chat!.getThread("kevin")!.voiceId).toBe(SEED_VOICES.kevin);
+    expect(chat!.getThread("chad")!.voiceId).toBe("zh_male_dayi_uranus_bigtts");
+    expect(chat!.getThread("amanda")!.voiceId).toBe(SEED_VOICES.amanda);
+    expect(voiceForPerson({ thread: chat!.getThread("kevin")! }).id).toBe(
+      "en_male_tim_uranus_bigtts"
+    );
   });
 
   it("a thread persisted before voices existed still resolves to a voice of its gender, the same one every time", () => {
