@@ -1,4 +1,11 @@
-import { nativeSpeak, nativeStartVoiceInput, nativeStopVoiceInput, nativeStopSpeaking } from "../native/ph-native";
+import {
+  NativeSpeakOptions,
+  nativePlayAudio,
+  nativeSpeak,
+  nativeStartVoiceInput,
+  nativeStopVoiceInput,
+  nativeStopSpeaking,
+} from "../native/ph-native";
 
 export type VoiceInputResult =
   | { ok: true; text: string }
@@ -48,11 +55,22 @@ export const stopVoiceInput = async (): Promise<VoiceInputResult> => {
   }
 };
 
-export const speakWithNativeTts = async (text: string) => {
+export const speakWithNativeTts = async (
+  text: string,
+  options: NativeSpeakOptions = {}
+) => {
   try {
-    await nativeSpeak(text);
+    await nativeSpeak(text, options);
   } catch {
     // Listen must never crash the process.
+  }
+};
+
+export const playAudioWithNative = async (chunks: string[]) => {
+  try {
+    return await nativePlayAudio(chunks);
+  } catch {
+    return false;
   }
 };
 

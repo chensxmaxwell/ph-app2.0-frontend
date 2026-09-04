@@ -199,8 +199,8 @@ export const useAvatarEngine = () => {
   return { ...state, retry: retryAvatarEngine };
 };
 
-const LOAD_TIMEOUT_MS = 15000;
-const metroHint = (uri: string) =>
+export const LOAD_TIMEOUT_MS = 15000;
+export const metroHint = (uri: string) =>
   `Phone must reach Metro at ${uri.replace(/\/ph-avatar\/.*$/, "")}. Same Wi‑Fi as the Mac running npm start.`;
 export const AvatarEngineHost = () => {
   const webRef = useRef<WebView>(null);

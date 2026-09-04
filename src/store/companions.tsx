@@ -26,6 +26,9 @@ export type Companion = AvatarLook & {
   passionateTender: number;
   dominantSubmissive: number;
   experimentalVanilla: number;
+  // Doubao speaker id assigned when the character was created; the thread
+  // carries the same id. See src/services/voices.ts.
+  voiceId?: string;
 };
 
 type CompanionsContextValue = {

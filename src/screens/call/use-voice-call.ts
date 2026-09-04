@@ -20,6 +20,9 @@ export type VoiceCallInput = {
   // The live transcript the reply is grounded in: the Message thread's
   // bubbles or the Love chat's, including turns this call already wrote.
   history: CallTurn[];
+  // The person's assigned voice (src/services/voices.ts); every reply is
+  // spoken with it.
+  voiceId?: string;
   // Called once per completed turn so the screen can write it to its chat.
   onExchange?: (userText: string, reply: string) => void;
   // 0 when the call is already running (a Love call restored from the pill);
@@ -55,6 +58,7 @@ export const useVoiceCall = ({
   personality,
   story,
   history,
+  voiceId,
   onExchange,
   connectDelayMs = CALL_CONNECT_DELAY_MS,
 }: VoiceCallInput): VoiceCall => {
@@ -72,8 +76,15 @@ export const useVoiceCall = ({
   // Bumped by every user action; an async step only applies its result when
   // the token it started with is still current.
   const turnRef = useRef(0);
-  const inputRef = useRef({ name, personality, story, history, onExchange });
-  inputRef.current = { name, personality, story, history, onExchange };
+  const inputRef = useRef({
+    name,
+    personality,
+    story,
+    history,
+    voiceId,
+    onExchange,
+  });
+  inputRef.current = { name, personality, story, history, voiceId, onExchange };
 
   const current = useCallback(
     (turn: number) => aliveRef.current && turnRef.current === turn,
@@ -174,7 +185,11 @@ export const useVoiceCall = ({
         setNotice(null);
         input.onExchange?.(userText, replyText);
         setPhase("speaking");
-        await ttsSpeak({ id: `call-${Date.now()}`, text: replyText });
+        await ttsSpeak({
+          id: `call-${Date.now()}`,
+          text: replyText,
+          voiceId: input.voiceId,
+        });
         if (current(turn)) {
           setPhase("ready");
         }

@@ -9,6 +9,7 @@ import React, {
   useState,
 } from "react";
 import { ttsSpeak, ttsStop } from "../../services/tts";
+import { voiceForPerson } from "../../services/voices";
 import {
   companionChatErrorMessage,
   completeCompanionChat,
@@ -62,6 +63,7 @@ type ChatContextValue = {
       birthday: string;
       description: string;
       personality?: string;
+      voiceId?: string;
     }
   ) => void;
   upsertCompanionThread: (companion: {
@@ -71,6 +73,7 @@ type ChatContextValue = {
     birthday: string;
     personalities: string[];
     story: string;
+    voiceId?: string;
   }) => void;
   humanLimitReached: (thread: ChatThread) => boolean;
   chatNotice: (threadId: string) => string | undefined;
@@ -309,7 +312,11 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         return;
       }
       setSpeakingId(message.id);
-      ttsSpeak({ id: message.id, text: message.text }).finally(() => {
+      ttsSpeak({
+        id: message.id,
+        text: message.text,
+        voiceId: voiceForPerson({ thread }).id,
+      }).finally(() => {
         setSpeakingId((current) => (current === message.id ? null : current));
       });
     },
@@ -334,9 +341,13 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
             (item) => item.from === "them" && !item.voice
           );
           const last = them?.[them.length - 1];
-          if (last) {
+          if (last && thread) {
             setSpeakingId(last.id);
-            ttsSpeak({ id: last.id, text: last.text }).finally(() => {
+            ttsSpeak({
+              id: last.id,
+              text: last.text,
+              voiceId: voiceForPerson({ thread }).id,
+            }).finally(() => {
               setSpeakingId((id) => (id === last.id ? null : id));
             });
           }
@@ -744,6 +755,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         birthday: string;
         description: string;
         personality?: string;
+        voiceId?: string;
       }
     ) => {
       // Editing a persona is not chat activity: the Message row keeps the
@@ -755,6 +767,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
         birthday: input.birthday,
         description: input.description,
         personality: input.personality ?? thread.personality,
+        voiceId: input.voiceId ?? thread.voiceId,
         preview: thread.preview,
       }));
     },
@@ -769,6 +782,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       birthday: string;
       personalities: string[];
       story: string;
+      voiceId?: string;
     }) => {
       const name = companion.name.trim() || "Kevin";
       const personality = companion.personalities.join(", ");
@@ -786,6 +800,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
                   birthday: companion.birthday,
                   description: companion.story,
                   personality,
+                  voiceId: companion.voiceId ?? thread.voiceId,
                 }
               : thread
           );
@@ -808,6 +823,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
             birthday: companion.birthday,
             description: companion.story,
             personality,
+            voiceId: companion.voiceId,
             messages: [
               {
                 id: nextId(),
