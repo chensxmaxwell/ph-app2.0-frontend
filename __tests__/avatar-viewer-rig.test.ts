@@ -58,6 +58,9 @@ type ViewerRig = {
   UPPER_LID_DROP: number;
   MAX_GAZE_ANGLE: number;
   EYE_SCALE: number;
+  EYE_SCALE_MIN: number;
+  EYE_SCALE_MAX: number;
+  eyeScaleFor: (eyeSize: number) => number;
   applyEyeScale: (bones: unknown[], scale: number) => void;
   upperLidDrop: (eyeSize: number) => number;
   aimBoneAt: (
@@ -270,19 +273,87 @@ describe("eyes", () => {
     expect(rig.upperLidDrop(9)).toBe(rig.upperLidDrop(1));
   });
 
-  it("scales the whole eyeball down in its socket by 25-35%, not just the painted iris", () => {
+  it("shrinks the default whole eye below the 1.2 (14) fixed 0.70 so a mid Size reads human-proportioned", () => {
     // TestFlight 1.2 (13): lowered lids, converged gaze and a 0.31 iris still
-    // read as too-large eyes (整个眼睛的缩小, not another pupil shrink). Eyes_0
-    // is two 22.2 mm-radius spheres on eyeRoot_l/r - 44 mm across on a 26 cm
-    // head. The eye bones are scaled so ball, Head_0 eye cap and the lids
-    // skinned to them shrink together around the eye centre.
-    expect(rig.EYE_SCALE).toBeGreaterThanOrEqual(0.65);
-    expect(rig.EYE_SCALE).toBeLessThanOrEqual(0.75);
-    // Not 1.0 by a rounding accident, and not a pinprick.
+    // read as too-large eyes (整个眼睛的缩小, not another pupil shrink), so the
+    // eye bones were scaled by a fixed 0.70. 1.2 (14): still "a bit large".
+    // Eyes_0 is two 22.2 mm-radius spheres on eyeRoot_l/r - 44.4 mm across on
+    // a 26 cm head; a real eye is 24 mm, i.e. 0.54. The default look (Eyes
+    // Size 0.5) must sit clearly under the old 0.70 without becoming a
+    // pinprick, and EYE_SCALE stays the name for that default.
+    const PREVIOUS_FIXED_EYE_SCALE = 0.7;
+    expect(rig.EYE_SCALE).toBeCloseTo(rig.eyeScaleFor(0.5), 9);
+    expect(rig.EYE_SCALE).toBeLessThanOrEqual(PREVIOUS_FIXED_EYE_SCALE - 0.05);
+    expect(rig.EYE_SCALE).toBeGreaterThanOrEqual(0.5);
+    // Not 1.0 by a rounding accident.
     expect(rig.EYE_SCALE).not.toBeCloseTo(1, 1);
   });
 
-  it("applyEyeScale shrinks skinned eyeball vertices about the eye bone origin, blends lid vertices by weight and leaves the head alone", () => {
+  it("maps the Eyes Size slider onto a whole-eye scale range wide enough to see", () => {
+    // 1.2 (14): Size only repainted the iris (irisSize 0.82..1.10) and opened
+    // the lid by 0.08 while the eyeball stayed at 0.70 at every slider
+    // position, so min and max looked the same (Eyes_0 31.2 -> 31.7 mm tall).
+    // Size 0 must be clearly smaller than the old fixed eye, Size 1 may go a
+    // little past it but never back toward the 1.0 saucer.
+    const min = rig.eyeScaleFor(0);
+    const max = rig.eyeScaleFor(1);
+    expect(min).toBe(rig.EYE_SCALE_MIN);
+    expect(max).toBe(rig.EYE_SCALE_MAX);
+    expect(min).toBeLessThanOrEqual(0.5);
+    expect(min).toBeGreaterThanOrEqual(0.35);
+    expect(max).toBeGreaterThan(rig.EYE_SCALE);
+    expect(max).toBeLessThanOrEqual(0.85);
+    // The spread: the eye grows by at least half from min to max.
+    expect(max - min).toBeGreaterThanOrEqual(0.25);
+    expect(max / min).toBeGreaterThanOrEqual(1.5);
+    // Monotonic and linear, so every slider step is the same visible step.
+    const steps = [0, 0.25, 0.5, 0.75, 1].map((size) => rig.eyeScaleFor(size));
+    for (let i = 1; i < steps.length; i += 1) {
+      expect(steps[i]).toBeGreaterThan(steps[i - 1]);
+      expect(steps[i] - steps[i - 1]).toBeCloseTo((max - min) / 4, 9);
+    }
+    // Out-of-range or missing slider values clamp instead of running past
+    // the range or producing a NaN bone scale.
+    expect(rig.eyeScaleFor(-2)).toBe(min);
+    expect(rig.eyeScaleFor(7)).toBe(max);
+    expect(rig.eyeScaleFor(NaN)).toBe(min);
+  });
+
+  it("re-applies the eye scale from the look's eyeSize whenever a look lands, not once at load", () => {
+    // The 1.2 (14) viewer called applyEyeScale(eyeBones, EYE_SCALE) once after
+    // retargetSkeletons and never again; applyLook (every slider drag from
+    // AvatarEngineHost) only touched morphs and materials. The scale has to
+    // follow the look, on load and on every applyLook, through eyeScaleFor.
+    const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+    const applyLookStart = html.indexOf("function applyLook(");
+    const applyLookEnd = html.indexOf("function cameraDistance(");
+    expect(applyLookStart).toBeGreaterThan(0);
+    expect(applyLookEnd).toBeGreaterThan(applyLookStart);
+    const applyLookBody = html.slice(applyLookStart, applyLookEnd);
+    expect(applyLookBody).toMatch(
+      /applyEyeScale\(eyeBones,\s*eyeScaleFor\(look\.eyeSize\)\)/
+    );
+    // Both the load path and applyLook go through the mapping; no fixed
+    // constant is applied to the bones anywhere.
+    expect(html).not.toMatch(/applyEyeScale\(eyeBones,\s*EYE_SCALE\)/);
+    expect(html).toMatch(/applyEyeScale\(eyeBones,\s*eyeScaleFor\(/);
+  });
+
+  it("keeps the 1.2 (13) lid, gaze and iris constants: Size moves the eyeball scale, not the horror-eye fixes", () => {
+    expect(rig.UPPER_LID_DROP).toBe(0.2);
+    expect(rig.MAX_GAZE_ANGLE).toBe(0.24);
+    expect(rig.IRIS_RADIUS).toBe(0.31);
+    expect(rig.PUPIL_RADIUS).toBe(0.115);
+    expect(rig.upperLidDrop(0)).toBeCloseTo(0.2, 9);
+    expect(rig.upperLidDrop(0.5)).toBeCloseTo(0.16, 9);
+    expect(rig.upperLidDrop(1)).toBeCloseTo(0.12, 9);
+  });
+
+  // A head bone with one eye bone under it and a three-vertex SkinnedMesh.
+  // Vertex 0: on the eyeball surface, fully on the eye bone (Eyes_0 / the
+  // Head_0 cap). Vertex 1: a lid-margin vertex 1.2 r out, weighted 0.8 eye /
+  // 0.2 head like the BoZo lids. Vertex 2: brow skin on the head bone only.
+  const skinnedEyeFixture = () => {
     const root = new THREE.Group();
     const head = new THREE.Bone();
     head.name = "head";
@@ -295,9 +366,6 @@ describe("eyes", () => {
     root.updateMatrixWorld(true);
     const centre = eye.getWorldPosition(new THREE.Vector3());
     const r = 0.0222;
-    // Vertex 0: on the eyeball surface, fully on the eye bone (Eyes_0 / the
-    // Head_0 cap). Vertex 1: a lid-margin vertex 1.2 r out, weighted 0.8 eye /
-    // 0.2 head like the BoZo lids. Vertex 2: brow skin on the head bone only.
     const surface = centre.clone().add(new THREE.Vector3(0, 0, r));
     const lid = centre.clone().add(new THREE.Vector3(0, r * 1.2, 0));
     const brow = centre.clone().add(new THREE.Vector3(0, 0.03, 0.01));
@@ -327,13 +395,17 @@ describe("eyes", () => {
     );
     mesh.bind(new THREE.Skeleton(bones, inverses), new THREE.Matrix4());
     root.add(mesh);
-
     const skinned = (index: number) => {
       root.updateMatrixWorld(true);
       const out = new THREE.Vector3();
       mesh.boneTransform(index, out);
       return mesh.localToWorld(out);
     };
+    return { root, head, eye, centre, r, brow, skinned };
+  };
+
+  it("applyEyeScale shrinks skinned eyeball vertices about the eye bone origin, blends lid vertices by weight and leaves the head alone", () => {
+    const { head, eye, centre, r, brow, skinned } = skinnedEyeFixture();
     expect(skinned(0).distanceTo(centre)).toBeCloseTo(r, 6);
 
     rig.applyEyeScale([eye], rig.EYE_SCALE);
@@ -358,6 +430,25 @@ describe("eyes", () => {
     rig.applyEyeScale([eye], rig.EYE_SCALE);
     expect(eye.scale.x).toBeCloseTo(rig.EYE_SCALE, 9);
   });
+
+  it.each([0, 0.5, 1])(
+    "applyEyeScale at Eyes Size %d shrinks the ball to eyeScaleFor and keeps the lid margin outside it",
+    (size) => {
+      const scale = rig.eyeScaleFor(size);
+      const { head, eye, centre, r, brow, skinned } = skinnedEyeFixture();
+      rig.applyEyeScale([eye], scale);
+      expect(eye.scale.x).toBeCloseTo(scale, 9);
+      expect(head.scale.x).toBe(1);
+      expect(
+        eye.getWorldPosition(new THREE.Vector3()).distanceTo(centre)
+      ).toBeLessThan(1e-9);
+      expect(skinned(0).distanceTo(centre)).toBeCloseTo(r * scale, 6);
+      const lidRadius = skinned(1).distanceTo(centre);
+      expect(lidRadius).toBeCloseTo(r * 1.2 * (1 - 0.8 * (1 - scale)), 6);
+      expect(lidRadius).toBeGreaterThan(r * scale);
+      expect(skinned(2).distanceTo(brow)).toBeLessThan(1e-6);
+    }
+  );
 
   it("aiming the eye keeps the eyeball scale", () => {
     const eye = new THREE.Bone();

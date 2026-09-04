@@ -513,13 +513,31 @@
   // TestFlight 1.2 (13): with the lids, gaze and 0.31 iris above, Maxwell
   // still read the eyes as too big - the whole eye, not the pupil. Eyes_0 is
   // two 22.2mm-radius spheres (44mm across on a 26cm head; a real eye is
-  // 24mm). The eye bones are scaled by this factor, so the eyeball, the
-  // Head_0 eye cap (both skinned 1.0 to eyeRoot_l/r) and the lid margins
-  // (0.8-0.99 to the eye bone, fading to 0 by the brow) all shrink about the
-  // eye centre together: the aperture closes in with the ball, the brow and
-  // cheek stay, and the iris keeps its share of the smaller opening. 0.70 is
-  // a 30% smaller eye (31mm across).
-  var EYE_SCALE = 0.70;
+  // 24mm). The eye bones are scaled, so the eyeball, the Head_0 eye cap
+  // (both skinned 1.0 to eyeRoot_l/r) and the lid margins (0.8-0.99 to the
+  // eye bone, fading to 0 by the brow) all shrink about the eye centre
+  // together: the aperture closes in with the ball, the brow and cheek stay,
+  // and the iris keeps its share of the smaller opening.
+  //
+  // 1.2 (14) shipped that as a fixed 0.70 (31mm eye) while the Eyes "Size"
+  // slider only repainted the iris (irisSize 0.82..1.10) and opened the lid
+  // by 0.08, so Size min and max looked alike (Eyes_0 31.2 -> 31.7mm tall)
+  // and both still read a bit large. Size now drives this scale, linearly
+  // from EYE_SCALE_MIN (Size 0: 0.42, an 18.6mm eye, lid line still drawn)
+  // to EYE_SCALE_MAX (Size 1: 0.74, 32.9mm, a little past the old fixed
+  // eye); the default look (Size 0.5) lands on EYE_SCALE 0.58 (25.8mm,
+  // close to a real 24mm eye). Re-applied on every applyLook, not once at
+  // load. Below ~0.40 the lid falloff stretches so thin the eye reads as a
+  // bare bead; above ~0.80 it is the 1.2 (11) saucer again.
+  var EYE_SCALE_MIN = 0.42;
+  var EYE_SCALE_MAX = 0.74;
+
+  function eyeScaleFor(eyeSize) {
+    return EYE_SCALE_MIN + clamp01(eyeSize) * (EYE_SCALE_MAX - EYE_SCALE_MIN);
+  }
+
+  // The default (Size 0.5) whole-eye scale, 0.58.
+  var EYE_SCALE = eyeScaleFor(0.5);
 
   // Uniform scale on the eye bones. Absolute, so it can be re-applied; the
   // gaze solver only writes the quaternion and leaves it in place.
@@ -839,6 +857,7 @@
     if (!ready) { pendingLook = look; return; }
     applyVisibility(look);
     applyOutfitPose(look.appearanceIndex | 0);
+    applyEyeScale(eyeBones, eyeScaleFor(look.eyeSize));
     morphMeshes.forEach(function (mesh) { applyMeshLook(mesh, look); });
     tintLook(look);
     frameCamera(look.viewMode === "bust" ? "bust" : "full");
@@ -964,7 +983,7 @@
             }
             if (isPoseArmBone(boneName)) armBones.push(bone);
           });
-          applyEyeScale(eyeBones, EYE_SCALE);
+          applyEyeScale(eyeBones, eyeScaleFor(look.eyeSize));
           modelRoot.traverse(function (obj) {
             if (!obj.isMesh) return;
             obj.frustumCulled = !obj.isSkinnedMesh;
@@ -1176,6 +1195,9 @@
     UPPER_LID_DROP: UPPER_LID_DROP,
     MAX_GAZE_ANGLE: MAX_GAZE_ANGLE,
     EYE_SCALE: EYE_SCALE,
+    EYE_SCALE_MIN: EYE_SCALE_MIN,
+    EYE_SCALE_MAX: EYE_SCALE_MAX,
+    eyeScaleFor: eyeScaleFor,
     applyEyeScale: applyEyeScale,
     upperLidDrop: upperLidDrop,
     aimBoneAt: aimBoneAt,
