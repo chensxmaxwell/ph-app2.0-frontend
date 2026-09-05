@@ -18,7 +18,7 @@ export const avatarViewerUri = (generation = 0) => {
   const host = match[2];
   const metroPort = match[3] || "8081";
   const retry = generation > 0 ? `&r=${generation}` : "";
-  return `${protocol}://${host}:${metroPort}/ph-avatar/viewer.html?v=bozo33${retry}`;
+  return `${protocol}://${host}:${metroPort}/ph-avatar/viewer.html?v=bozo34${retry}`;
 };
 
 export type AvatarViewMode = "full" | "bust";

@@ -579,35 +579,41 @@
   // (25.8mm, a real-eye proportion) and Maxwell's next craft walk read the
   // default as too small: at the Outfit full-body camera the iris is 5.1 CSS
   // px and the opening 4.3 px tall, a pinprick under the fringe. PR #40's
-  // first pass moved the band to 0.52 -> 0.78 (default 0.65, iris 5.8 px)
-  // and his review said "still too small, enlarge more". The 1.2 (14) "a bit
+  // first pass moved the band to 0.52 -> 0.78 (default 0.65, iris 5.8 px),
+  // the second to 0.60 -> 0.84 (default 0.72, iris 6.4 px), and his review
+  // said "still too small, enlarge more" both times. The 1.2 (14) "a bit
   // large" verdict on 0.70 was an eye under a 0.16-0.20 stare lid with the
   // polygon-offset sclera ring, not this resting lid. Measured in headless
   // Chrome: the lid's share of the iris does not move with the bone scale
   // (the lid margin is skinned 1.0 to the eye bone, so the morph travel
   // scales with the ball) and neither does the sclera share (~0.32 at Size
-  // 0.5, ~0.36 at Size 1 from 0.46 to 0.88), so the whole band moves up and
-  // the lid / iris curves stay as #36 left them, and the 1.2 (11)
-  // sclera-dominant saucer cannot come back at any scale under this lid -
-  // what grows is only the size. EYE_SCALE_MIN 0.60 (Size 0, a 26.6mm
-  // real-sized eye under the heaviest lid: the small end is about the #36
-  // default he called too small) to EYE_SCALE_MAX 0.84 (Size 1, 37.3mm;
-  // large is the intent at the top end, the lid still covers the iris top,
-  // and it stays under ~0.88 where the opening starts crowding the brow -
-  // 32 x 18 px on a 218 px-wide bust head, 1.8x a real eye in height). The
-  // default (Size 0.5) is EYE_SCALE 0.72 (32.0mm): its bust opening (~243
-  // px^2 at 1x) is about the 1.2 (14) area (280-300 with its open lid) under
-  // a lid that rests on the iris; at the Outfit camera the iris is 6.4 px
-  // and the opening 38 px^2, 5.5 px tall (0.58: 5.1 px / 26 px^2; 0.65:
-  // 5.8 px / 32 px^2). Re-applied on every applyLook, not once at load.
-  var EYE_SCALE_MIN = 0.60;
-  var EYE_SCALE_MAX = 0.84;
+  // 0.5, ~0.36 at Size 1 from 0.46 all the way to 1.0), so the whole band
+  // moves up and the lid / iris curves stay as #36 left them, and the
+  // 1.2 (11) sclera-dominant saucer cannot come back at any scale under
+  // this lid - what grows is only the size. Nor does a big eye crowd the
+  // brow: measured against the pupil, the upper lid margin rises 3.3 -> 7.7
+  // px (1x, bust) from 0.60 to 1.0 and the brow's underside shadow rises
+  // with it (the crease is part-weighted to the eye bone), so the lid-to-
+  // brow gap stays 24-25 px at every scale; the opening grows downward and
+  // outward because the gaze aims down at the camera. EYE_SCALE_MIN 0.64
+  // (Size 0, a 28.4mm eye under the heaviest lid - the small end is about
+  // #40's first-pass default) to EYE_SCALE_MAX 0.88 (Size 1, 39.1mm; large
+  // is the intent at the top end, the lid still covers the iris top, and it
+  // stays 12% under the unscaled GLB eye, 1.0 = the 1.2 (11)-(13) eye he
+  // asked to shrink). The default (Size 0.5) is EYE_SCALE 0.76 (33.7mm):
+  // its bust opening (~270 px^2 at 1x) is just under the 1.2 (14) stare's
+  // area (280-300 with its open lid) under a lid that rests on the iris; at
+  // the Outfit camera the iris is 6.7 px and the opening 41-43 px^2, 5.8 px
+  // tall (0.58: 5.1 px / 26 px^2; 0.65: 5.8 / 32; 0.72: 6.4 / 38).
+  // Re-applied on every applyLook, not once at load.
+  var EYE_SCALE_MIN = 0.64;
+  var EYE_SCALE_MAX = 0.88;
 
   function eyeScaleFor(eyeSize) {
     return EYE_SCALE_MIN + clamp01(eyeSize) * (EYE_SCALE_MAX - EYE_SCALE_MIN);
   }
 
-  // The default (Size 0.5) whole-eye scale, 0.72.
+  // The default (Size 0.5) whole-eye scale, 0.76.
   var EYE_SCALE = eyeScaleFor(0.5);
 
   // Uniform scale on the eye bones. Absolute, so it can be re-applied; the
