@@ -575,20 +575,32 @@
   // alone: a small ball with a small iris share under a wide-open lid) and a
   // wide stare at max. Size now couples three things - this bone scale,
   // upperLidDrop and irisSizeFor - so the scale itself stays in a beauty
-  // band: EYE_SCALE_MIN 0.46 (Size 0, a 20.4mm eye) to EYE_SCALE_MAX 0.70
-  // (Size 1, 31.1mm, the 1.2 (14) eye; large is the intent at the top end).
-  // The default look (Size 0.5) stays on EYE_SCALE 0.58 (25.8mm, close to a
-  // real 24mm eye), so saved companions keep their eyeball size. Re-applied
-  // on every applyLook, not once at load. Above ~0.80 it is the 1.2 (11)
-  // saucer again.
-  var EYE_SCALE_MIN = 0.46;
-  var EYE_SCALE_MAX = 0.70;
+  // band. PR #36 ran that band 0.46 -> 0.70 with the default kept on 0.58
+  // (25.8mm, a real-eye proportion) and Maxwell's next craft walk read the
+  // default as too small: at the Outfit full-body camera the iris is 5.1 CSS
+  // px and the opening 4.3 px tall, a pinprick under the fringe. The 1.2 (14)
+  // "a bit large" verdict on 0.70 was an eye under a 0.16-0.20 stare lid with
+  // the polygon-offset sclera ring, not this resting lid. Measured in
+  // headless Chrome: the lid's share of the iris does not move with the bone
+  // scale (the lid margin is skinned 1.0 to the eye bone, so the morph
+  // travel scales with the ball) and neither does the sclera share, so the
+  // whole band moves up and the lid / iris curves stay as #36 left them:
+  // EYE_SCALE_MIN 0.52 (Size 0, a 23.1mm eye, real-sized and still the
+  // modest small end) to EYE_SCALE_MAX 0.78 (Size 1, 34.6mm; large is the
+  // intent at the top end, and it stays under the ~0.80 where the 1.2 (11)
+  // saucer starts). The default (Size 0.5) is EYE_SCALE 0.65 (28.9mm): its
+  // bust opening (~197 px^2 at 1x) sits between the 0.58 one (158) and the
+  // 1.2 (14) one (~255 with its open lid); at the Outfit camera the iris is
+  // 5.8 px and the opening 5.0 px tall. Re-applied on every applyLook, not
+  // once at load.
+  var EYE_SCALE_MIN = 0.52;
+  var EYE_SCALE_MAX = 0.78;
 
   function eyeScaleFor(eyeSize) {
     return EYE_SCALE_MIN + clamp01(eyeSize) * (EYE_SCALE_MAX - EYE_SCALE_MIN);
   }
 
-  // The default (Size 0.5) whole-eye scale, 0.58.
+  // The default (Size 0.5) whole-eye scale, 0.65.
   var EYE_SCALE = eyeScaleFor(0.5);
 
   // Uniform scale on the eye bones. Absolute, so it can be re-applied; the
