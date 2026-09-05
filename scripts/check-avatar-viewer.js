@@ -20,7 +20,7 @@
  * slope-scaled polygon offset that let the eyeball rim through the lids), and
  * the default eye must not be a pinprick at the Outfit camera (iris and
  * opening in CSS px), and the reference-pass feel must be on the render: the
- * inked lash card reads as a liner above the iris, the limbal ring is darker
+ * inked lash card is on the render round the eye, the limbal ring is darker
  * than the mid iris, one hard glint sits on the iris, and Head_0's lash /
  * outer-corner morphs carry the look's weights. It also writes the full frame
  * per Size and camera (pixels-outfit2-<view>-size<n>-frame.png) for review
@@ -309,12 +309,13 @@ const DEFAULT_FULL_MIN_OPENING_PX2 = 36;
 // 17.0 at 0.76, 18.3 at 0.82, 19.0 at 0.85.
 const DEFAULT_BUST_MIN_IRIS_PX = 18.7;
 // The reference pass, measured on the hoodie default in the bust with the
-// feel pack switched off (same 0.82 scale) and on: liner rows above the iris
-// 0.0 -> 2.8 CSS px, limbal ring / mid-iris luminance 0.64 -> 0.49, glint
-// share of the iris disc 0.0% -> 2.9% (the 1.2 (12) blob whitened 15-49%).
-// The real #36 / pass-3 viewer measures 0.58 on the ring (its 30% rim mixed
-// at 0.72), so the ring threshold sits under that.
-const DEFAULT_BUST_MIN_LINER_PX = 2;
+// feel pack switched off (same scale) and on: inked-card share of r^2 0.000
+// -> 0.11 (0.000 on #36 too; 0.09-0.12 at every Size, both cameras, two
+// sway phases), limbal ring / mid-iris luminance 0.64 -> 0.49, glint share of
+// the iris disc 0.0% -> 2.8% (the 1.2 (12) blob whitened 15-49%). The real
+// #36 / pass-3 viewer measures 0.58 on the ring (its 30% rim mixed at 0.72),
+// so the ring threshold sits under that.
+const DEFAULT_BUST_MIN_INK_SHARE = 0.05;
 const DEFAULT_BUST_MAX_RIM_OVER_MID = 0.54;
 const DEFAULT_BUST_GLINT_SHARE = [0.005, 0.06];
 // Shape_LashLength and Shape_EyesOuterCornersHigh on Head_0, read back from
@@ -566,6 +567,8 @@ const measureEye = (png, cx, cy, r, rIris, rPupil) => {
   let irisVisible = 0;
   let pupilTopDark = 0;
   let pupilTopSamples = 0;
+  let inkOutside = 0;
+  let inkOverIris = 0;
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const dx = x + 0.5 - cx;
@@ -582,8 +585,18 @@ const measureEye = (png, cx, cy, r, rIris, rPupil) => {
       const neutral = mx - mn < 24;
       const isSclera = neutral && lum > 120;
       const isSkin = !neutral && R > B + 30 && lum >= 112;
+      // The inked lash card: near-black and neutral, above the lower-lid
+      // line, clear of the pupil. The pupil and the limbal ring are as dark,
+      // so the liner is counted outside the iris disc (where neither can be)
+      // and, over the iris, only in the upper half beyond the pupil.
+      const isInk =
+        lum < 45 && mx - mn < 20 && dy < 0.15 * r && dist > rPupil * 1.15;
+      if (isInk && dist > rIris * 1.05) inkOutside += 1;
       if (dist <= rIris * 1.04) {
-        if (!isSkin) irisVisible += 1;
+        if (!isSkin) {
+          irisVisible += 1;
+          if (isInk && dy < 0) inkOverIris += 1;
+        }
         // The upper part of the pupil on the centre line must still be
         // pupil (dark): the lid has not come down over the pupil. The
         // catchlight (its core and its soft edge) sits on the pupil's
@@ -604,31 +617,13 @@ const measureEye = (png, cx, cy, r, rIris, rPupil) => {
       }
     }
   }
-  // The reference pass (liner, limbal ring, glint). Liner: dark rows on a
-  // 7 px column straight above the iris top - the inked upper lash card -
-  // until three skin rows. Ring: mean luminance of the limbal annulus against
-  // the mid-iris annulus over the lower half of the iris (the top is under
-  // the lid). Glint: share of the iris disc that is near-white and neutral.
-  let linerRows = 0;
-  let skinRun = 0;
-  const columnX = Math.round(cx);
-  const irisTop = Math.round(cy - rIris);
-  for (let dy = 0; dy < 0.6 * r; dy += 1) {
-    const y = irisTop - dy;
-    if (y < 0) break;
-    let dark = 0;
-    let skin = 0;
-    for (let x = columnX - 3; x <= columnX + 3; x += 1) {
-      if (x < 0 || x >= width) continue;
-      const i = (y * width + x) * 4;
-      const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      if (lum < 70) dark += 1;
-      if (data[i] > data[i + 2] + 30 && lum >= 112) skin += 1;
-    }
-    if (dark >= 4) linerRows += 1;
-    skinRun = skin >= 4 ? skinRun + 1 : 0;
-    if (skinRun >= 3 && dy > 2) break;
-  }
+  // The reference pass (liner, limbal ring, glint). Ring: mean luminance of
+  // the limbal annulus against the mid-iris annulus over the lower half of the
+  // iris (the top is under the lid). Glint: share of the iris disc that is
+  // near-white and neutral. (A column scan for the liner was tried first and
+  // read 1.2 or 3.0 px for the same viewer depending on where the parked
+  // idle-sway phase put the card's taper under the column; the ink share
+  // above does not care where the card sits.)
   const annulusLum = (inner, outer) => {
     let sum = 0;
     let count = 0;
@@ -671,7 +666,13 @@ const measureEye = (png, cx, cy, r, rIris, rPupil) => {
     // The eye opening the viewer actually sees: sclera plus uncovered iris,
     // in render px (the caller divides by PIXEL_SCALE^2 for CSS px^2).
     openingPx: sclera + irisVisible,
-    linerRows,
+    // Visible iris with the inked card taken out (the classifier above counts
+    // near-black card pixels as iris because they are not skin).
+    irisExposureNoInk: (irisVisible - inkOverIris) / (Math.PI * rIris * rIris),
+    // Inked lash card outside the iris disc, as a share of r^2: 0 without the
+    // ink (#36, or the feel pack switched off), 0.09-0.12 with it, at every
+    // Size and camera and every sway phase measured.
+    linerShare: inkOutside / (r * r),
     rimOverMid: rimLum / Math.max(1, midLum),
     glintShare: glintPx / Math.max(1, discPx),
     // A pupil under ~4 px (the full-body eye at Size 0) has a 2-pixel sample
@@ -839,7 +840,9 @@ const pixelPass = async (cdp, session) => {
         irisDiameterCss:
           (eyes[0].irisDiameterCss + eyes[1].irisDiameterCss) / 2,
         openingCss2: (eyes[0].openingCss2 + eyes[1].openingCss2) / 2,
-        linerCss: (eyes[0].linerRows + eyes[1].linerRows) / 2 / PIXEL_SCALE,
+        irisExposureNoInk:
+          (eyes[0].irisExposureNoInk + eyes[1].irisExposureNoInk) / 2,
+        linerShare: (eyes[0].linerShare + eyes[1].linerShare) / 2,
         rimOverMid: (eyes[0].rimOverMid + eyes[1].rimOverMid) / 2,
         glintShare: (eyes[0].glintShare + eyes[1].glintShare) / 2,
         pupilClear: measurable
@@ -852,9 +855,13 @@ const pixelPass = async (cdp, session) => {
           1
         )} CSS px across, opening ${avg.openingCss2.toFixed(
           0
-        )} CSS px^2, liner ${avg.linerCss.toFixed(
-          1
-        )} px, rim/mid ${avg.rimOverMid.toFixed(2)}, glint ${(
+        )} CSS px^2, iris exposure ${avg.irisExposure.toFixed(
+          3
+        )} (${avg.irisExposureNoInk.toFixed(
+          3
+        )} without the liner), ink ${avg.linerShare.toFixed(
+          3
+        )} r^2, rim/mid ${avg.rimOverMid.toFixed(2)}, glint ${(
           avg.glintShare * 100
         ).toFixed(1)}%`
       );
@@ -877,9 +884,9 @@ const pixelPass = async (cdp, session) => {
       );
       if (eyeSize === 0.5 && viewMode === "bust") {
         check(
-          `${tag}: liner inked above the iris (>= ${DEFAULT_BUST_MIN_LINER_PX} CSS px of dark rows)`,
-          avg.linerCss >= DEFAULT_BUST_MIN_LINER_PX,
-          `liner ${avg.linerCss.toFixed(2)} CSS px`
+          `${tag}: lash card inked round the eye (>= ${DEFAULT_BUST_MIN_INK_SHARE} r^2 of near-black outside the iris)`,
+          avg.linerShare >= DEFAULT_BUST_MIN_INK_SHARE,
+          `ink ${avg.linerShare.toFixed(3)} r^2`
         );
         check(
           `${tag}: limbal ring darker than the mid iris (rim/mid <= ${DEFAULT_BUST_MAX_RIM_OVER_MID})`,
@@ -916,9 +923,9 @@ const pixelPass = async (cdp, session) => {
       }
       const band = EYE_BANDS[eyeSize];
       check(
-        `${tag}: upper lid rests on the iris (exposure in band)`,
-        within(avg.irisExposure, band.irisExposure),
-        `irisExposure=${avg.irisExposure.toFixed(
+        `${tag}: upper lid rests on the iris (exposure in band, liner excluded)`,
+        within(avg.irisExposureNoInk, band.irisExposure),
+        `irisExposure=${avg.irisExposureNoInk.toFixed(
           3
         )} want ${band.irisExposure.join("..")}`
       );
@@ -942,10 +949,11 @@ const pixelPass = async (cdp, session) => {
     if (full && bust) {
       check(
         `pixels size${eyeSize}: Outfit full-body and Eyes bust show the same lid weight`,
-        Math.abs(full.irisExposure - bust.irisExposure) <= PARITY_IRIS_EXPOSURE,
-        `irisExposure full=${full.irisExposure.toFixed(
+        Math.abs(full.irisExposureNoInk - bust.irisExposureNoInk) <=
+          PARITY_IRIS_EXPOSURE,
+        `irisExposure full=${full.irisExposureNoInk.toFixed(
           3
-        )} bust=${bust.irisExposure.toFixed(3)}`
+        )} bust=${bust.irisExposureNoInk.toFixed(3)}`
       );
       check(
         `pixels size${eyeSize}: Outfit full-body and Eyes bust show the same sclera share`,
