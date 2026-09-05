@@ -318,45 +318,55 @@ describe("eyes", () => {
     expect(rig.upperLidDrop(NaN)).toBe(rig.upperLidDrop(0));
   });
 
-  it("shrinks the default whole eye below the 1.2 (14) fixed 0.70 so a mid Size reads human-proportioned", () => {
+  it("rests the default whole eye between the 0.58 Maxwell read as too small and the 1.2 (14) 0.70 stare he read as a bit large", () => {
     // TestFlight 1.2 (13): lowered lids, converged gaze and a 0.31 iris still
     // read as too-large eyes (整个眼睛的缩小, not another pupil shrink), so the
-    // eye bones were scaled by a fixed 0.70. 1.2 (14): still "a bit large".
-    // Eyes_0 is two 22.2 mm-radius spheres on eyeRoot_l/r - 44.4 mm across on
-    // a 26 cm head; a real eye is 24 mm, i.e. 0.54. The default look (Eyes
-    // Size 0.5) must sit clearly under the old 0.70 without becoming a
-    // pinprick, and EYE_SCALE stays the name for that default.
+    // eye bones were scaled by a fixed 0.70. 1.2 (14): still "a bit large" -
+    // but that eye sat under a 0.16-0.20 lid (a stare) with the slope-scaled
+    // polygon offset drawing a sclera ring round the lids. PR #33 / #36 then
+    // kept the default at 0.58 (a 25.8 mm eye, real-eye proportion) and the
+    // craft walk of #36 read it as too small: at the Outfit full-body camera
+    // the iris is 5.1 CSS px and the opening 4.3 px tall, a pinprick under
+    // the fringe. Eyes_0 is two 22.2 mm-radius spheres on eyeRoot_l/r
+    // (44.4 mm across on a 26 cm head). Measured in headless Chrome, the lid
+    // coverage does not move with the bone scale (the lid margin is skinned
+    // 1.0 to the eye bone), so the default can grow with the #36 lid and iris
+    // untouched: 0.65 is a 28.9 mm eye whose bust opening (~197 px^2) sits
+    // between the 0.58 opening (158) and the 1.2 (14) one (~255 with its open
+    // lid). EYE_SCALE stays the name for that default.
     expect(rig.EYE_SCALE).toBeCloseTo(rig.eyeScaleFor(0.5), 9);
-    expect(rig.EYE_SCALE).toBeLessThanOrEqual(PREVIOUS_FIXED_EYE_SCALE - 0.05);
-    expect(rig.EYE_SCALE).toBeGreaterThanOrEqual(0.5);
-    // The PR #33 default (a 25.8 mm eye) is kept exactly, so every companion
-    // saved at Size 0.5 keeps its eyeball size; only lid and iris change.
-    expect(rig.EYE_SCALE).toBeCloseTo(0.58, 9);
+    expect(rig.EYE_SCALE).toBeCloseTo(0.65, 9);
+    // Clearly above the too-small 0.58, still under the 1.2 (14) eyeball.
+    expect(rig.EYE_SCALE).toBeGreaterThanOrEqual(0.64);
+    expect(rig.EYE_SCALE).toBeLessThan(PREVIOUS_FIXED_EYE_SCALE);
     // Not 1.0 by a rounding accident.
     expect(rig.EYE_SCALE).not.toBeCloseTo(1, 1);
   });
 
-  it("maps the Eyes Size slider onto a narrower whole-eye beauty band: small is modest, not a pinprick", () => {
+  it("maps the Eyes Size slider onto a whole-eye beauty band that starts at a real-sized eye and tops out under the saucer", () => {
     // 1.2 (14): Size only repainted the iris (irisSize 0.82..1.10) and opened
     // the lid by 0.08 while the eyeball stayed at 0.70 at every slider
     // position. PR #33 then drove the bones 0.42 -> 0.74: at 0.42 (18.6 mm)
     // the eye read as a bare bead because the whole look was uniform scale.
-    // Size now couples scale with the lid and iris, so the scale itself can
-    // stay in a beauty band: 0.46 (20.4 mm, a small eye) to 0.70 (31.1 mm,
-    // the 1.2 (14) eye Maxwell called "a bit large" - large is the intent at
-    // the top end). Never back toward the 1.0 saucer.
+    // #36 coupled scale with the lid and iris on a 0.46 -> 0.70 band, and the
+    // craft walk read its 0.58 default as too small, so the band moves up as
+    // a whole (same lid and iris per Size, same linear steps): 0.52 (23.1 mm,
+    // a real-sized eye, still a modest small end) to 0.78 (34.6 mm; large is
+    // the intent at the top end and it still sits under the ~0.80 where the
+    // 1.2 (11) saucer starts). Never back toward the 1.0 saucer.
     const min = rig.eyeScaleFor(0);
     const max = rig.eyeScaleFor(1);
     expect(min).toBe(rig.EYE_SCALE_MIN);
     expect(max).toBe(rig.EYE_SCALE_MAX);
-    expect(min).toBeGreaterThanOrEqual(0.45);
-    expect(min).toBeLessThanOrEqual(0.48);
+    expect(min).toBeGreaterThanOrEqual(0.5);
+    expect(min).toBeLessThanOrEqual(0.55);
     expect(max).toBeGreaterThan(rig.EYE_SCALE);
-    expect(max).toBeLessThanOrEqual(PREVIOUS_FIXED_EYE_SCALE);
-    expect(max).toBeGreaterThanOrEqual(0.68);
+    // Past the 1.2 (14) eyeball at the top end, under the saucer.
+    expect(max).toBeGreaterThan(PREVIOUS_FIXED_EYE_SCALE);
+    expect(max).toBeLessThanOrEqual(0.8);
     // The spread: the eye still grows by half from min to max.
-    expect(max - min).toBeGreaterThanOrEqual(0.24 - 1e-9);
-    expect(max / min).toBeGreaterThanOrEqual(1.5);
+    expect(max - min).toBeGreaterThanOrEqual(0.26 - 1e-9);
+    expect(max / min).toBeGreaterThanOrEqual(1.5 - 1e-9);
     // Monotonic and linear, so every slider step is the same visible step.
     const steps = [0, 0.25, 0.5, 0.75, 1].map((size) => rig.eyeScaleFor(size));
     for (let i = 1; i < steps.length; i += 1) {
