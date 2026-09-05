@@ -63,10 +63,40 @@ type ViewerRig = {
   EYE_SCALE_MAX: number;
   IRIS_SIZE_SMALL: number;
   IRIS_SIZE_LARGE: number;
-  CATCHLIGHT: { lo: number; hi: number; mix: number };
+  CATCHLIGHT: {
+    lo: number;
+    hi: number;
+    mix: number;
+    mix2: number;
+    emit: number;
+    dir: [number, number, number];
+  };
+  LID_SHADE: number;
+  IRIS_LOOK: {
+    rimStart: number;
+    rimMix: number;
+    rimTone: number;
+    fibreStrength: number;
+    glow: number;
+    innerGain: number;
+  };
+  IRIS_DETAIL_PX: { off: number; full: number };
+  LASH_CARD_U: [number, number];
+  BROW_CARD_U: [number, number];
+  CARD_V: [number, number];
+  LASH_INK: { color: [number, number, number]; density: number };
+  BROW_INK: number;
+  LASH_LENGTH: number;
+  OUTER_CORNER_LIFT: number;
+  browColorFor: (hair: unknown) => { r: number; g: number; b: number };
+  headPaintChunk: () => string;
+  irisDetailFor: (radiusPx: number) => number;
   eyeScaleFor: (eyeSize: number) => number;
   irisSizeFor: (eyeSize: number) => number;
-  browMorphs: (eyeSize: number, jaw: number) => { raise: number; lower: number };
+  browMorphs: (
+    eyeSize: number,
+    jaw: number
+  ) => { raise: number; lower: number };
   viewSpaceEyeCentres: (
     bones: unknown[],
     camera: unknown,
@@ -130,6 +160,95 @@ const ALWAYS_COVERED = ["Body_Chest", "Body_Back", "Body_Hips", "Body_Waist"];
 // Rest-pose segment lengths in metres (upperarm -> lowerarm -> hand).
 const UPPER_ARM = 0.263;
 const FOREARM = 0.224;
+
+// Minimal glTF reader for the Head_0 attributes the eye tests need: the card
+// mask (COLOR_1) and the UVs, so the shader's ink windows can be checked
+// against the asset instead of against remembered numbers.
+type GltfAccessor = {
+  bufferView?: number;
+  byteOffset?: number;
+  componentType: number;
+  normalized?: boolean;
+  count: number;
+  type: string;
+};
+type GltfJson = {
+  accessors: GltfAccessor[];
+  bufferViews: {
+    byteOffset?: number;
+    byteLength: number;
+    byteStride?: number;
+  }[];
+  meshes: {
+    name: string;
+    primitives: { attributes: Record<string, number> }[];
+  }[];
+};
+const COMPONENT_BYTES: Record<number, number> = {
+  5120: 1,
+  5121: 1,
+  5122: 2,
+  5123: 2,
+  5125: 4,
+  5126: 4,
+};
+const TYPE_SIZE: Record<string, number> = {
+  SCALAR: 1,
+  VEC2: 2,
+  VEC3: 3,
+  VEC4: 4,
+};
+
+const readGlbHead = () => {
+  const glb = fs.readFileSync(path.join(ENGINE_DIR, "bozo-male.glb"));
+  const jsonLength = glb.readUInt32LE(12);
+  const json = JSON.parse(
+    glb.subarray(20, 20 + jsonLength).toString("utf8")
+  ) as GltfJson;
+  const bin = glb.subarray(20 + jsonLength + 8);
+  const readAccessor = (index: number) => {
+    const accessor = json.accessors[index];
+    const view = json.bufferViews[accessor.bufferView as number];
+    const size = COMPONENT_BYTES[accessor.componentType];
+    const width = TYPE_SIZE[accessor.type];
+    const stride = view.byteStride || size * width;
+    const base = (view.byteOffset || 0) + (accessor.byteOffset || 0);
+    const out: number[][] = [];
+    for (let i = 0; i < accessor.count; i += 1) {
+      const row: number[] = [];
+      for (let c = 0; c < width; c += 1) {
+        const offset = base + i * stride + c * size;
+        let value: number;
+        switch (accessor.componentType) {
+          case 5126:
+            value = bin.readFloatLE(offset);
+            break;
+          case 5123:
+            value =
+              bin.readUInt16LE(offset) / (accessor.normalized ? 65535 : 1);
+            break;
+          case 5121:
+            value = bin.readUInt8(offset) / (accessor.normalized ? 255 : 1);
+            break;
+          default:
+            throw new Error(
+              `unexpected componentType ${accessor.componentType}`
+            );
+        }
+        row.push(value);
+      }
+      out.push(row);
+    }
+    return out;
+  };
+  const head = json.meshes.find((mesh) => mesh.name === "Head_0");
+  if (!head) throw new Error("Head_0 missing from bozo-male.glb");
+  const attributes = head.primitives[0].attributes;
+  return {
+    uv: readAccessor(attributes.TEXCOORD_0),
+    cardMask: readAccessor(attributes.COLOR_1),
+  };
+};
 
 const loadViewer = () => {
   const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
@@ -318,45 +437,73 @@ describe("eyes", () => {
     expect(rig.upperLidDrop(NaN)).toBe(rig.upperLidDrop(0));
   });
 
-  it("shrinks the default whole eye below the 1.2 (14) fixed 0.70 so a mid Size reads human-proportioned", () => {
+  it("rests the default whole eye at 0.85: the 0.82 reference pass Maxwell called the right direction, nudged a little larger as he asked", () => {
     // TestFlight 1.2 (13): lowered lids, converged gaze and a 0.31 iris still
     // read as too-large eyes (整个眼睛的缩小, not another pupil shrink), so the
-    // eye bones were scaled by a fixed 0.70. 1.2 (14): still "a bit large".
-    // Eyes_0 is two 22.2 mm-radius spheres on eyeRoot_l/r - 44.4 mm across on
-    // a 26 cm head; a real eye is 24 mm, i.e. 0.54. The default look (Eyes
-    // Size 0.5) must sit clearly under the old 0.70 without becoming a
-    // pinprick, and EYE_SCALE stays the name for that default.
+    // eye bones were scaled by a fixed 0.70. 1.2 (14): still "a bit large" -
+    // but that eye sat under a 0.16-0.20 lid (a stare) with the slope-scaled
+    // polygon offset drawing a sclera ring round the lids, a bust opening of
+    // roughly 280-300 px^2 (1x CSS). PR #33 / #36 then kept the default at
+    // 0.58 (a 25.8 mm eye, real-eye proportion; opening 158 px^2) and the
+    // craft walk read it as too small; #40 raised it to 0.65 (198 px^2),
+    // 0.72 (243) and 0.76 (270), and Maxwell's review said "still too small,
+    // enlarge more" every time, then pivoted to a reference (a ZBrush
+    // close-up: large almond eyes under a heavy liner) and asked for > 0.76
+    // with the feel. Eyes_0 is two 22.2 mm-radius spheres on eyeRoot_l/r
+    // (44.4 mm across on a 26 cm head). Measured in headless Chrome, the lid
+    // coverage does not move with the bone scale (the lid margin is skinned
+    // 1.0 to the eye bone), so the default can grow with the #36 lid and
+    // iris untouched and the opening grows with the square of the scale:
+    // 0.82 was a 36.4 mm eye whose resting-lid opening (~295 px^2 with the
+    // liner) matched the 1.2 (14) stare's area with the iris top covered and
+    // inked; Maxwell's review: 「0.82改动方向是对的，能不能再大一点点」 - the
+    // direction is right, a little larger - so 0.85 (37.7 mm, ~315 px^2),
+    // the feel pack untouched. EYE_SCALE stays the name for that default.
     expect(rig.EYE_SCALE).toBeCloseTo(rig.eyeScaleFor(0.5), 9);
-    expect(rig.EYE_SCALE).toBeLessThanOrEqual(PREVIOUS_FIXED_EYE_SCALE - 0.05);
-    expect(rig.EYE_SCALE).toBeGreaterThanOrEqual(0.5);
-    // The PR #33 default (a 25.8 mm eye) is kept exactly, so every companion
-    // saved at Size 0.5 keeps its eyeball size; only lid and iris change.
-    expect(rig.EYE_SCALE).toBeCloseTo(0.58, 9);
+    expect(rig.EYE_SCALE).toBeCloseTo(0.85, 9);
+    // A nudge past the approved 0.82, not a jump.
+    expect(rig.EYE_SCALE).toBeGreaterThan(0.82);
+    expect(rig.EYE_SCALE).toBeGreaterThan(PREVIOUS_FIXED_EYE_SCALE);
+    expect(rig.EYE_SCALE).toBeLessThanOrEqual(0.86);
     // Not 1.0 by a rounding accident.
     expect(rig.EYE_SCALE).not.toBeCloseTo(1, 1);
   });
 
-  it("maps the Eyes Size slider onto a narrower whole-eye beauty band: small is modest, not a pinprick", () => {
+  it("maps the Eyes Size slider onto a whole-eye beauty band: small end past the old 1.2 (14) eyeball, top end held under the unscaled GLB eye", () => {
     // 1.2 (14): Size only repainted the iris (irisSize 0.82..1.10) and opened
     // the lid by 0.08 while the eyeball stayed at 0.70 at every slider
     // position. PR #33 then drove the bones 0.42 -> 0.74: at 0.42 (18.6 mm)
     // the eye read as a bare bead because the whole look was uniform scale.
-    // Size now couples scale with the lid and iris, so the scale itself can
-    // stay in a beauty band: 0.46 (20.4 mm, a small eye) to 0.70 (31.1 mm,
-    // the 1.2 (14) eye Maxwell called "a bit large" - large is the intent at
-    // the top end). Never back toward the 1.0 saucer.
+    // #36 coupled scale with the lid and iris on a 0.46 -> 0.70 band; the
+    // craft walk read its 0.58 default as too small, #40's passes at 0.52 ->
+    // 0.78, 0.60 -> 0.84 and 0.64 -> 0.88 still too small, the reference pass
+    // went to 0.70 -> 0.94 and was called the right direction with a nudge
+    // asked for, so the small end moves up to 0.74 (32.9 mm under the
+    // heaviest lid) while the top holds at 0.96 (42.6 mm; large is the intent
+    // at the top end, the lid still covers the iris top). Measured on every
+    // band from 0.46 to 1.0 the sclera share at Size 1 stays ~0.36, so the
+    // 1.2 (11) sclera-dominant saucer cannot come back under this lid, and
+    // the lid-to-brow gap stays 24-25 px (1x, bust) at every scale because
+    // the crease rises with the lid margin - a big eye does not crowd the
+    // brow either. The only top-end guard left is the unscaled GLB eye itself
+    // (1.0, the 1.2 (11)-(13) eye Maxwell asked to shrink): the top stays
+    // under it, so the spread narrows to 0.22 rather than pushing past it.
     const min = rig.eyeScaleFor(0);
     const max = rig.eyeScaleFor(1);
     expect(min).toBe(rig.EYE_SCALE_MIN);
     expect(max).toBe(rig.EYE_SCALE_MAX);
-    expect(min).toBeGreaterThanOrEqual(0.45);
-    expect(min).toBeLessThanOrEqual(0.48);
+    expect(min).toBeGreaterThanOrEqual(0.72);
+    expect(min).toBeLessThanOrEqual(0.76);
     expect(max).toBeGreaterThan(rig.EYE_SCALE);
-    expect(max).toBeLessThanOrEqual(PREVIOUS_FIXED_EYE_SCALE);
-    expect(max).toBeGreaterThanOrEqual(0.68);
-    // The spread: the eye still grows by half from min to max.
-    expect(max - min).toBeGreaterThanOrEqual(0.24 - 1e-9);
-    expect(max / min).toBeGreaterThanOrEqual(1.5);
+    // Past the 1.2 (14) eyeball at the top end, under the GLB eye.
+    expect(max).toBeGreaterThan(PREVIOUS_FIXED_EYE_SCALE);
+    expect(max).toBeGreaterThanOrEqual(0.95);
+    expect(max).toBeLessThanOrEqual(0.96);
+    expect(max).toBeLessThan(1);
+    // The spread: 0.22, so min -> max is still a visible 1.3x on the eyeball
+    // (1.2 (14) was 1.015x and read as no change).
+    expect(max - min).toBeGreaterThanOrEqual(0.22 - 1e-9);
+    expect(max / min).toBeGreaterThanOrEqual(1.29 - 1e-9);
     // Monotonic and linear, so every slider step is the same visible step.
     const steps = [0, 0.25, 0.5, 0.75, 1].map((size) => rig.eyeScaleFor(size));
     for (let i = 1; i < steps.length; i += 1) {
@@ -458,24 +605,69 @@ describe("eyes", () => {
     expect(chunk).toMatch(/vec3 ballN = normalize\(/);
     expect(chunk).toMatch(/float spec = smoothstep\([^)]*dot\(ballN,/);
     expect(chunk).not.toMatch(/float spec = smoothstep\([^)]*dot\(vn,/);
-    const { lo, hi, mix } = rig.CATCHLIGHT;
+    const { lo, hi, mix, mix2 } = rig.CATCHLIGHT;
     // cos(9deg) = 0.9877: the spot's soft edge starts inside 9deg.
     expect(lo).toBeGreaterThanOrEqual(0.987);
     expect(hi).toBeGreaterThan(lo);
     expect(hi).toBeLessThan(1);
-    expect(mix).toBeLessThanOrEqual(0.85);
-    expect(mix).toBeGreaterThanOrEqual(0.6);
+    // The reference pass: a hard glassy glint - the edge spans at most 0.005
+    // in cos (about 2deg) and the spot is 86-92% white; #36's 0.8 / 4deg edge
+    // read as a haze. Never the 1.2 (12) 92%-white 12deg blob: the footprint
+    // stays inside 9deg above.
+    expect(hi - lo).toBeLessThanOrEqual(0.005 + 1e-9);
+    expect(mix).toBeLessThanOrEqual(0.92);
+    expect(mix).toBeGreaterThanOrEqual(0.86);
+    // Soft secondary glint low on the other side, clearly weaker.
+    expect(mix2).toBeGreaterThanOrEqual(0.15);
+    expect(mix2).toBeLessThanOrEqual(0.35);
     expect(chunk).toContain(
       `float spec = smoothstep(${lo.toFixed(3)}, ${hi.toFixed(3)}, dot(ballN,`
     );
-    expect(chunk).toContain(`col = mix(col, vec3(1.0), spec * ${mix.toFixed(2)});`);
+    expect(chunk).toContain(
+      `col = mix(col, vec3(1.0), spec * ${mix.toFixed(2)});`
+    );
+    expect(chunk).toContain(
+      `col = mix(col, vec3(1.0), spec2 * ${mix2.toFixed(2)});`
+    );
+    // Where the glint lands, and that it is drawn unlit. Both cameras sit
+    // below the eyes, so a sphere normal along the view axis already projects
+    // ~0.13 eyeball radii above the pupil; #36's direction (0.20, 0.16, 1.0)
+    // added 9deg more and put the spot under the upper lid (measured: the
+    // light spot at the pupil's upper-left in every render since was the fill
+    // light's clearcoat reflection). The direction stays level with the axis
+    // and to the right, and `emit` lifts the glint above the lit sclera so it
+    // reads as glass instead of peaking at ~170 of 255.
+    const { dir, emit } = rig.CATCHLIGHT;
+    expect(dir[0]).toBeGreaterThanOrEqual(0.15);
+    expect(dir[0]).toBeLessThanOrEqual(0.3);
+    expect(dir[1]).toBeGreaterThanOrEqual(-0.06);
+    expect(dir[1]).toBeLessThanOrEqual(0.02);
+    expect(dir[2]).toBe(1);
+    expect(emit).toBeGreaterThanOrEqual(0.4);
+    expect(emit).toBeLessThanOrEqual(0.8);
+    expect(chunk).toContain(
+      `dot(ballN, normalize(vec3(${dir.map((v) => v.toFixed(2)).join(", ")})))`
+    );
+    expect(chunk).not.toContain("normalize(vec3(0.20, 0.16, 1.0))");
     // The material declares the two centres and the frame loop feeds them.
     const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
-    const irisMat = html.slice(html.indexOf("function upgradeIrisMat"), html.indexOf("function addGroundContact"));
-    expect(irisMat).toMatch(/uniform vec3 eyeCentreL;\\nuniform vec3 eyeCentreR;/);
-    expect(irisMat).toMatch(/shader\.uniforms\.eyeCentreL = \{ value: new THREE\.Vector3\(\) \}/);
-    const animateBody = html.slice(html.indexOf("function animate("), html.indexOf("function fail("));
-    expect(animateBody).toMatch(/aimEyes\(camera\.position\);\s*\n\s*updateEyeCentres\(\);/);
+    const irisMat = html.slice(
+      html.indexOf("function upgradeIrisMat"),
+      html.indexOf("function addGroundContact")
+    );
+    expect(irisMat).toMatch(
+      /uniform vec3 eyeCentreL;\\nuniform vec3 eyeCentreR;/
+    );
+    expect(irisMat).toMatch(
+      /shader\.uniforms\.eyeCentreL = \{ value: new THREE\.Vector3\(\) \}/
+    );
+    const animateBody = html.slice(
+      html.indexOf("function animate("),
+      html.indexOf("function fail(")
+    );
+    expect(animateBody).toMatch(
+      /aimEyes\(camera\.position\);\s*\n\s*updateEyeCentres\(\);/
+    );
   });
 
   it("puts each eye's centre into the camera's view space for the catchlight", () => {
@@ -509,6 +701,244 @@ describe("eyes", () => {
     expect(outR.z).toBeLessThan(-1);
   });
 
+  // The reference pass (Maxwell's ZBrush close-up): heavy dark liner, defined
+  // brows, an iris with depth, a hard glint, a slight feline outer corner.
+  describe("feel pack", () => {
+    const inside = (range: [number, number], lo: number, hi: number) =>
+      range[0] >= lo && range[1] <= hi;
+
+    it("inks exactly the lash and brow cards Head_0 carries: every COLOR_1-marked vertex falls in a card window, no skin vertex does", () => {
+      // Head_0 has 458 vertices flagged in COLOR_1 (green): the brow slabs
+      // and the lash cards, all skin-coloured in ph_tex_SkinAlbedo, which is
+      // why the brows rendered as tan ridges and the lashes as a grazing-
+      // angle line. They live in a UV strip of their own; the head shader
+      // paints that strip. This reads the GLB so the windows cannot drift
+      // from the asset.
+      const { uv, cardMask } = readGlbHead();
+      expect(uv).toHaveLength(cardMask.length);
+      const inLash = (u: number, v: number) =>
+        u >= rig.LASH_CARD_U[0] &&
+        u <= rig.LASH_CARD_U[1] &&
+        v >= rig.CARD_V[0] &&
+        v <= rig.CARD_V[1];
+      const inBrow = (u: number, v: number) =>
+        u >= rig.BROW_CARD_U[0] &&
+        u <= rig.BROW_CARD_U[1] &&
+        v >= rig.CARD_V[0] &&
+        v <= rig.CARD_V[1];
+      let cards = 0;
+      let cardsInked = 0;
+      let lashCards = 0;
+      let skinInked = 0;
+      for (let i = 0; i < uv.length; i += 1) {
+        const [u, v] = uv[i];
+        const isCard = cardMask[i][1] > 0.5;
+        const inked = inLash(u, v) || inBrow(u, v);
+        if (isCard) {
+          cards += 1;
+          if (inked) cardsInked += 1;
+          if (inLash(u, v)) lashCards += 1;
+        } else if (inked) {
+          skinInked += 1;
+        }
+      }
+      expect(cards).toBe(458);
+      expect(cardsInked).toBe(cards);
+      expect(skinInked).toBe(0);
+      // The upper-lid lash card is the liner column (194 vertices, two of
+      // them the outer-corner tips that dip just under the eye-centre line);
+      // the brow column also holds the 46 lower-lid lash vertices.
+      expect(lashCards).toBe(194);
+      // The two windows do not overlap and sit inside the strip.
+      expect(rig.LASH_CARD_U[0]).toBeGreaterThan(rig.BROW_CARD_U[1]);
+      expect(inside(rig.LASH_CARD_U, 0.14, 0.15)).toBe(true);
+      expect(inside(rig.BROW_CARD_U, 0.13, 0.14)).toBe(true);
+      expect(inside(rig.CARD_V, 0.21, 0.25)).toBe(true);
+    });
+
+    it("paints the upper lash card as a near-black liner and the brow cards in a darkened hair colour, through the head material only", () => {
+      const chunk = rig.headPaintChunk();
+      const [u0, u1] = rig.LASH_CARD_U;
+      expect(chunk).toContain(
+        `float lashCard = step(${u0.toFixed(
+          4
+        )}, fu.x) * step(fu.x, ${u1.toFixed(4)})`
+      );
+      expect(chunk).toContain("float browCard = step(");
+      expect(chunk).toContain(
+        `diffuseColor.rgb = mix(diffuseColor.rgb, browColor, browCard * ${rig.BROW_INK.toFixed(
+          2
+        )});`
+      );
+      expect(chunk).toContain(
+        `lashCard * ${rig.LASH_INK.density.toFixed(2)});`
+      );
+      // Liner: dark, warm, dense.
+      for (const channel of rig.LASH_INK.color) {
+        expect(channel).toBeLessThanOrEqual(0.08);
+      }
+      expect(rig.LASH_INK.color[0]).toBeGreaterThanOrEqual(
+        rig.LASH_INK.color[2]
+      );
+      expect(rig.LASH_INK.density).toBeGreaterThanOrEqual(0.85);
+      expect(rig.LASH_INK.density).toBeLessThanOrEqual(1);
+      expect(rig.BROW_INK).toBeGreaterThanOrEqual(0.5);
+      expect(rig.BROW_INK).toBeLessThanOrEqual(0.9);
+      // The existing lip / brow-skin / cheek paint is still there, before
+      // the ink, so the cards are painted last.
+      expect(chunk.indexOf("float lip = ")).toBeGreaterThanOrEqual(0);
+      expect(chunk.indexOf("float lashCard = ")).toBeGreaterThan(
+        chunk.indexOf("max(cL, cR) * 0.12")
+      );
+      // Only the head material (wrap < 0.1) gets the chunk and the uniform;
+      // the body skin material keeps its shader.
+      const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+      const inject = html.slice(
+        html.indexOf("function injectSkinWrap("),
+        html.indexOf("function upgradeSkinMat(")
+      );
+      expect(inject).toMatch(/var isHead = wrap < 0\.1;/);
+      expect(inject).toMatch(
+        /if \(isHead\) mat\.userData\.browColor = new THREE\.Color/
+      );
+      expect(inject).toMatch(
+        /shader\.uniforms\.browColor = \{ value: mat\.userData\.browColor \}/
+      );
+      expect(inject).toMatch(/uniform vec3 browColor;/);
+      expect(inject).toMatch(/extra = headPaintChunk\(\);/);
+      // tintLook feeds the brow colour from the hair colour on every look.
+      const tint = html.slice(
+        html.indexOf("function tintLook("),
+        html.indexOf("function canvasTexture(")
+      );
+      expect(tint).toMatch(/var brow = browColorFor\(hair\);/);
+      expect(tint).toMatch(/mat\.userData\.browColor\.copy\(brow\)/);
+    });
+
+    it("derives the brow colour from the hair colour, always darker than the hair", () => {
+      for (const hex of [
+        0x1a1410, 0x5c3310, 0xd4b483, 0x8b2a1a, 0xe891b0, 0xd0d0d0,
+      ]) {
+        const hair = new THREE.Color(hex);
+        const brow = rig.browColorFor(hair);
+        expect(brow.r).toBeLessThan(hair.r + 1e-9);
+        expect(brow.g).toBeLessThan(hair.g + 1e-9);
+        expect(brow.b).toBeLessThan(hair.b + 1e-9);
+        expect(brow.r + brow.g + brow.b).toBeLessThanOrEqual(
+          (hair.r + hair.g + hair.b) * 0.6
+        );
+        // The hair colour itself is not mutated.
+        expect(hair.getHex()).toBe(hex);
+      }
+    });
+
+    it("lengthens the lashes and lifts the outer corners on every look, without opening the lid", () => {
+      // Measured on the GLB: Shape_LashLength 1.0 moves the upper lash tips
+      // 4.5 mm mean (8 mm max, up and forward); Shape_EyesOuterCornersHigh
+      // 1.0 lifts the lid-corner skin 1.5 mm and pushes it 1 mm outward.
+      // 1.2 (11)-(14) and #36 ran the lashes at 0.42 and never set the
+      // corners. Neither morph changes Shape_EyeLidHeight, so the stare
+      // guard (upperLidDrop) is untouched.
+      expect(rig.LASH_LENGTH).toBeGreaterThanOrEqual(0.7);
+      expect(rig.LASH_LENGTH).toBeLessThanOrEqual(1);
+      expect(rig.OUTER_CORNER_LIFT).toBeGreaterThanOrEqual(0.5);
+      expect(rig.OUTER_CORNER_LIFT).toBeLessThanOrEqual(1);
+      const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+      const meshLook = html.slice(
+        html.indexOf("function applyMeshLook("),
+        html.indexOf("function prefixIndex(")
+      );
+      expect(meshLook).toMatch(/"Shape_LashLength", LASH_LENGTH\)/);
+      expect(meshLook).toMatch(
+        /"Shape_EyesOuterCornersHigh", OUTER_CORNER_LIFT\)/
+      );
+      expect(meshLook).toMatch(/"Shape_EyesOuterCornersLow", 0\)/);
+      expect(meshLook).not.toMatch(/"Shape_LashLength", 0\.42\)/);
+      expect(rig.upperLidDrop(0.5)).toBeGreaterThanOrEqual(0.24);
+    });
+
+    it("gives the iris depth: luminous collarette, radial fibres faded by on-screen size, a darker and wider limbal ring, a deeper lid shadow", () => {
+      const chunk = rig.irisFragmentChunk();
+      const look = rig.IRIS_LOOK;
+      // Wider and darker than #36's rim (0.78 -> 1.0 at 30% mixed 0.72).
+      expect(look.rimStart).toBeLessThanOrEqual(0.72);
+      expect(look.rimStart).toBeGreaterThanOrEqual(0.6);
+      expect(look.rimTone).toBeLessThanOrEqual(0.25);
+      expect(look.rimMix).toBeGreaterThanOrEqual(0.8);
+      expect(chunk).toContain(
+        `float rim = smoothstep(irisR * ${look.rimStart.toFixed(
+          2
+        )}, irisR, d) * irisM;`
+      );
+      expect(chunk).toContain(
+        `irisCol = mix(irisCol, irisColor * ${look.rimTone.toFixed(
+          2
+        )}, rim * ${look.rimMix.toFixed(2)});`
+      );
+      // Fibres from the polar angle, scaled by the per-frame irisDetail.
+      expect(chunk).toContain("float ang = atan(p.y, p.x);");
+      expect(chunk).toMatch(/float fibre = 0\.5 \+ 0\.5 \* sin\(ang \* /);
+      expect(chunk).toContain(
+        `irisCol *= mix(1.0, fibres, fibreM * ${look.fibreStrength.toFixed(
+          2
+        )} * irisDetail);`
+      );
+      expect(look.fibreStrength).toBeGreaterThan(0.4);
+      expect(look.fibreStrength).toBeLessThanOrEqual(1);
+      // Luminous inner zone and an unlit glow on the iris only.
+      expect(look.innerGain).toBeGreaterThan(1.55);
+      expect(chunk).toContain(
+        `vec3 irisInner = irisColor * ${look.innerGain.toFixed(2)} + vec3(`
+      );
+      expect(chunk).toContain(
+        `irisCol * irisM * (1.0 - pupilM) * ${look.glow.toFixed(
+          2
+        )} + vec3(spec * ${rig.CATCHLIGHT.emit.toFixed(2)});`
+      );
+      // Deeper shade under the upper lid than #36's 0.26, never a black eye.
+      expect(rig.LID_SHADE).toBeGreaterThanOrEqual(0.3);
+      expect(rig.LID_SHADE).toBeLessThanOrEqual(0.4);
+      expect(chunk).toContain(
+        `float lidShade = smoothstep(-0.12, 0.30, p.y) * ${rig.LID_SHADE.toFixed(
+          2
+        )};`
+      );
+      // The material declares irisDetail and the frame loop feeds it.
+      const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+      const irisMat = html.slice(
+        html.indexOf("function upgradeIrisMat"),
+        html.indexOf("function addGroundContact")
+      );
+      expect(irisMat).toMatch(/shader\.uniforms\.irisDetail = \{ value: 1 \}/);
+      expect(irisMat).toMatch(/uniform float irisDetail;/);
+      const centres = html.slice(
+        html.indexOf("function updateEyeCentres("),
+        html.indexOf("function aimBone(")
+      );
+      expect(centres).toMatch(/shader\.uniforms\.irisDetail\.value = detail;/);
+      expect(centres).toMatch(
+        /irisDetailFor\(EYEBALL_RADIUS_M \* eyeBones\[0\]\.scale\.x \* pxPerMetre \* dpr\)/
+      );
+    });
+
+    it("turns the iris fibres off on a small on-screen eye and fully on at bust size", () => {
+      // The full-body eyeball is ~7 px in radius at 1x (about 11 px at the
+      // phone's 1.5 device-pixel ratio), the bust one ~19 px (28 px): the
+      // fibres are off under IRIS_DETAIL_PX.off and full above .full so a
+      // 38-cycle pattern never aliases into shimmer under the idle sway.
+      const { off, full } = rig.IRIS_DETAIL_PX;
+      expect(off).toBeGreaterThanOrEqual(5);
+      expect(full).toBeGreaterThan(off);
+      expect(full).toBeLessThanOrEqual(16);
+      expect(rig.irisDetailFor(0)).toBe(0);
+      expect(rig.irisDetailFor(off)).toBe(0);
+      expect(rig.irisDetailFor((off + full) / 2)).toBeCloseTo(0.5, 9);
+      expect(rig.irisDetailFor(full)).toBe(1);
+      expect(rig.irisDetailFor(60)).toBe(1);
+      expect(rig.irisDetailFor(NaN)).toBe(0);
+    });
+  });
+
   it("keeps the brows nearly level: no arch lift for a default eye, a slight settle for small eyes", () => {
     // The two screenshots read "arched brows" as part of the stare: the old
     // Shape_RaiseBrows 0.02 + 0.04 * Size lifted every look. Now the lift is
@@ -531,7 +961,10 @@ describe("eyes", () => {
     expect(mid.lower).toBeGreaterThan(large.lower);
     expect(mid.lower).toBeLessThan(small.lower);
     const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
-    const meshLook = html.slice(html.indexOf("function applyMeshLook("), html.indexOf("function prefixIndex("));
+    const meshLook = html.slice(
+      html.indexOf("function applyMeshLook("),
+      html.indexOf("function prefixIndex(")
+    );
     expect(meshLook).toMatch(/var brows = browMorphs\(eye, next\.jaw\);/);
     expect(meshLook).toMatch(/"Shape_RaiseBrows", brows\.raise/);
     expect(meshLook).toMatch(/"Shape_LowerBrows", brows\.lower/);
@@ -603,7 +1036,9 @@ describe("eyes", () => {
     expect(eye.scale.z).toBeCloseTo(rig.EYE_SCALE, 9);
     expect(head.scale.x).toBe(1);
     // The eye stays centred in its socket...
-    expect(eye.getWorldPosition(new THREE.Vector3()).distanceTo(centre)).toBeLessThan(1e-9);
+    expect(
+      eye.getWorldPosition(new THREE.Vector3()).distanceTo(centre)
+    ).toBeLessThan(1e-9);
     // ...the ball shrinks about that centre...
     expect(skinned(0).distanceTo(centre)).toBeCloseTo(r * rig.EYE_SCALE, 6);
     // ...the lid follows by its weight (linear blend skinning), so the rig's
@@ -644,7 +1079,12 @@ describe("eyes", () => {
     const rest = new THREE.Quaternion();
     rig.applyEyeScale([eye], rig.EYE_SCALE);
     eye.updateMatrixWorld(true);
-    rig.aimBoneAt(eye, rest, new THREE.Vector3(0.1, 1.4, 1.8), rig.MAX_GAZE_ANGLE);
+    rig.aimBoneAt(
+      eye,
+      rest,
+      new THREE.Vector3(0.1, 1.4, 1.8),
+      rig.MAX_GAZE_ANGLE
+    );
     expect(eye.scale.toArray()).toEqual([
       rig.EYE_SCALE,
       rig.EYE_SCALE,
