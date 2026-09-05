@@ -4,9 +4,9 @@
  * WebGL) and asserts what the 捏人 preview must show for every outfit: the
  * whole figure in frame, both hands drawn and on screen, the eyeball mesh
  * inside the head and scaled down with its bones by the look's Eyes Size
- * (eyeScaleFor: min clearly smaller than max, default 0.82 past the 0.58,
- * 0.65, 0.72 and 0.76 that read as too small, Size 1 under the 0.96 ceiling
- * that keeps it off the unscaled GLB eye), both irises converged on
+ * (eyeScaleFor: min clearly smaller than max, default 0.85 - the approved
+ * 0.82 reference pass nudged as asked - Size 1 at the 0.96 ceiling that keeps
+ * it off the unscaled GLB eye), both irises converged on
  * the camera under a lowered upper lid, hair on the head, one posed master
  * skeleton. Screenshots (plus a 4x close-up of the eyes) go to --out (default
  * /tmp/ph-avatar-check) so a human can eyeball the poses and the face.
@@ -261,8 +261,8 @@ const evaluate = async (cdp, session, expression) => {
 const EYEBALL_DIAMETER = 0.0444;
 const EYEBALL_RADIUS = EYEBALL_DIAMETER / 2;
 // TestFlight 1.2 (14) shipped a fixed eye-bone scale of 0.70 under a stare
-// lid; with the resting lid the default look now sits past it (0.82, the
-// reference pass) and Size 1 at 0.94. Under this lid the sclera share stays
+// lid; with the resting lid the default look now sits past it (0.85 - the
+// 0.82 reference pass nudged as Maxwell asked) and Size 1 at 0.96. Under this lid the sclera share stays
 // ~0.36 at every scale (measured 0.46..1.0), so the 1.2 (11) sclera-dominant
 // saucer cannot recur, and the lid-to-brow gap stays 24-25 CSS px in the
 // bust from 0.60 to 1.0 (the crease rises with the lid margin), so a big eye
@@ -297,16 +297,17 @@ const PARITY_SCLERA_SHARE = 0.08;
 // across, the sclera + iris opening 25 px^2 (4.3 px tall), a pinprick under
 // the fringe - and his reviews of the 0.65 pass (iris 5.8 px, opening 32
 // px^2), the 0.72 pass (6.4 px, 38 px^2) and the 0.76 pass (6.7 px, 42 px^2)
-// said still too small. At 0.82 the iris is 7.3 px and the opening ~47 px^2.
-// The iris diameter is analytic (bone scale x camera) and its threshold sits
-// above the 0.76 pass so a slide back fails here; the opening is counted on
+// said still too small; the 0.82 reference pass (7.3 px, ~47 px^2) was the
+// right direction, nudged to 0.85 (7.5 px, ~50 px^2). The iris diameter is
+// analytic (bone scale x camera) and its threshold sits above the 0.82 pass
+// so a slide back fails here; the opening is counted on
 // the render, where a 10 x 6 px blob moves +-2 px^2 with the parked
 // idle-sway phase, so its threshold only guards the 0.58 / 0.65 sizes.
-const DEFAULT_FULL_MIN_IRIS_PX = 7.0;
+const DEFAULT_FULL_MIN_IRIS_PX = 7.4;
 const DEFAULT_FULL_MIN_OPENING_PX2 = 36;
 // And in the Eyes bust: iris 13.0 px at 0.58, 14.5 at 0.65, 16.1 at 0.72,
-// 17.0 at 0.76, 18.3 at 0.82.
-const DEFAULT_BUST_MIN_IRIS_PX = 17.6;
+// 17.0 at 0.76, 18.3 at 0.82, 19.0 at 0.85.
+const DEFAULT_BUST_MIN_IRIS_PX = 18.7;
 // The reference pass, measured on the hoodie default in the bust with the
 // feel pack switched off (same 0.82 scale) and on: liner rows above the iris
 // 0.0 -> 2.8 CSS px, limbal ring / mid-iris luminance 0.64 -> 0.49, glint
@@ -1057,25 +1058,25 @@ const main = async () => {
     const [scaleMin, scaleDefault, scaleMax, exposedDefault] = eyeScaleRange;
     // The #36 default 0.58 and the #40 passes at 0.65, 0.72 and 0.76 all read
     // as too small on Maxwell's review; the 1.2 (14) fixed 0.70 (under a
-    // stare lid) read as a bit large. The reference pass puts the default at
-    // 0.82, the 1.2 (14) opening area with the iris top covered and inked.
+    // stare lid) read as a bit large. The 0.82 reference pass was the right
+    // direction, nudged to 0.85 as he asked.
     check(
-      `default Eyes Size scales the eye past the too-small 0.58 / 0.65 / 0.72 / 0.76, over the 1.2 (14) fixed ${PREVIOUS_FIXED_EYE_SCALE} under a resting lid`,
-      scaleDefault >= 0.8 &&
-        scaleDefault <= 0.84 &&
+      `default Eyes Size scales the eye a nudge past the approved 0.82 reference pass, over the 1.2 (14) fixed ${PREVIOUS_FIXED_EYE_SCALE} under a resting lid`,
+      scaleDefault > 0.82 &&
+        scaleDefault <= 0.86 &&
         Math.abs(exposedDefault - scaleDefault) < 1e-9,
       `eyeScaleFor(0.5)=${scaleDefault} EYE_SCALE=${exposedDefault}`
     );
-    // A beauty band, not a pinprick-to-saucer range: Size 0 is the old
-    // 1.2 (14) eyeball under the heaviest lid, and Size 1 stays under the
+    // A beauty band, not a pinprick-to-saucer range: Size 0 sits past the old
+    // 1.2 (14) eyeball under the heaviest lid, and Size 1 holds under the
     // unscaled GLB eye; the lid and iris carry the rest of the small/large
     // character.
     check(
       "Eyes Size min -> max spans a visible whole-eye beauty band",
-      scaleMin >= 0.68 &&
-        scaleMin <= 0.72 &&
-        scaleMax - scaleMin >= 0.24 - 1e-9 &&
-        scaleMax >= 0.92 &&
+      scaleMin >= 0.72 &&
+        scaleMin <= 0.76 &&
+        scaleMax - scaleMin >= 0.22 - 1e-9 &&
+        scaleMax >= 0.95 &&
         scaleMax < 1 &&
         scaleMax <= EYE_SCALE_CEILING + 1e-9,
       `min=${scaleMin} max=${scaleMax}`
@@ -1128,14 +1129,14 @@ const main = async () => {
     }
     // The complaint on 1.2 (14): Size min and max "barely differ" (Eyes_0
     // 31.2 -> 31.7 mm). The rendered eyeball at Size 1 must still be clearly
-    // taller than at Size 0 (0.70 -> 0.94 is 1.34x nominal).
+    // taller than at Size 0 (0.74 -> 0.96 is 1.30x nominal).
     const minHeight = eyeHeights[EYES_MIN_LOOK];
     const maxHeight = eyeHeights[EYES_MAX_LOOK];
     check(
       "Eyes Size max renders a clearly bigger eyeball than Size min",
       typeof minHeight === "number" &&
         typeof maxHeight === "number" &&
-        maxHeight / minHeight >= 1.3,
+        maxHeight / minHeight >= 1.25,
       `Eyes_0 height min ${(minHeight * 1000).toFixed(1)} mm, max ${(
         maxHeight * 1000
       ).toFixed(1)} mm`
