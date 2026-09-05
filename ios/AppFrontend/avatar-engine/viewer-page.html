@@ -691,27 +691,29 @@
   // a third time and pivoted to a reference (a ZBrush close-up: large almond
   // eyes under a heavy dark liner, luminous iris, hard catchlight): go past
   // 0.76 *and* add the feel - LASH_INK, LASH_LENGTH, OUTER_CORNER_LIFT,
-  // LID_SHADE, IRIS_LOOK and CATCHLIGHT above carry that. EYE_SCALE_MIN 0.70
-  // (Size 0, a 31.1mm eye under the heaviest lid - the small end is the old
-  // 1.2 (14) eyeball) to EYE_SCALE_MAX 0.94 (Size 1, 41.7mm; large is the
-  // intent at the top end, the lid still covers the iris top, and it stays
-  // 6% under the unscaled GLB eye, 1.0 = the 1.2 (11)-(13) eye he asked to
-  // shrink - measured, the lid-to-brow gap and the sclera share do not move
-  // between 0.88 and 1.0 either). The default (Size 0.5) is EYE_SCALE 0.82
-  // (36.4mm): its bust opening (~315 px^2 at 1x) matches the 1.2 (14)
-  // stare's area (280-300 with its open lid) under a lid that rests on the
-  // iris, now with the liner on top of it; at the Outfit camera the iris is
-  // 7.3 px and the opening ~48 px^2 (0.58: 5.1 px / 26 px^2; 0.65: 5.8 /
-  // 32; 0.72: 6.4 / 38; 0.76: 6.7 / 42). Re-applied on every applyLook, not
+  // LID_SHADE, IRIS_LOOK and CATCHLIGHT above carry that. That pass ran
+  // 0.70 -> 0.94 (default 0.82) and his review was 「0.82改动方向是对的，
+  // 能不能再大一点点」 - right direction, a little larger - so the small end
+  // moves up and the top holds: EYE_SCALE_MIN 0.74 (Size 0, a 32.9mm eye
+  // under the heaviest lid) to EYE_SCALE_MAX 0.96 (Size 1, 42.6mm; large is
+  // the intent at the top end, the lid still covers the iris top, and it
+  // stays under the unscaled GLB eye, 1.0 = the 1.2 (11)-(13) eye he asked
+  // to shrink - measured, the lid-to-brow gap and the sclera share do not
+  // move between 0.88 and 1.0). The default (Size 0.5) is EYE_SCALE 0.85
+  // (37.7mm): its bust opening (~315 px^2 at 1x, liner on) sits just over
+  // the 1.2 (14) stare's area (280-300 with its open lid) under a lid that
+  // rests on the iris; at the Outfit camera the iris is 7.5 px and the
+  // opening ~50 px^2 (0.58: 5.1 px / 26 px^2; 0.65: 5.8 / 32; 0.72: 6.4 /
+  // 38; 0.76: 6.7 / 42; 0.82: 7.3 / 46). Re-applied on every applyLook, not
   // once at load.
-  var EYE_SCALE_MIN = 0.70;
-  var EYE_SCALE_MAX = 0.94;
+  var EYE_SCALE_MIN = 0.74;
+  var EYE_SCALE_MAX = 0.96;
 
   function eyeScaleFor(eyeSize) {
     return EYE_SCALE_MIN + clamp01(eyeSize) * (EYE_SCALE_MAX - EYE_SCALE_MIN);
   }
 
-  // The default (Size 0.5) whole-eye scale, 0.82.
+  // The default (Size 0.5) whole-eye scale, 0.85.
   var EYE_SCALE = eyeScaleFor(0.5);
 
   // Uniform scale on the eye bones. Absolute, so it can be re-applied; the
