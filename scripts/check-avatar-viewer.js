@@ -4,19 +4,22 @@
  * WebGL) and asserts what the 捏人 preview must show for every outfit: the
  * whole figure in frame, both hands drawn and on screen, the eyeball mesh
  * inside the head and scaled down with its bones by the look's Eyes Size
- * (eyeScaleFor: min clearly smaller than max, default under the old fixed
- * 0.70), both irises converged on the camera under a lowered upper lid, hair
- * on the head, one posed master skeleton. Screenshots (plus a 4x close-up of
- * the eyes) go to --out (default /tmp/ph-avatar-check) so a human can eyeball
- * the poses and the face.
+ * (eyeScaleFor: min clearly smaller than max, default 0.65 between the 0.58
+ * that read as too small and the old fixed 0.70), both irises converged on
+ * the camera under a lowered upper lid, hair on the head, one posed master
+ * skeleton. Screenshots (plus a 4x close-up of the eyes) go to --out (default
+ * /tmp/ph-avatar-check) so a human can eyeball the poses and the face.
  *
  * A second pass renders the hoodie preset at 3x the CSS size (same framing,
  * more pixels per eye) and reads the eye pixels back: the upper lid must rest
  * on the iris at Size 0 / 0.5 / 1 (iris exposure and sclera share inside a
- * band per Size), the pupil must stay clear, and the Outfit full-body camera
- * and the Eyes bust camera must show the same lid weight (TestFlight craft
+ * band per Size), the pupil must stay clear, the Outfit full-body camera and
+ * the Eyes bust camera must show the same lid weight (TestFlight craft
  * screenshots: a wide stare in full, a resting lid in bust, from a
- * slope-scaled polygon offset that let the eyeball rim through the lids).
+ * slope-scaled polygon offset that let the eyeball rim through the lids), and
+ * the default eye must not be a pinprick at the Outfit camera (iris and
+ * opening in CSS px). It also writes the full frame per Size and camera
+ * (pixels-outfit2-<view>-size<n>-frame.png) for review collages.
  *
  *   node scripts/check-avatar-viewer.js [--out DIR] [--chrome PATH]
  *
@@ -252,9 +255,11 @@ const evaluate = async (cdp, session, expression) => {
 // residual), centred on eyeRoot_l/r.
 const EYEBALL_DIAMETER = 0.0444;
 const EYEBALL_RADIUS = EYEBALL_DIAMETER / 2;
-// TestFlight 1.2 (14) shipped a fixed eye-bone scale; the default look must
-// now sit clearly under it, and Size 1 must not go past it.
+// TestFlight 1.2 (14) shipped a fixed eye-bone scale of 0.70 under a stare
+// lid; the default look sits under it (0.65) and Size 1 goes past it (0.78)
+// but stays under the ~0.80 where the 1.2 (11) saucer starts.
 const PREVIOUS_FIXED_EYE_SCALE = 0.7;
+const SAUCER_EYE_SCALE = 0.8;
 // Rendered Eyes_0 height per look name, for the Size min/max spread check.
 const eyeHeights = {};
 
@@ -273,9 +278,19 @@ const EYE_BANDS = {
   1: { irisExposure: [0.72, 0.93], scleraShare: [0.15, 0.4] },
 };
 // Full vs bust: same lid weight, same iris share, within measurement noise
-// (head sway plus the 3x full-body eye being ~16 px in radius).
+// (head sway plus the 3x full-body eye being ~18 px in radius).
 const PARITY_IRIS_EXPOSURE = 0.1;
 const PARITY_SCLERA_SHARE = 0.08;
+// The default eye at the Outfit full-body camera, in CSS px (1x): Maxwell's
+// craft walk of the 0.58 default read the eyes as too small - iris 5.1 px
+// across, the sclera + iris opening 25 px^2 (4.3 px tall), a pinprick under
+// the fringe. At 0.65 the iris is 5.8 px and the opening 31 px^2 (5.0 px
+// tall). The iris diameter is analytic (bone scale x camera), the opening is
+// counted on the render.
+const DEFAULT_FULL_MIN_IRIS_PX = 5.5;
+const DEFAULT_FULL_MIN_OPENING_PX2 = 28;
+// And in the Eyes bust: iris 13.0 px at 0.58, 14.5 px at 0.65.
+const DEFAULT_BUST_MIN_IRIS_PX = 14;
 
 const failures = [];
 const check = (name, condition, detail) => {
@@ -453,7 +468,8 @@ const assertLook = (entry, state, wantScale) => {
     eyeHeights[tag] = height;
     check(
       `${tag}: eyeballs shrunk with the bones`,
-      Math.abs(height - want) < 0.002 && height < EYEBALL_DIAMETER * 0.85,
+      Math.abs(height - want) < 0.002 &&
+        height < EYEBALL_DIAMETER * SAUCER_EYE_SCALE + 0.002,
       `Eyes_0 height ${height.toFixed(4)} m, want ${want.toFixed(4)}`
     );
   }
@@ -556,6 +572,9 @@ const measureEye = (png, cx, cy, r, rIris, rPupil) => {
   return {
     irisExposure: irisVisible / (Math.PI * rIris * rIris),
     scleraShare: sclera / Math.max(1, sclera + irisVisible),
+    // The eye opening the viewer actually sees: sclera plus uncovered iris,
+    // in render px (the caller divides by PIXEL_SCALE^2 for CSS px^2).
+    openingPx: sclera + irisVisible,
     // A pupil under ~4 px (the full-body eye at Size 0) has a 2-pixel sample
     // window that antialiasing decides; the lid position is camera-independent
     // (see the parity checks), so the bust view carries this assertion.
@@ -654,6 +673,18 @@ const pixelPass = async (cdp, session) => {
         session,
         `window.phViewerRig.irisSizeFor(${eyeSize})`
       );
+      const frame = await cdp.send(
+        "Page.captureScreenshot",
+        { format: "png" },
+        session
+      );
+      fs.writeFileSync(
+        path.join(
+          OUT_DIR,
+          `pixels-outfit2-${viewMode}-size${eyeSize}-frame.png`
+        ),
+        Buffer.from(frame.data, "base64")
+      );
       const eyes = [];
       for (const bone of ["eyeRoot_l", "eyeRoot_r"]) {
         const gaze = state.eyes.gaze[bone];
@@ -677,16 +708,19 @@ const pixelPass = async (cdp, session) => {
         const png = await pixelsOf(cdp, session, shot.data);
         const scaleX = png.width / clip.width;
         const scaleY = png.height / clip.height;
-        eyes.push(
-          measureEye(
-            png,
-            (gaze.screen.x - clip.x) * scaleX,
-            (gaze.screen.y - clip.y) * scaleY,
-            r * scaleX,
-            rIris * scaleX,
-            rPupil * scaleX
-          )
+        const eye = measureEye(
+          png,
+          (gaze.screen.x - clip.x) * scaleX,
+          (gaze.screen.y - clip.y) * scaleY,
+          r * scaleX,
+          rIris * scaleX,
+          rPupil * scaleX
         );
+        // Back to CSS px (1x) so the numbers match what the phone lays out.
+        eye.irisDiameterCss = (2 * rIris) / PIXEL_SCALE;
+        eye.openingCss2 =
+          eye.openingPx / (scaleX * scaleY * PIXEL_SCALE * PIXEL_SCALE);
+        eyes.push(eye);
         if (bone === "eyeRoot_l") {
           fs.writeFileSync(
             path.join(OUT_DIR, `pixels-outfit2-${viewMode}-size${eyeSize}.png`),
@@ -700,9 +734,37 @@ const pixelPass = async (cdp, session) => {
       const avg = {
         irisExposure: (eyes[0].irisExposure + eyes[1].irisExposure) / 2,
         scleraShare: (eyes[0].scleraShare + eyes[1].scleraShare) / 2,
+        irisDiameterCss:
+          (eyes[0].irisDiameterCss + eyes[1].irisDiameterCss) / 2,
+        openingCss2: (eyes[0].openingCss2 + eyes[1].openingCss2) / 2,
         pupilClear: measurable ? eyes[0].pupilClear && eyes[1].pupilClear : null,
       };
       results[`${viewMode}-${eyeSize}`] = avg;
+      console.log(
+        `     ${tag}: iris ${avg.irisDiameterCss.toFixed(
+          1
+        )} CSS px across, opening ${avg.openingCss2.toFixed(0)} CSS px^2`
+      );
+      if (eyeSize === 0.5) {
+        // The craft-walk complaint on the 0.58 default: eyes too small in the
+        // Outfit step. The default eye must read as an eye from both cameras.
+        const minIris =
+          viewMode === "full"
+            ? DEFAULT_FULL_MIN_IRIS_PX
+            : DEFAULT_BUST_MIN_IRIS_PX;
+        check(
+          `${tag}: default iris is not a pinprick (>= ${minIris} CSS px across)`,
+          avg.irisDiameterCss >= minIris,
+          `iris ${avg.irisDiameterCss.toFixed(2)} CSS px`
+        );
+        if (viewMode === "full") {
+          check(
+            `${tag}: default eye opening reads at the Outfit camera (>= ${DEFAULT_FULL_MIN_OPENING_PX2} CSS px^2)`,
+            avg.openingCss2 >= DEFAULT_FULL_MIN_OPENING_PX2,
+            `opening ${avg.openingCss2.toFixed(1)} CSS px^2`
+          );
+        }
+      }
       const band = EYE_BANDS[eyeSize];
       check(
         `${tag}: upper lid rests on the iris (exposure in band)`,
@@ -835,22 +897,27 @@ const main = async () => {
       throw new Error("viewer-page.html has no eyeScaleFor; nothing to assert");
     }
     const [scaleMin, scaleDefault, scaleMax, exposedDefault] = eyeScaleRange;
+    // The #36 default 0.58 read as too small on the craft walk; the 1.2 (14)
+    // fixed 0.70 (under a stare lid) read as a bit large. The default sits
+    // between them, clearly above 0.58.
     check(
-      `default Eyes Size scales the eye under the 1.2 (14) fixed ${PREVIOUS_FIXED_EYE_SCALE}`,
-      scaleDefault <= PREVIOUS_FIXED_EYE_SCALE - 0.05 &&
-        scaleDefault >= 0.5 &&
+      `default Eyes Size scales the eye between the too-small 0.58 and the 1.2 (14) fixed ${PREVIOUS_FIXED_EYE_SCALE}`,
+      scaleDefault >= 0.64 &&
+        scaleDefault < PREVIOUS_FIXED_EYE_SCALE &&
         Math.abs(exposedDefault - scaleDefault) < 1e-9,
       `eyeScaleFor(0.5)=${scaleDefault} EYE_SCALE=${exposedDefault}`
     );
-    // A beauty band, not a pinprick-to-saucer range: Size 0 stays a modest
-    // small eye (>= 0.45) and Size 1 tops out at the 1.2 (14) eye; the lid
-    // and iris carry the rest of the small/large character.
+    // A beauty band, not a pinprick-to-saucer range: Size 0 is a real-sized
+    // eye (>= 0.5, still the modest small end) and Size 1 goes past the
+    // 1.2 (14) eye but stays under the saucer; the lid and iris carry the
+    // rest of the small/large character.
     check(
       "Eyes Size min -> max spans a visible whole-eye beauty band",
-      scaleMin >= 0.45 &&
-        scaleMin <= 0.5 &&
-        scaleMax - scaleMin >= 0.22 &&
-        scaleMax <= PREVIOUS_FIXED_EYE_SCALE + 1e-9,
+      scaleMin >= 0.5 &&
+        scaleMin <= 0.55 &&
+        scaleMax - scaleMin >= 0.26 - 1e-9 &&
+        scaleMax > PREVIOUS_FIXED_EYE_SCALE &&
+        scaleMax <= SAUCER_EYE_SCALE + 1e-9,
       `min=${scaleMin} max=${scaleMax}`
     );
     for (const entry of LOOKS) {
@@ -901,7 +968,7 @@ const main = async () => {
     }
     // The complaint on 1.2 (14): Size min and max "barely differ" (Eyes_0
     // 31.2 -> 31.7 mm). The rendered eyeball at Size 1 must still be about
-    // half again as tall as at Size 0 (0.46 -> 0.70 is 1.52x nominal).
+    // half again as tall as at Size 0 (0.52 -> 0.78 is 1.5x nominal).
     const minHeight = eyeHeights[EYES_MIN_LOOK];
     const maxHeight = eyeHeights[EYES_MAX_LOOK];
     check(
