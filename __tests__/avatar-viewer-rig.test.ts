@@ -437,7 +437,7 @@ describe("eyes", () => {
     expect(rig.upperLidDrop(NaN)).toBe(rig.upperLidDrop(0));
   });
 
-  it("rests the default whole eye at 0.82: past the 0.58, 0.65, 0.72 and 0.76 Maxwell read as too small, the 1.2 (14) stare's area under a resting lid", () => {
+  it("rests the default whole eye at 0.85: the 0.82 reference pass Maxwell called the right direction, nudged a little larger as he asked", () => {
     // TestFlight 1.2 (13): lowered lids, converged gaze and a 0.31 iris still
     // read as too-large eyes (整个眼睛的缩小, not another pupil shrink), so the
     // eye bones were scaled by a fixed 0.70. 1.2 (14): still "a bit large" -
@@ -454,53 +454,56 @@ describe("eyes", () => {
     // coverage does not move with the bone scale (the lid margin is skinned
     // 1.0 to the eye bone), so the default can grow with the #36 lid and
     // iris untouched and the opening grows with the square of the scale:
-    // 0.82 is a 36.4 mm eye whose resting-lid opening (~315 px^2) matches
-    // the 1.2 (14) stare's area with the iris top covered - and now inked.
-    // EYE_SCALE stays the name for that default.
+    // 0.82 was a 36.4 mm eye whose resting-lid opening (~295 px^2 with the
+    // liner) matched the 1.2 (14) stare's area with the iris top covered and
+    // inked; Maxwell's review: 「0.82改动方向是对的，能不能再大一点点」 - the
+    // direction is right, a little larger - so 0.85 (37.7 mm, ~315 px^2),
+    // the feel pack untouched. EYE_SCALE stays the name for that default.
     expect(rig.EYE_SCALE).toBeCloseTo(rig.eyeScaleFor(0.5), 9);
-    expect(rig.EYE_SCALE).toBeCloseTo(0.82, 9);
-    // In the reference pass's 0.80-0.82 window, past the 1.2 (14) eyeball.
-    expect(rig.EYE_SCALE).toBeGreaterThanOrEqual(0.8);
+    expect(rig.EYE_SCALE).toBeCloseTo(0.85, 9);
+    // A nudge past the approved 0.82, not a jump.
+    expect(rig.EYE_SCALE).toBeGreaterThan(0.82);
     expect(rig.EYE_SCALE).toBeGreaterThan(PREVIOUS_FIXED_EYE_SCALE);
-    expect(rig.EYE_SCALE).toBeLessThanOrEqual(0.84);
+    expect(rig.EYE_SCALE).toBeLessThanOrEqual(0.86);
     // Not 1.0 by a rounding accident.
     expect(rig.EYE_SCALE).not.toBeCloseTo(1, 1);
   });
 
-  it("maps the Eyes Size slider onto a whole-eye beauty band: small end at the old 1.2 (14) eyeball, top end under the unscaled GLB eye", () => {
+  it("maps the Eyes Size slider onto a whole-eye beauty band: small end past the old 1.2 (14) eyeball, top end held under the unscaled GLB eye", () => {
     // 1.2 (14): Size only repainted the iris (irisSize 0.82..1.10) and opened
     // the lid by 0.08 while the eyeball stayed at 0.70 at every slider
     // position. PR #33 then drove the bones 0.42 -> 0.74: at 0.42 (18.6 mm)
     // the eye read as a bare bead because the whole look was uniform scale.
     // #36 coupled scale with the lid and iris on a 0.46 -> 0.70 band; the
     // craft walk read its 0.58 default as too small, #40's passes at 0.52 ->
-    // 0.78, 0.60 -> 0.84 and 0.64 -> 0.88 still too small, so the band moves
-    // up as a whole again (same lid and iris per Size, same linear steps):
-    // 0.70 (31.1 mm under the heaviest lid - the small end is the 1.2 (14)
-    // eyeball) to 0.94 (41.7 mm; large is the intent at the top end, the lid
-    // still covers the iris top). Measured on every band from 0.46 to 1.0 the
-    // sclera share at Size 1 stays ~0.36, so the 1.2 (11) sclera-dominant
-    // saucer cannot come back under this lid, and the lid-to-brow gap stays
-    // 24-25 px (1x, bust) at every scale because the crease rises with the
-    // lid margin - a big eye does not crowd the brow either. The only
-    // top-end guard left is the unscaled GLB eye itself (1.0, the 1.2 (11)-
-    // (13) eye Maxwell asked to shrink): the top stays under it.
+    // 0.78, 0.60 -> 0.84 and 0.64 -> 0.88 still too small, the reference pass
+    // went to 0.70 -> 0.94 and was called the right direction with a nudge
+    // asked for, so the small end moves up to 0.74 (32.9 mm under the
+    // heaviest lid) while the top holds at 0.96 (42.6 mm; large is the intent
+    // at the top end, the lid still covers the iris top). Measured on every
+    // band from 0.46 to 1.0 the sclera share at Size 1 stays ~0.36, so the
+    // 1.2 (11) sclera-dominant saucer cannot come back under this lid, and
+    // the lid-to-brow gap stays 24-25 px (1x, bust) at every scale because
+    // the crease rises with the lid margin - a big eye does not crowd the
+    // brow either. The only top-end guard left is the unscaled GLB eye itself
+    // (1.0, the 1.2 (11)-(13) eye Maxwell asked to shrink): the top stays
+    // under it, so the spread narrows to 0.22 rather than pushing past it.
     const min = rig.eyeScaleFor(0);
     const max = rig.eyeScaleFor(1);
     expect(min).toBe(rig.EYE_SCALE_MIN);
     expect(max).toBe(rig.EYE_SCALE_MAX);
-    expect(min).toBeGreaterThanOrEqual(0.68);
-    expect(min).toBeLessThanOrEqual(0.72);
+    expect(min).toBeGreaterThanOrEqual(0.72);
+    expect(min).toBeLessThanOrEqual(0.76);
     expect(max).toBeGreaterThan(rig.EYE_SCALE);
     // Past the 1.2 (14) eyeball at the top end, under the GLB eye.
     expect(max).toBeGreaterThan(PREVIOUS_FIXED_EYE_SCALE);
-    expect(max).toBeGreaterThanOrEqual(0.92);
+    expect(max).toBeGreaterThanOrEqual(0.95);
     expect(max).toBeLessThanOrEqual(0.96);
     expect(max).toBeLessThan(1);
-    // The spread: #36's original 0.24, so min -> max is still a visible
-    // 1.34x on the eyeball (1.2 (14) was 1.015x and read as no change).
-    expect(max - min).toBeGreaterThanOrEqual(0.24 - 1e-9);
-    expect(max / min).toBeGreaterThanOrEqual(1.34 - 1e-9);
+    // The spread: 0.22, so min -> max is still a visible 1.3x on the eyeball
+    // (1.2 (14) was 1.015x and read as no change).
+    expect(max - min).toBeGreaterThanOrEqual(0.22 - 1e-9);
+    expect(max / min).toBeGreaterThanOrEqual(1.29 - 1e-9);
     // Monotonic and linear, so every slider step is the same visible step.
     const steps = [0, 0.25, 0.5, 0.75, 1].map((size) => rig.eyeScaleFor(size));
     for (let i = 1; i < steps.length; i += 1) {
