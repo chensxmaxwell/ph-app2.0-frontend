@@ -156,7 +156,9 @@
     setMorph(mesh, "Shape_RaiseBrows", brows.raise);
     setMorph(mesh, "Shape_LowerBrows", brows.lower);
     setMorph(mesh, "Shape_NoseTiltDown", mild(next.chin, 0.08));
-    setMorph(mesh, "Shape_LashLength", 0.42);
+    setMorph(mesh, "Shape_LashLength", LASH_LENGTH);
+    setMorph(mesh, "Shape_EyesOuterCornersHigh", OUTER_CORNER_LIFT);
+    setMorph(mesh, "Shape_EyesOuterCornersLow", 0);
     setMorph(mesh, "Shape_BrowsThickness", 0.32);
     setMorph(mesh, "Shape_Chest", clamp01(next.chest));
     setMorph(mesh, "Shape_Muscle", arms);
@@ -383,13 +385,15 @@
       mat.roughness = 0.46 + age * 0.08;
       mat.needsUpdate = true;
     });
+    var hair = hexColor(HAIR_COLORS[next.hairColor] || HAIR_COLORS[0]);
+    var brow = browColorFor(hair);
     var head = skin.clone();
     headMats.forEach(function (mat) {
       mat.color.copy(head);
       mat.roughness = 0.42 + age * 0.06;
+      if (mat.userData.browColor) mat.userData.browColor.copy(brow);
       mat.needsUpdate = true;
     });
-    var hair = hexColor(HAIR_COLORS[next.hairColor] || HAIR_COLORS[0]);
     hairMats.forEach(function (mat) {
       mat.color.copy(hair);
       mat.roughness = 0.42 + age * 0.12;
@@ -448,25 +452,81 @@
     return rt.texture;
   }
 
+  // Head_0 carries its brow and lash "hair cards" as geometry (COLOR_1 marks
+  // 458 vertices: 218 brow, 240 lash - 192 on the upper lids, 48 on the
+  // lower), but ph_tex_SkinAlbedo is one flat skin colour, so both render as
+  // skin-coloured slabs: the brows read as tan ridges and the lashes only
+  // show as the grazing-angle shading of a thin card. Measured on the GLB,
+  // the cards sit in a UV strip of their own - upper lashes at u 0.143-0.146,
+  // brows and lower lashes at u 0.134-0.138, all at v 0.217-0.240 - so the
+  // head shader can ink them: the upper lash card becomes the liner (a
+  // winged band that thickens toward the outer corner, following
+  // Shape_LashLength and the lid morphs), the brow and lower-lash cards take
+  // a darkened hair colour. No new geometry or texture; what this cannot do
+  // is individual lash hairs or a smoky lid gradient (see the handoff).
+  var LASH_CARD_U = [0.1425, 0.1465];
+  var BROW_CARD_U = [0.1330, 0.1385];
+  var CARD_V = [0.214, 0.243];
+  // Liner ink: near-black warm, mixed at `density` over the card.
+  var LASH_INK = { color: [0.05, 0.035, 0.035], density: 0.92 };
+  // Brow / lower-lash cards: mix toward browColorFor(hair) by this much.
+  var BROW_INK = 0.72;
+  // Shape_LashLength on Head_0: 1.0 moves the upper lash tips 4.5 mm mean
+  // (up and forward, a curl; 8 mm max). 1.2 (11)-(14) and #36 ran 0.42.
+  var LASH_LENGTH = 0.8;
+  // Shape_EyesOuterCornersHigh: 1.0 lifts the lid-corner skin 1.5 mm and
+  // pushes it 1 mm outward (lash tips 3 mm) - the slight feline lift of the
+  // reference. Opening the corner does not open the aperture, so it cannot
+  // bring the stare back.
+  var OUTER_CORNER_LIFT = 0.9;
+
+  // Brow colour from the hair colour: darker than the hair, never lighter
+  // than a mid brown, so blonde hair gets defined brows instead of tan slabs.
+  function browColorFor(hair) {
+    var c = hair.clone().multiplyScalar(0.5);
+    return c;
+  }
+
+  function cardMask(name, uRange) {
+    return "float " + name + " = step(" + uRange[0].toFixed(4) + ", fu.x) * step(fu.x, " + uRange[1].toFixed(4) + ") * step(" + CARD_V[0].toFixed(3) + ", fu.y) * step(fu.y, " + CARD_V[1].toFixed(3) + ");";
+  }
+
+  // GLSL appended after map_fragment on the head material: lips, the skin
+  // under the brows, cheeks, then the ink on the lash and brow cards.
+  function headPaintChunk() {
+    return [
+      "vec2 fu = vUv;",
+      "float lip = 1.0 - smoothstep(0.12, 1.0, length((fu - vec2(0.126, 0.162)) / vec2(0.028, 0.0085)));",
+      "float lipLine = 1.0 - smoothstep(0.18, 1.0, length((fu - vec2(0.126, 0.160)) / vec2(0.022, 0.0028)));",
+      "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.70, 0.26, 0.30), lip * 0.62);",
+      "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.38, 0.12, 0.14), lipLine * 0.48);",
+      "float bL = 1.0 - smoothstep(0.36, 1.0, length((fu - vec2(0.095, 0.090)) / vec2(0.024, 0.0065)));",
+      "float bR = 1.0 - smoothstep(0.36, 1.0, length((fu - vec2(0.157, 0.090)) / vec2(0.024, 0.0065)));",
+      "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.09, 0.05, 0.04), max(bL, bR) * 0.92);",
+      "float cL = 1.0 - smoothstep(0.35, 1.0, length((fu - vec2(0.080, 0.155)) / vec2(0.018, 0.014)));",
+      "float cR = 1.0 - smoothstep(0.35, 1.0, length((fu - vec2(0.172, 0.155)) / vec2(0.018, 0.014)));",
+      "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.50, 0.48), max(cL, cR) * 0.12);",
+      cardMask("lashCard", LASH_CARD_U),
+      cardMask("browCard", BROW_CARD_U),
+      "diffuseColor.rgb = mix(diffuseColor.rgb, browColor, browCard * " + BROW_INK.toFixed(2) + ");",
+      "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(" + LASH_INK.color.map(function (v) { return v.toFixed(3); }).join(", ") + "), lashCard * " + LASH_INK.density.toFixed(2) + ");"
+    ].join("\n") + "\n";
+  }
+
   function injectSkinWrap(mat, amount) {
     var wrap = amount == null ? 0.22 : amount;
+    var isHead = wrap < 0.1;
+    if (isHead) mat.userData.browColor = new THREE.Color(0x2b1d14);
     mat.customProgramCacheKey = function () { return "skinwrap-" + String(wrap); };
     mat.onBeforeCompile = function (shader) {
       var extra = "";
-      if (wrap < 0.1) {
-        extra = [
-          "vec2 fu = vUv;",
-          "float lip = 1.0 - smoothstep(0.12, 1.0, length((fu - vec2(0.126, 0.162)) / vec2(0.028, 0.0085)));",
-          "float lipLine = 1.0 - smoothstep(0.18, 1.0, length((fu - vec2(0.126, 0.160)) / vec2(0.022, 0.0028)));",
-          "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.70, 0.26, 0.30), lip * 0.62);",
-          "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.38, 0.12, 0.14), lipLine * 0.48);",
-          "float bL = 1.0 - smoothstep(0.36, 1.0, length((fu - vec2(0.095, 0.090)) / vec2(0.024, 0.0065)));",
-          "float bR = 1.0 - smoothstep(0.36, 1.0, length((fu - vec2(0.157, 0.090)) / vec2(0.024, 0.0065)));",
-          "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.09, 0.05, 0.04), max(bL, bR) * 0.92);",
-          "float cL = 1.0 - smoothstep(0.35, 1.0, length((fu - vec2(0.080, 0.155)) / vec2(0.018, 0.014)));",
-          "float cR = 1.0 - smoothstep(0.35, 1.0, length((fu - vec2(0.172, 0.155)) / vec2(0.018, 0.014)));",
-          "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.50, 0.48), max(cL, cR) * 0.12);"
-        ].join("\n") + "\n";
+      if (isHead) {
+        shader.uniforms.browColor = { value: mat.userData.browColor };
+        shader.fragmentShader = shader.fragmentShader.replace(
+          "#include <common>",
+          "#include <common>\nuniform vec3 browColor;"
+        );
+        extra = headPaintChunk();
       }
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <map_fragment>",
@@ -557,8 +617,39 @@
   // *interpolated* vertex normal on the 20-segment Eyes_0 sphere: measured,
   // it whitened 15-49% of the visible iris and changed size with the facet
   // alignment between renders, and on a 10 px full-body iris it painted the
-  // top half sclera-white. cos(9deg) = 0.988, cos(5deg) = 0.996.
-  var CATCHLIGHT = { lo: 0.988, hi: 0.996, mix: 0.8 };
+  // top half sclera-white. #36 ran (0.988, 0.996, 0.8): a <= 9deg spot with a
+  // 4deg soft edge. The reference (a ZBrush close-up Maxwell picked) has a
+  // hard glassy glint, so the edge is now 9.2deg -> 7.2deg (cos 0.987 ->
+  // 0.992) and the spot 90% white; the same <= 9deg-class footprint, so a 7 px
+  // full-body iris still keeps its colour. `mix2` is the softer secondary
+  // glint low on the other side of the pupil. `emit` adds the main glint
+  // unlit: measured, a diffuse-only glint under this light rig peaks near
+  // the sclera's luminance (~170 of 255) because the top of the ball faces
+  // away from the key light, so it never read as glass. `dir` is the
+  // view-space direction whose sphere normal carries the glint. #36 used
+  // (0.20, 0.16, 1.0), 9deg above the view axis - but both cameras sit
+  // below the eyes, so a normal along the view axis already projects ~0.13
+  // eyeball radii *above* the pupil, and 0.16 more put the spot at ~0.28 r,
+  // under the upper lid: measured (aiming the glint at (0, 0, 1) put a
+  // peak-255 spot at the pupil's top edge), the analytic catchlight had
+  // been hidden since the lid came down, and the light spot people saw at
+  // the pupil's upper-left was the fill light's clearcoat reflection. Level
+  // with the axis it lands on the upper-right pupil edge, as in the
+  // reference.
+  var CATCHLIGHT = { lo: 0.987, hi: 0.992, mix: 0.9, mix2: 0.26, emit: 0.6, dir: [0.22, -0.02, 1.0] };
+  // The eyeball's shade under the upper lid (share of the sclera / iris
+  // darkened at the top of the ball, p.y up). #36 ran 0.26; the reference
+  // eye sits deep under a heavy lid, so 0.34.
+  var LID_SHADE = 0.34;
+  // Iris paint. #36 was a two-tone gradient with a 22%-wide rim at 30% of the
+  // eye colour - a flat disc at the bust camera. Now: a luminous inner zone
+  // around the pupil, saturated mid, radial fibres (two sine frequencies,
+  // phase-wobbled) faded out at the pupil and the rim, and a darker, wider
+  // limbal ring. `fibreStrength` is scaled per frame by the `irisDetail`
+  // uniform (0 when the iris is under ~6 px on screen, 1 above ~14 px) so
+  // the full-body eye does not shimmer under the idle sway. `glow` lifts the
+  // iris unlit so a blue eye reads lit from within, as in the reference.
+  var IRIS_LOOK = { rimStart: 0.7, rimMix: 0.85, rimTone: 0.22, fibreStrength: 0.8, glow: 0.14, innerGain: 2.0 };
   // TestFlight 1.2 (13): with the lids, gaze and 0.31 iris above, Maxwell
   // still read the eyes as too big - the whole eye, not the pupil. Eyes_0 is
   // two 22.2mm-radius spheres (44mm across on a 26cm head; a real eye is
@@ -595,25 +686,32 @@
   // px (1x, bust) from 0.60 to 1.0 and the brow's underside shadow rises
   // with it (the crease is part-weighted to the eye bone), so the lid-to-
   // brow gap stays 24-25 px at every scale; the opening grows downward and
-  // outward because the gaze aims down at the camera. EYE_SCALE_MIN 0.64
-  // (Size 0, a 28.4mm eye under the heaviest lid - the small end is about
-  // #40's first-pass default) to EYE_SCALE_MAX 0.88 (Size 1, 39.1mm; large
-  // is the intent at the top end, the lid still covers the iris top, and it
-  // stays 12% under the unscaled GLB eye, 1.0 = the 1.2 (11)-(13) eye he
-  // asked to shrink). The default (Size 0.5) is EYE_SCALE 0.76 (33.7mm):
-  // its bust opening (~270 px^2 at 1x) is just under the 1.2 (14) stare's
-  // area (280-300 with its open lid) under a lid that rests on the iris; at
-  // the Outfit camera the iris is 6.7 px and the opening 41-43 px^2, 5.8 px
-  // tall (0.58: 5.1 px / 26 px^2; 0.65: 5.8 / 32; 0.72: 6.4 / 38).
-  // Re-applied on every applyLook, not once at load.
-  var EYE_SCALE_MIN = 0.64;
-  var EYE_SCALE_MAX = 0.88;
+  // outward because the gaze aims down at the camera. #40's third pass ran
+  // 0.64 -> 0.88 (default 0.76) and Maxwell's review said "still too small"
+  // a third time and pivoted to a reference (a ZBrush close-up: large almond
+  // eyes under a heavy dark liner, luminous iris, hard catchlight): go past
+  // 0.76 *and* add the feel - LASH_INK, LASH_LENGTH, OUTER_CORNER_LIFT,
+  // LID_SHADE, IRIS_LOOK and CATCHLIGHT above carry that. EYE_SCALE_MIN 0.70
+  // (Size 0, a 31.1mm eye under the heaviest lid - the small end is the old
+  // 1.2 (14) eyeball) to EYE_SCALE_MAX 0.94 (Size 1, 41.7mm; large is the
+  // intent at the top end, the lid still covers the iris top, and it stays
+  // 6% under the unscaled GLB eye, 1.0 = the 1.2 (11)-(13) eye he asked to
+  // shrink - measured, the lid-to-brow gap and the sclera share do not move
+  // between 0.88 and 1.0 either). The default (Size 0.5) is EYE_SCALE 0.82
+  // (36.4mm): its bust opening (~315 px^2 at 1x) matches the 1.2 (14)
+  // stare's area (280-300 with its open lid) under a lid that rests on the
+  // iris, now with the liner on top of it; at the Outfit camera the iris is
+  // 7.3 px and the opening ~48 px^2 (0.58: 5.1 px / 26 px^2; 0.65: 5.8 /
+  // 32; 0.72: 6.4 / 38; 0.76: 6.7 / 42). Re-applied on every applyLook, not
+  // once at load.
+  var EYE_SCALE_MIN = 0.70;
+  var EYE_SCALE_MAX = 0.94;
 
   function eyeScaleFor(eyeSize) {
     return EYE_SCALE_MIN + clamp01(eyeSize) * (EYE_SCALE_MAX - EYE_SCALE_MIN);
   }
 
-  // The default (Size 0.5) whole-eye scale, 0.76.
+  // The default (Size 0.5) whole-eye scale, 0.82.
   var EYE_SCALE = eyeScaleFor(0.5);
 
   // Uniform scale on the eye bones. Absolute, so it can be re-applied; the
@@ -647,16 +745,28 @@
       "vec3 scleraCol = mix(vec3(0.92, 0.905, 0.88), vec3(0.975, 0.965, 0.95), 1.0 - smoothstep(0.30, 0.85, d));",
       // Upper-lid shadow: darkens the top of the eyeball (p.y is up) so the
       // eye reads as recessed under the lid rather than a bright doll bead.
-      "float lidShade = smoothstep(-0.12, 0.30, p.y) * 0.26;",
+      "float lidShade = smoothstep(-0.12, 0.30, p.y) * " + LID_SHADE.toFixed(2) + ";",
       "scleraCol *= 1.0 - lidShade;",
-      // Iris keeps the eye colour's hue: lighter around the pupil, darker
-      // toward the limbal ring.
+      // Iris keeps the eye colour's hue: a luminous collarette around the
+      // pupil, saturated mid, radial fibres, then the dark limbal ring.
       "float irisT = clamp(d / irisR, 0.0, 1.0);",
-      "vec3 irisCol = mix(irisColor * 1.55 + vec3(0.10, 0.07, 0.04), irisColor * 0.72, smoothstep(0.22, 1.0, irisT));",
+      "float ang = atan(p.y, p.x);",
+      "float fibre = 0.5 + 0.5 * sin(ang * 38.0 + 1.6 * sin(ang * 7.0 + irisT * 3.0));",
+      "float fibre2 = 0.5 + 0.5 * sin(ang * 15.0 + 2.1);",
+      "float fibres = mix(0.80, 1.20, fibre * 0.65 + fibre2 * 0.35);",
+      "float fibreM = smoothstep(pupilR + 0.02, pupilR + 0.09, d) * (1.0 - smoothstep(irisR * 0.86, irisR, d));",
+      "vec3 irisInner = irisColor * " + IRIS_LOOK.innerGain.toFixed(2) + " + vec3(0.08, 0.10, 0.06);",
+      "vec3 irisMid = irisColor * 1.05;",
+      "vec3 irisCol = mix(irisInner, irisMid, smoothstep(0.18, 0.75, irisT));",
+      "irisCol *= mix(1.0, fibres, fibreM * " + IRIS_LOOK.fibreStrength.toFixed(2) + " * irisDetail);",
+      "float rim = smoothstep(irisR * " + IRIS_LOOK.rimStart.toFixed(2) + ", irisR, d) * irisM;",
+      "irisCol = mix(irisCol, irisColor * " + IRIS_LOOK.rimTone.toFixed(2) + ", rim * " + IRIS_LOOK.rimMix.toFixed(2) + ");",
       "irisCol *= 1.0 - lidShade * 0.8;",
-      "float rim = smoothstep(irisR * 0.78, irisR, d) * irisM;",
-      "irisCol = mix(irisCol, irisColor * 0.30, rim * 0.72);",
-      "vec3 pupilCol = vec3(0.05, 0.04, 0.04);",
+      // A soft dark halo round the pupil so it does not read as a punched
+      // hole in a flat disc.
+      "float pupilHalo = 1.0 - smoothstep(pupilR, pupilR + 0.06, d);",
+      "irisCol = mix(irisCol, irisCol * 0.7, pupilHalo * 0.5);",
+      "vec3 pupilCol = vec3(0.04, 0.03, 0.03);",
       "vec3 col = mix(scleraCol, irisCol, irisM);",
       "col = mix(col, pupilCol, pupilM);",
       // Catchlights from a fixed view-space direction (upper right on
@@ -668,15 +778,15 @@
       "vec3 toL = fragPos - eyeCentreL;",
       "vec3 toR = fragPos - eyeCentreR;",
       "vec3 ballN = normalize(dot(toL, toL) < dot(toR, toR) ? toL : toR);",
-      "float spec = smoothstep(" + CATCHLIGHT.lo.toFixed(3) + ", " + CATCHLIGHT.hi.toFixed(3) + ", dot(ballN, normalize(vec3(0.20, 0.16, 1.0))));",
+      "float spec = smoothstep(" + CATCHLIGHT.lo.toFixed(3) + ", " + CATCHLIGHT.hi.toFixed(3) + ", dot(ballN, normalize(vec3(" + CATCHLIGHT.dir.map(function (v) { return v.toFixed(2); }).join(", ") + "))));",
       "float spec2 = smoothstep(0.993, 0.998, dot(ballN, normalize(vec3(-0.22, -0.26, 1.0))));",
       "col = mix(col, vec3(1.0), spec * " + CATCHLIGHT.mix.toFixed(2) + ");",
-      "col = mix(col, vec3(1.0), spec2 * 0.18);",
+      "col = mix(col, vec3(1.0), spec2 * " + CATCHLIGHT.mix2.toFixed(2) + ");",
       "diffuseColor.rgb = col;",
       // The eyeball faces the dark purple ground of the hemisphere light, so
       // lift it a little unlit (more on the sclera) instead of letting the
-      // lower white go steel grey.
-      "totalEmissiveRadiance += col * (0.10 + 0.16 * (1.0 - irisM));"
+      // lower white go steel grey, and let the iris glow from within.
+      "totalEmissiveRadiance += col * (0.10 + 0.16 * (1.0 - irisM)) + irisCol * irisM * (1.0 - pupilM) * " + IRIS_LOOK.glow.toFixed(2) + " + vec3(spec * " + CATCHLIGHT.emit.toFixed(2) + ");"
     ].join("\n");
   }
 
@@ -714,9 +824,10 @@
       shader.uniforms.irisSize = { value: mat.userData.irisSize };
       shader.uniforms.eyeCentreL = { value: new THREE.Vector3() };
       shader.uniforms.eyeCentreR = { value: new THREE.Vector3() };
+      shader.uniforms.irisDetail = { value: 1 };
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <common>",
-        "#include <common>\nuniform vec3 irisColor;\nuniform float irisSize;\nuniform vec3 eyeCentreL;\nuniform vec3 eyeCentreR;"
+        "#include <common>\nuniform vec3 irisColor;\nuniform float irisSize;\nuniform vec3 eyeCentreL;\nuniform vec3 eyeCentreR;\nuniform float irisDetail;"
       );
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <map_fragment>",
@@ -858,15 +969,29 @@
     }
   }
 
+  // Eyes_0 is a 22.2 mm sphere; its radius in device pixels at the eye's
+  // depth decides how much iris detail the shader may draw (see IRIS_LOOK).
+  var EYEBALL_RADIUS_M = 0.0222;
+  var IRIS_DETAIL_PX = { off: 6, full: 14 };
+
+  function irisDetailFor(radiusPx) {
+    return clamp01((radiusPx - IRIS_DETAIL_PX.off) / (IRIS_DETAIL_PX.full - IRIS_DETAIL_PX.off));
+  }
+
   function updateEyeCentres() {
     if (!camera || eyeBones.length < 2) return;
     viewSpaceEyeCentres(eyeBones, camera, _eyeCentreL, _eyeCentreR);
+    var depth = Math.max(1e-6, -_eyeCentreL.z);
+    var pxPerMetre = (window.innerHeight / 2) / Math.tan((camera.fov * Math.PI) / 360) / depth;
+    var dpr = renderer ? renderer.getPixelRatio() : 1;
+    var detail = irisDetailFor(EYEBALL_RADIUS_M * eyeBones[0].scale.x * pxPerMetre * dpr);
     var i;
     for (i = 0; i < eyeMats.length; i++) {
       var shader = eyeMats[i].userData.shader;
       if (!shader || !shader.uniforms.eyeCentreL) continue;
       shader.uniforms.eyeCentreL.value.copy(_eyeCentreL);
       shader.uniforms.eyeCentreR.value.copy(_eyeCentreR);
+      if (shader.uniforms.irisDetail) shader.uniforms.irisDetail.value = detail;
     }
   }
 
@@ -1277,11 +1402,15 @@
   // Gaze and lid state: where each eyeball sits, where its iris axis points,
   // how far that is from the camera, and the Head_0 upper-lid morph weight.
   function eyeState() {
-    var out = { lidDrop: null, gaze: {} };
+    var out = { lidDrop: null, lashLength: null, outerCornerLift: null, gaze: {} };
     morphMeshes.forEach(function (mesh) {
       if ((mesh.name || "").indexOf("Head_") !== 0) return;
       var idx = mesh.morphTargetDictionary["Shape_EyeLidHeight"];
       if (typeof idx === "number") out.lidDrop = mesh.morphTargetInfluences[idx];
+      var lash = mesh.morphTargetDictionary["Shape_LashLength"];
+      if (typeof lash === "number") out.lashLength = mesh.morphTargetInfluences[lash];
+      var corner = mesh.morphTargetDictionary["Shape_EyesOuterCornersHigh"];
+      if (typeof corner === "number") out.outerCornerLift = mesh.morphTargetInfluences[corner];
     });
     var pos = new THREE.Vector3();
     var fwd = new THREE.Vector3();
@@ -1339,6 +1468,19 @@
     IRIS_SIZE_SMALL: IRIS_SIZE_SMALL,
     IRIS_SIZE_LARGE: IRIS_SIZE_LARGE,
     CATCHLIGHT: CATCHLIGHT,
+    LID_SHADE: LID_SHADE,
+    IRIS_LOOK: IRIS_LOOK,
+    IRIS_DETAIL_PX: IRIS_DETAIL_PX,
+    LASH_CARD_U: LASH_CARD_U,
+    BROW_CARD_U: BROW_CARD_U,
+    CARD_V: CARD_V,
+    LASH_INK: LASH_INK,
+    BROW_INK: BROW_INK,
+    LASH_LENGTH: LASH_LENGTH,
+    OUTER_CORNER_LIFT: OUTER_CORNER_LIFT,
+    browColorFor: browColorFor,
+    headPaintChunk: headPaintChunk,
+    irisDetailFor: irisDetailFor,
     eyeScaleFor: eyeScaleFor,
     irisSizeFor: irisSizeFor,
     browMorphs: browMorphs,
