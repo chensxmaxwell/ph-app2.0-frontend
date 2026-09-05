@@ -4,9 +4,9 @@
  * WebGL) and asserts what the 捏人 preview must show for every outfit: the
  * whole figure in frame, both hands drawn and on screen, the eyeball mesh
  * inside the head and scaled down with its bones by the look's Eyes Size
- * (eyeScaleFor: min clearly smaller than max, default 0.76 past the 0.58,
- * 0.65 and 0.72 that read as too small, Size 1 under the 0.92 ceiling that
- * keeps it off the unscaled GLB eye), both irises converged on
+ * (eyeScaleFor: min clearly smaller than max, default 0.82 past the 0.58,
+ * 0.65, 0.72 and 0.76 that read as too small, Size 1 under the 0.96 ceiling
+ * that keeps it off the unscaled GLB eye), both irises converged on
  * the camera under a lowered upper lid, hair on the head, one posed master
  * skeleton. Screenshots (plus a 4x close-up of the eyes) go to --out (default
  * /tmp/ph-avatar-check) so a human can eyeball the poses and the face.
@@ -19,8 +19,12 @@
  * screenshots: a wide stare in full, a resting lid in bust, from a
  * slope-scaled polygon offset that let the eyeball rim through the lids), and
  * the default eye must not be a pinprick at the Outfit camera (iris and
- * opening in CSS px). It also writes the full frame per Size and camera
- * (pixels-outfit2-<view>-size<n>-frame.png) for review collages.
+ * opening in CSS px), and the reference-pass feel must be on the render: the
+ * inked lash card reads as a liner above the iris, the limbal ring is darker
+ * than the mid iris, one hard glint sits on the iris, and Head_0's lash /
+ * outer-corner morphs carry the look's weights. It also writes the full frame
+ * per Size and camera (pixels-outfit2-<view>-size<n>-frame.png) for review
+ * collages.
  *
  *   node scripts/check-avatar-viewer.js [--out DIR] [--chrome PATH]
  *
@@ -257,15 +261,16 @@ const evaluate = async (cdp, session, expression) => {
 const EYEBALL_DIAMETER = 0.0444;
 const EYEBALL_RADIUS = EYEBALL_DIAMETER / 2;
 // TestFlight 1.2 (14) shipped a fixed eye-bone scale of 0.70 under a stare
-// lid; with the resting lid the default look now sits past it (0.76) and
-// Size 1 at 0.88. Under this lid the sclera share stays ~0.36 at every scale
-// (measured 0.46..1.0), so the 1.2 (11) sclera-dominant saucer cannot recur,
-// and the lid-to-brow gap stays 24-25 CSS px in the bust from 0.60 to 1.0
-// (the crease rises with the lid margin), so a big eye does not crowd the
-// brow either. The one top-end guard left is the unscaled GLB eye (1.0, the
-// 1.2 (11)-(13) eye Maxwell asked to shrink): Size 1 stays >= 8% under it.
+// lid; with the resting lid the default look now sits past it (0.82, the
+// reference pass) and Size 1 at 0.94. Under this lid the sclera share stays
+// ~0.36 at every scale (measured 0.46..1.0), so the 1.2 (11) sclera-dominant
+// saucer cannot recur, and the lid-to-brow gap stays 24-25 CSS px in the
+// bust from 0.60 to 1.0 (the crease rises with the lid margin), so a big eye
+// does not crowd the brow either. The one top-end guard left is the unscaled
+// GLB eye (1.0, the 1.2 (11)-(13) eye Maxwell asked to shrink): Size 1 stays
+// under it.
 const PREVIOUS_FIXED_EYE_SCALE = 0.7;
-const EYE_SCALE_CEILING = 0.92;
+const EYE_SCALE_CEILING = 0.96;
 // Rendered Eyes_0 height per look name, for the Size min/max spread check.
 const eyeHeights = {};
 
@@ -291,17 +296,30 @@ const PARITY_SCLERA_SHARE = 0.08;
 // craft walk of the 0.58 default read the eyes as too small - iris 5.1 px
 // across, the sclera + iris opening 25 px^2 (4.3 px tall), a pinprick under
 // the fringe - and his reviews of the 0.65 pass (iris 5.8 px, opening 32
-// px^2) and the 0.72 pass (6.4 px, 38 px^2) said still too small. At 0.76
-// the iris is 6.7 px and the opening 41-43 px^2 (5.8 px tall). The iris
-// diameter is analytic (bone scale x camera) and its threshold sits above
-// the 0.72 pass so a slide back fails here; the opening is counted on the
-// render, where a 10 x 6 px blob moves +-2 px^2 with the parked idle-sway
-// phase, so its threshold only guards the 0.58 / 0.65 sizes.
-const DEFAULT_FULL_MIN_IRIS_PX = 6.55;
+// px^2), the 0.72 pass (6.4 px, 38 px^2) and the 0.76 pass (6.7 px, 42 px^2)
+// said still too small. At 0.82 the iris is 7.3 px and the opening ~47 px^2.
+// The iris diameter is analytic (bone scale x camera) and its threshold sits
+// above the 0.76 pass so a slide back fails here; the opening is counted on
+// the render, where a 10 x 6 px blob moves +-2 px^2 with the parked
+// idle-sway phase, so its threshold only guards the 0.58 / 0.65 sizes.
+const DEFAULT_FULL_MIN_IRIS_PX = 7.0;
 const DEFAULT_FULL_MIN_OPENING_PX2 = 36;
 // And in the Eyes bust: iris 13.0 px at 0.58, 14.5 at 0.65, 16.1 at 0.72,
-// 17.0 at 0.76.
-const DEFAULT_BUST_MIN_IRIS_PX = 16.6;
+// 17.0 at 0.76, 18.3 at 0.82.
+const DEFAULT_BUST_MIN_IRIS_PX = 17.6;
+// The reference pass, measured on the hoodie default in the bust with the
+// feel pack switched off (same 0.82 scale) and on: liner rows above the iris
+// 0.0 -> 2.8 CSS px, limbal ring / mid-iris luminance 0.64 -> 0.49, glint
+// share of the iris disc 0.0% -> 2.9% (the 1.2 (12) blob whitened 15-49%).
+// The real #36 / pass-3 viewer measures 0.58 on the ring (its 30% rim mixed
+// at 0.72), so the ring threshold sits under that.
+const DEFAULT_BUST_MIN_LINER_PX = 2;
+const DEFAULT_BUST_MAX_RIM_OVER_MID = 0.54;
+const DEFAULT_BUST_GLINT_SHARE = [0.005, 0.06];
+// Shape_LashLength and Shape_EyesOuterCornersHigh on Head_0, read back from
+// the morph influences on every look (#36 ran 0.42 and 0).
+const MIN_LASH_LENGTH = 0.7;
+const OUTER_CORNER_LIFT = [0.5, 1];
 
 const failures = [];
 const check = (name, condition, detail) => {
@@ -467,7 +485,7 @@ const assertLook = (entry, state, wantScale) => {
       `${tag}: eye bones scaled by eyeScaleFor(eyeSize=${entry.look.eyeSize})`,
       typeof wantScale === "number" &&
         wantScale > 0.3 &&
-        wantScale < 0.9 &&
+        wantScale < 1 &&
         Math.abs(left.scale - wantScale) < 1e-6 &&
         Math.abs(right.scale - wantScale) < 1e-6,
       `want=${wantScale} l=${left.scale} r=${right.scale}`
@@ -566,11 +584,16 @@ const measureEye = (png, cx, cy, r, rIris, rPupil) => {
       if (dist <= rIris * 1.04) {
         if (!isSkin) irisVisible += 1;
         // The upper part of the pupil on the centre line must still be
-        // pupil (dark): the lid has not come down over the pupil.
+        // pupil (dark): the lid has not come down over the pupil. The
+        // catchlight (its core and its soft edge) sits on the pupil's
+        // upper-right edge and the fill light's clearcoat reflection on the
+        // upper-left; both are neutral grey-to-white, the lid is warm skin,
+        // so neutral pixels above the pupil's own luminance are left out.
         if (
           Math.abs(dx) <= 0.1 * r &&
           dy > -rPupil * 0.85 &&
-          dy < -rPupil * 0.45
+          dy < -rPupil * 0.45 &&
+          !(neutral && lum >= 90)
         ) {
           pupilTopSamples += 1;
           if (lum < 90) pupilTopDark += 1;
@@ -580,12 +603,76 @@ const measureEye = (png, cx, cy, r, rIris, rPupil) => {
       }
     }
   }
+  // The reference pass (liner, limbal ring, glint). Liner: dark rows on a
+  // 7 px column straight above the iris top - the inked upper lash card -
+  // until three skin rows. Ring: mean luminance of the limbal annulus against
+  // the mid-iris annulus over the lower half of the iris (the top is under
+  // the lid). Glint: share of the iris disc that is near-white and neutral.
+  let linerRows = 0;
+  let skinRun = 0;
+  const columnX = Math.round(cx);
+  const irisTop = Math.round(cy - rIris);
+  for (let dy = 0; dy < 0.6 * r; dy += 1) {
+    const y = irisTop - dy;
+    if (y < 0) break;
+    let dark = 0;
+    let skin = 0;
+    for (let x = columnX - 3; x <= columnX + 3; x += 1) {
+      if (x < 0 || x >= width) continue;
+      const i = (y * width + x) * 4;
+      const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      if (lum < 70) dark += 1;
+      if (data[i] > data[i + 2] + 30 && lum >= 112) skin += 1;
+    }
+    if (dark >= 4) linerRows += 1;
+    skinRun = skin >= 4 ? skinRun + 1 : 0;
+    if (skinRun >= 3 && dy > 2) break;
+  }
+  const annulusLum = (inner, outer) => {
+    let sum = 0;
+    let count = 0;
+    for (let y = Math.floor(cy); y <= Math.ceil(cy + rIris); y += 1) {
+      for (
+        let x = Math.floor(cx - rIris) - 1;
+        x <= Math.ceil(cx + rIris) + 1;
+        x += 1
+      ) {
+        if (x < 0 || y < 0 || x >= width || y >= height) continue;
+        const rel = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) / rIris;
+        if (rel < inner || rel > outer) continue;
+        const i = (y * width + x) * 4;
+        sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        count += 1;
+      }
+    }
+    return sum / Math.max(1, count);
+  };
+  const rimLum = annulusLum(0.86, 0.98);
+  const midLum = annulusLum(0.42, 0.66);
+  let glintPx = 0;
+  let discPx = 0;
+  for (let y = Math.floor(cy - rIris); y <= Math.ceil(cy + rIris); y += 1) {
+    for (let x = Math.floor(cx - rIris); x <= Math.ceil(cx + rIris); x += 1) {
+      if (x < 0 || y < 0 || x >= width || y >= height) continue;
+      if (Math.hypot(x + 0.5 - cx, y + 0.5 - cy) > rIris) continue;
+      discPx += 1;
+      const i = (y * width + x) * 4;
+      const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      const spread =
+        Math.max(data[i], data[i + 1], data[i + 2]) -
+        Math.min(data[i], data[i + 1], data[i + 2]);
+      if (lum > 190 && spread < 40) glintPx += 1;
+    }
+  }
   return {
     irisExposure: irisVisible / (Math.PI * rIris * rIris),
     scleraShare: sclera / Math.max(1, sclera + irisVisible),
     // The eye opening the viewer actually sees: sclera plus uncovered iris,
     // in render px (the caller divides by PIXEL_SCALE^2 for CSS px^2).
     openingPx: sclera + irisVisible,
+    linerRows,
+    rimOverMid: rimLum / Math.max(1, midLum),
+    glintShare: glintPx / Math.max(1, discPx),
     // A pupil under ~4 px (the full-body eye at Size 0) has a 2-pixel sample
     // window that antialiasing decides; the lid position is camera-independent
     // (see the parity checks), so the bust view carries this assertion.
@@ -677,7 +764,10 @@ const pixelPass = async (cdp, session) => {
         `window.applyLook(${JSON.stringify(look)}); true`
       );
       const stillParked = await stepFrames(cdp, session, 2);
-      check(`${tag}: rendered two frames with the animation parked`, stillParked);
+      check(
+        `${tag}: rendered two frames with the animation parked`,
+        stillParked
+      );
       const state = await evaluate(cdp, session, "window.phViewerState()");
       const irisSize = await evaluate(
         cdp,
@@ -748,14 +838,61 @@ const pixelPass = async (cdp, session) => {
         irisDiameterCss:
           (eyes[0].irisDiameterCss + eyes[1].irisDiameterCss) / 2,
         openingCss2: (eyes[0].openingCss2 + eyes[1].openingCss2) / 2,
-        pupilClear: measurable ? eyes[0].pupilClear && eyes[1].pupilClear : null,
+        linerCss: (eyes[0].linerRows + eyes[1].linerRows) / 2 / PIXEL_SCALE,
+        rimOverMid: (eyes[0].rimOverMid + eyes[1].rimOverMid) / 2,
+        glintShare: (eyes[0].glintShare + eyes[1].glintShare) / 2,
+        pupilClear: measurable
+          ? eyes[0].pupilClear && eyes[1].pupilClear
+          : null,
       };
       results[`${viewMode}-${eyeSize}`] = avg;
       console.log(
         `     ${tag}: iris ${avg.irisDiameterCss.toFixed(
           1
-        )} CSS px across, opening ${avg.openingCss2.toFixed(0)} CSS px^2`
+        )} CSS px across, opening ${avg.openingCss2.toFixed(
+          0
+        )} CSS px^2, liner ${avg.linerCss.toFixed(
+          1
+        )} px, rim/mid ${avg.rimOverMid.toFixed(2)}, glint ${(
+          avg.glintShare * 100
+        ).toFixed(1)}%`
       );
+      // The reference pass: lashes lengthened and outer corners lifted on
+      // every look (read back from Head_0's morph influences).
+      check(
+        `${tag}: lashes lengthened (Shape_LashLength >= ${MIN_LASH_LENGTH})`,
+        typeof state.eyes.lashLength === "number" &&
+          state.eyes.lashLength >= MIN_LASH_LENGTH &&
+          state.eyes.lashLength <= 1,
+        `Shape_LashLength=${state.eyes.lashLength}`
+      );
+      check(
+        `${tag}: outer corners lifted (Shape_EyesOuterCornersHigh in ${OUTER_CORNER_LIFT.join(
+          ".."
+        )})`,
+        typeof state.eyes.outerCornerLift === "number" &&
+          within(state.eyes.outerCornerLift, OUTER_CORNER_LIFT),
+        `Shape_EyesOuterCornersHigh=${state.eyes.outerCornerLift}`
+      );
+      if (eyeSize === 0.5 && viewMode === "bust") {
+        check(
+          `${tag}: liner inked above the iris (>= ${DEFAULT_BUST_MIN_LINER_PX} CSS px of dark rows)`,
+          avg.linerCss >= DEFAULT_BUST_MIN_LINER_PX,
+          `liner ${avg.linerCss.toFixed(2)} CSS px`
+        );
+        check(
+          `${tag}: limbal ring darker than the mid iris (rim/mid <= ${DEFAULT_BUST_MAX_RIM_OVER_MID})`,
+          avg.rimOverMid <= DEFAULT_BUST_MAX_RIM_OVER_MID,
+          `rim/mid ${avg.rimOverMid.toFixed(3)}`
+        );
+        check(
+          `${tag}: one hard glint on the iris, not a blob (glint share in ${DEFAULT_BUST_GLINT_SHARE.join(
+            ".."
+          )})`,
+          within(avg.glintShare, DEFAULT_BUST_GLINT_SHARE),
+          `glint ${(avg.glintShare * 100).toFixed(2)}% of the iris disc`
+        );
+      }
       if (eyeSize === 0.5) {
         // The craft-walk complaint on the 0.58 default: eyes too small in the
         // Outfit step. The default eye must read as an eye from both cameras.
@@ -780,12 +917,16 @@ const pixelPass = async (cdp, session) => {
       check(
         `${tag}: upper lid rests on the iris (exposure in band)`,
         within(avg.irisExposure, band.irisExposure),
-        `irisExposure=${avg.irisExposure.toFixed(3)} want ${band.irisExposure.join("..")}`
+        `irisExposure=${avg.irisExposure.toFixed(
+          3
+        )} want ${band.irisExposure.join("..")}`
       );
       check(
         `${tag}: iris, not sclera, carries the eye (sclera share in band)`,
         within(avg.scleraShare, band.scleraShare),
-        `scleraShare=${avg.scleraShare.toFixed(3)} want ${band.scleraShare.join("..")}`
+        `scleraShare=${avg.scleraShare.toFixed(3)} want ${band.scleraShare.join(
+          ".."
+        )}`
       );
       if (viewMode === "bust") {
         check(
@@ -801,12 +942,16 @@ const pixelPass = async (cdp, session) => {
       check(
         `pixels size${eyeSize}: Outfit full-body and Eyes bust show the same lid weight`,
         Math.abs(full.irisExposure - bust.irisExposure) <= PARITY_IRIS_EXPOSURE,
-        `irisExposure full=${full.irisExposure.toFixed(3)} bust=${bust.irisExposure.toFixed(3)}`
+        `irisExposure full=${full.irisExposure.toFixed(
+          3
+        )} bust=${bust.irisExposure.toFixed(3)}`
       );
       check(
         `pixels size${eyeSize}: Outfit full-body and Eyes bust show the same sclera share`,
         Math.abs(full.scleraShare - bust.scleraShare) <= PARITY_SCLERA_SHARE,
-        `scleraShare full=${full.scleraShare.toFixed(3)} bust=${bust.scleraShare.toFixed(3)}`
+        `scleraShare full=${full.scleraShare.toFixed(
+          3
+        )} bust=${bust.scleraShare.toFixed(3)}`
       );
     }
   }
@@ -817,7 +962,9 @@ const pixelPass = async (cdp, session) => {
     check(
       "pixels: small eyes carry more iris than large eyes (sclera share grows with Size)",
       small.scleraShare < large.scleraShare,
-      `Size 0 ${small.scleraShare.toFixed(3)} vs Size 1 ${large.scleraShare.toFixed(3)}`
+      `Size 0 ${small.scleraShare.toFixed(
+        3
+      )} vs Size 1 ${large.scleraShare.toFixed(3)}`
     );
   }
   await resumeAnimation(cdp, session);
@@ -908,28 +1055,28 @@ const main = async () => {
       throw new Error("viewer-page.html has no eyeScaleFor; nothing to assert");
     }
     const [scaleMin, scaleDefault, scaleMax, exposedDefault] = eyeScaleRange;
-    // The #36 default 0.58 and the #40 passes at 0.65 and 0.72 all read as
-    // too small on Maxwell's review; the 1.2 (14) fixed 0.70 (under a stare
-    // lid) read as a bit large. With the resting lid the default sits past
-    // 0.70 (0.76), an opening just under the 1.2 (14) area with the iris top
-    // covered.
+    // The #36 default 0.58 and the #40 passes at 0.65, 0.72 and 0.76 all read
+    // as too small on Maxwell's review; the 1.2 (14) fixed 0.70 (under a
+    // stare lid) read as a bit large. The reference pass puts the default at
+    // 0.82, the 1.2 (14) opening area with the iris top covered and inked.
     check(
-      `default Eyes Size scales the eye past the too-small 0.58 / 0.65 / 0.72, over the 1.2 (14) fixed ${PREVIOUS_FIXED_EYE_SCALE} under a resting lid`,
-      scaleDefault >= 0.74 &&
-        scaleDefault <= 0.78 &&
+      `default Eyes Size scales the eye past the too-small 0.58 / 0.65 / 0.72 / 0.76, over the 1.2 (14) fixed ${PREVIOUS_FIXED_EYE_SCALE} under a resting lid`,
+      scaleDefault >= 0.8 &&
+        scaleDefault <= 0.84 &&
         Math.abs(exposedDefault - scaleDefault) < 1e-9,
       `eyeScaleFor(0.5)=${scaleDefault} EYE_SCALE=${exposedDefault}`
     );
-    // A beauty band, not a pinprick-to-saucer range: Size 0 is an eye under
-    // the heaviest lid about the first-pass default, and Size 1 stays under
-    // the unscaled GLB eye; the lid and iris carry the rest of the
-    // small/large character.
+    // A beauty band, not a pinprick-to-saucer range: Size 0 is the old
+    // 1.2 (14) eyeball under the heaviest lid, and Size 1 stays under the
+    // unscaled GLB eye; the lid and iris carry the rest of the small/large
+    // character.
     check(
       "Eyes Size min -> max spans a visible whole-eye beauty band",
-      scaleMin >= 0.62 &&
-        scaleMin <= 0.66 &&
+      scaleMin >= 0.68 &&
+        scaleMin <= 0.72 &&
         scaleMax - scaleMin >= 0.24 - 1e-9 &&
-        scaleMax >= 0.86 &&
+        scaleMax >= 0.92 &&
+        scaleMax < 1 &&
         scaleMax <= EYE_SCALE_CEILING + 1e-9,
       `min=${scaleMin} max=${scaleMax}`
     );
@@ -981,14 +1128,14 @@ const main = async () => {
     }
     // The complaint on 1.2 (14): Size min and max "barely differ" (Eyes_0
     // 31.2 -> 31.7 mm). The rendered eyeball at Size 1 must still be clearly
-    // taller than at Size 0 (0.64 -> 0.88 is 1.375x nominal).
+    // taller than at Size 0 (0.70 -> 0.94 is 1.34x nominal).
     const minHeight = eyeHeights[EYES_MIN_LOOK];
     const maxHeight = eyeHeights[EYES_MAX_LOOK];
     check(
       "Eyes Size max renders a clearly bigger eyeball than Size min",
       typeof minHeight === "number" &&
         typeof maxHeight === "number" &&
-        maxHeight / minHeight >= 1.35,
+        maxHeight / minHeight >= 1.3,
       `Eyes_0 height min ${(minHeight * 1000).toFixed(1)} mm, max ${(
         maxHeight * 1000
       ).toFixed(1)} mm`
