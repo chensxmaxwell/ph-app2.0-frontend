@@ -503,7 +503,7 @@
   var BROW_CARD_U = [0.1330, 0.1385];
   var CARD_V = [0.214, 0.243];
   // Liner ink: near-black warm, mixed at `density` over the card.
-  var LASH_INK = { color: [0.05, 0.035, 0.035], density: 0.92 };
+  var LASH_INK = { color: [0.012, 0.009, 0.009], density: 0.97 };
   // Brow / lower-lash cards: mix toward browColorFor(hair) by this much.
   var BROW_INK = 0.86;
   // Shape_LashLength on Head_0: 1.0 moves the upper lash tips 4.5 mm mean
@@ -635,7 +635,7 @@
   // the crown pink-white - the "clay placeholder" read. Positions are world
   // metres round a 1.8 m figure; the key sits high on the camera's right.
   var LIGHT_RIG = {
-    exposure: 1.12,
+    exposure: 1.1,
     hemisphere: { sky: 0xfff0e6, ground: 0x5a4038, intensity: 0.56 },
     key: { color: 0xffe4cf, intensity: 1.15, position: [0.6, 1.85, 1.6] },
     fill: { color: 0xf4dfd4, intensity: 0.5, position: [-1.4, 0.7, 0.6] },
@@ -822,7 +822,9 @@
     scalpNormal: 0.65,
     edgeDissolve: 0.035,
     coreAlpha: 0.5,
-    fringeAlpha: 0.04
+    fringeAlpha: 0.14,
+    eyeClear: 0.028,
+    eyeClearFeather: 0.012
   };
   // Strand cards grown on the shells: ~4200 per m^2 of shell (about 400 on
   // the default style's front sweeps, ~2000 on its long back), 1.6 cm wide,
@@ -833,7 +835,12 @@
   // lift off the surface toward the tip (up to `flyawayLift`) and drift
   // sideways, so the hair's outline breaks into strands instead of a clean
   // shell curve.
-  var HAIR_CARDS = { perSquareMetre: 4600, width: 0.016, length: 0.08, lift: 0.004, segments: 4, albedo: 0.74, flyawayShare: 0.3, flyawayLift: 0.018 };
+  // No card is grown within `edgeMargin` of an open edge: the shell's own
+  // dissolve fringes the hairline and the temple sweeps, and a card seeded
+  // there reached half its width past the edge - across the eye's outer
+  // corner on the default style (measured: the left eye's liner share fell
+  // from 0.054 without hair to 0.002 with the first card layer).
+  var HAIR_CARDS = { perSquareMetre: 4600, width: 0.016, length: 0.08, lift: 0.004, segments: 4, albedo: 0.74, flyawayShare: 0.3, flyawayLift: 0.018, overhang: 0.006, edgeMargin: 0.015 };
 
   // mulberry32: a small seeded PRNG so the card layout is the same on every
   // load (and in the tests).
@@ -980,6 +987,7 @@
     }
     var cardCount = Math.round(total * spec.perSquareMetre);
     if (!cardCount) return null;
+    var edgeDist = geo.attributes.phEdge ? geo.attributes.phEdge.array : hairBoundaryDistance(geo);
     // Crown: the mean of the highest vertices (y up in the raw space).
     var maxY = -Infinity;
     for (i = 0; i < vertCount; i++) maxY = Math.max(maxY, pos[i * 3 + 1]);
@@ -1011,7 +1019,7 @@
     var outPos = new Float32Array(cardCount * vertsPerCard * 3);
     var outNrm = new Float32Array(cardCount * vertsPerCard * 3);
     var outUv = new Float32Array(cardCount * vertsPerCard * 2);
-    var outCard = new Float32Array(cardCount * vertsPerCard * 3);
+    var outCard = new Float32Array(cardCount * vertsPerCard * 4);
     var outSkinI = new Uint16Array(cardCount * vertsPerCard * 4);
     var outSkinW = new Float32Array(cardCount * vertsPerCard * 4);
     var outIndex = new Uint32Array(cardCount * segs * 6);
@@ -1025,6 +1033,7 @@
     var vp = new THREE.Vector3();
     var tmp = new THREE.Vector3();
     var write = 0;
+    var emitted = 0;
     for (var c = 0; c < cardCount; c++) {
       // Area-weighted triangle, uniform barycentric point.
       var r = rng() * total;
@@ -1039,9 +1048,11 @@
       var bv = rng();
       if (bu + bv > 1) { bu = 1 - bu; bv = 1 - bv; }
       var bw = 1 - bu - bv;
+      var weights = [bw, bu, bv];
+      var edgeAt = edgeDist[t[0]] * bw + edgeDist[t[1]] * bu + edgeDist[t[2]] * bv;
+      if (edgeAt < spec.edgeMargin) continue;
       p.set(0, 0, 0);
       n.set(0, 0, 0);
-      var weights = [bw, bu, bv];
       for (k = 0; k < 3; k++) {
         p.x += pos[t[k] * 3] * weights[k];
         p.y += pos[t[k] * 3 + 1] * weights[k];
@@ -1072,7 +1083,8 @@
       // about their flow axis (up to +-70deg) so some face the viewer there.
       var twist = flyaway ? (rng() - 0.5) * 2.4 : 0;
       if (flyaway) W *= 0.6;
-      var baseVert = c * vertsPerCard;
+      var baseVert = emitted * vertsPerCard;
+      emitted++;
       for (k = 0; k <= segs; k++) {
         var along = k / segs;
         q.copy(p).addScaledVector(flow, L * (along - 0.3));
@@ -1082,7 +1094,14 @@
         nv.fromArray(nrm, near * 3).normalize();
         vp.fromArray(pos, near * 3);
         tmp.subVectors(q, vp);
-        q.addScaledVector(nv, -nv.dot(tmp));
+        tmp.addScaledVector(nv, -nv.dot(tmp));
+        // Past the shell's footprint (an open edge: the hairline, the
+        // temple sweep beside the eye) a card may overhang at most
+        // `overhang`; the roots uphill of the hairline and the flyaway
+        // drift otherwise laid strands across the eye.
+        var over = tmp.length();
+        if (over > spec.overhang) tmp.multiplyScalar(spec.overhang / over);
+        q.copy(vp).add(tmp);
         q.addScaledVector(nv, spec.lift + tipLift * along * along);
         flow.addScaledVector(nv, -nv.dot(flow));
         if (flow.lengthSq() < 1e-8) flow.set(0, -1, 0);
@@ -1102,9 +1121,12 @@
           outNrm[vi * 3 + 2] = nv.z;
           outUv[vi * 2] = sideK;
           outUv[vi * 2 + 1] = along;
-          outCard[vi * 3] = id;
-          outCard[vi * 3 + 1] = tone;
-          outCard[vi * 3 + 2] = flyaway;
+          outCard[vi * 4] = id;
+          outCard[vi * 4 + 1] = tone;
+          outCard[vi * 4 + 2] = flyaway;
+          // Local distance to the shell's open edge, so the cards dissolve
+          // with the shell (hairShaderChunk "card").
+          outCard[vi * 4 + 3] = edgeDist[near];
           var sv = nearestVertex(tmp);
           for (var j = 0; j < 4; j++) {
             outSkinI[vi * 4 + j] = skinIndex ? skinIndex.array[sv * 4 + j] : 0;
@@ -1122,14 +1144,16 @@
         }
       }
     }
+    if (!emitted) return null;
+    var nVerts = emitted * vertsPerCard;
     var cardGeo = new THREE.BufferGeometry();
-    cardGeo.setAttribute("position", new THREE.Float32BufferAttribute(outPos, 3));
-    cardGeo.setAttribute("normal", new THREE.Float32BufferAttribute(outNrm, 3));
-    cardGeo.setAttribute("uv", new THREE.Float32BufferAttribute(outUv, 2));
-    cardGeo.setAttribute("phCard", new THREE.Float32BufferAttribute(outCard, 3));
-    cardGeo.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(outSkinI, 4));
-    cardGeo.setAttribute("skinWeight", new THREE.Float32BufferAttribute(outSkinW, 4));
-    cardGeo.setIndex(new THREE.BufferAttribute(outIndex, 1));
+    cardGeo.setAttribute("position", new THREE.Float32BufferAttribute(outPos.subarray(0, nVerts * 3), 3));
+    cardGeo.setAttribute("normal", new THREE.Float32BufferAttribute(outNrm.subarray(0, nVerts * 3), 3));
+    cardGeo.setAttribute("uv", new THREE.Float32BufferAttribute(outUv.subarray(0, nVerts * 2), 2));
+    cardGeo.setAttribute("phCard", new THREE.Float32BufferAttribute(outCard.subarray(0, nVerts * 4), 4));
+    cardGeo.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(outSkinI.subarray(0, nVerts * 4), 4));
+    cardGeo.setAttribute("skinWeight", new THREE.Float32BufferAttribute(outSkinW.subarray(0, nVerts * 4), 4));
+    cardGeo.setIndex(new THREE.BufferAttribute(outIndex.subarray(0, write), 1));
     var mesh = new THREE.SkinnedMesh(cardGeo, new THREE.MeshPhysicalMaterial());
     mesh.name = shell.name + "_cards";
     mesh.frustumCulled = false;
@@ -1150,6 +1174,16 @@
   // the open-edge dissolve on vPhEdge. "card": procedural strands across the
   // card - each a soft column that thins toward the tip, ends at its own
   // length, roots darker than tips, a per-card tone.
+  // Hair never covers the eyes: any hair fragment within `eyeClear` metres
+  // of an eye centre fades out over `eyeClearFeather` (the sweep beside the
+  // temple otherwise laid strands over the outer corner of the locked eye).
+  function hairEyeClearChunk() {
+    return [
+      "float eyeD = min(distance(vPhWorld, eyeWorldL), distance(vPhWorld, eyeWorldR));",
+      "diffuseColor.a *= smoothstep(" + HAIR_LOOK.eyeClear.toFixed(3) + ", " + (HAIR_LOOK.eyeClear + HAIR_LOOK.eyeClearFeather).toFixed(3) + ", eyeD);"
+    ].join("\n") + "\n";
+  }
+
   function hairShaderChunk(kind) {
     if (kind === "card") {
       return [
@@ -1161,13 +1195,16 @@
         // Soft strand profile across the card; gaps open toward the tip.
         "float bump = 1.0 - abs(fract(column) - 0.5) * 2.0;",
         "float gap = mix(0.08 + 0.3 * vPhCard.z, 0.78 + 0.12 * vPhCard.z, smoothstep(0.3, 1.0, along));",
-        "float body = smoothstep(gap, min(1.0, gap + 0.35), bump);",
+        "float body = smoothstep(gap, min(1.0, gap + 0.22), bump);",
         // Strands end at their own length; the root feathers in.
         "float tip = 1.0 - smoothstep(0.55 + 0.4 * strand, 0.62 + 0.4 * strand, along);",
         "float root = smoothstep(0.0, 0.05, along + 0.05 * bump);",
-        "diffuseColor.a *= body * tip * root;",
+        // The card thins out over the shell's dissolve zone like the shell
+        // does (vPhCard.w = metres to the nearest open edge under the card).
+        "float cardEdge = smoothstep(0.0, 1.0, clamp(vPhCard.w / " + HAIR_LOOK.edgeDissolve.toFixed(3) + ", 0.0, 1.0) * 1.4 + (strand - 0.5) * 1.1);",
+        "diffuseColor.a *= body * tip * root * cardEdge;",
         "diffuseColor.rgb *= " + HAIR_CARDS.albedo.toFixed(2) + " * (0.74 + 0.52 * strandTone) * (0.88 + 0.24 * vPhCard.y) * mix(0.7, 1.08, along);"
-      ].join("\n") + "\n";
+      ].join("\n") + "\n" + hairEyeClearChunk();
     }
     return [
       "vec2 hUv = vUv;",
@@ -1184,7 +1221,7 @@
       // lighter strands reach the edge, the grooves stop short of it.
       "float edgeT = clamp(vPhEdge / " + HAIR_LOOK.edgeDissolve.toFixed(3) + ", 0.0, 1.0);",
       "diffuseColor.a *= smoothstep(0.0, 1.0, edgeT * 1.6 + (strand - 0.5) * 1.3);"
-    ].join("\n") + "\n";
+    ].join("\n") + "\n" + hairEyeClearChunk();
   }
 
   // In place of normal_fragment_begin on every hair material: no
@@ -1207,6 +1244,8 @@
 
   // Skull centre in world space for the hair normals: 7 cm behind and
   // 1.5 cm above the midpoint of the two eyes, along the mean gaze axis.
+  var _eyeWorld = [new THREE.Vector3(), new THREE.Vector3()];
+
   function updateHairUniforms() {
     if (eyeBones.length < 2) return;
     _skullWorld.set(0, 0, 0);
@@ -1214,7 +1253,8 @@
     var i;
     for (i = 0; i < 2; i++) {
       eyeBones[i].updateWorldMatrix(true, false);
-      _skullWorld.add(eyeBones[i].getWorldPosition(new THREE.Vector3()));
+      eyeBones[i].getWorldPosition(_eyeWorld[i]);
+      _skullWorld.add(_eyeWorld[i]);
       eyeBones[i].getWorldQuaternion(_skullQ);
       _skullTmp.add(new THREE.Vector3(0, 0, 1).applyQuaternion(_skullQ));
     }
@@ -1224,7 +1264,10 @@
     _skullWorld.y += 0.015;
     for (i = 0; i < hairMats.length; i++) {
       var shader = hairMats[i].userData.shader;
-      if (shader && shader.uniforms.skullWorld) shader.uniforms.skullWorld.value.copy(_skullWorld);
+      if (!shader || !shader.uniforms.skullWorld) continue;
+      shader.uniforms.skullWorld.value.copy(_skullWorld);
+      shader.uniforms.eyeWorldL.value.copy(_eyeWorld[0]);
+      shader.uniforms.eyeWorldR.value.copy(_eyeWorld[1]);
     }
   }
 
@@ -1247,8 +1290,10 @@
       mat.customProgramCacheKey = function () { return "hair-" + kind + "-" + (mat.transparent ? "fringe" : "core"); };
       mat.onBeforeCompile = function (shader) {
         shader.uniforms.skullWorld = { value: _skullWorld.clone() };
+        shader.uniforms.eyeWorldL = { value: _eyeWorld[0].clone() };
+        shader.uniforms.eyeWorldR = { value: _eyeWorld[1].clone() };
         var attrs = kind === "card"
-          ? "attribute vec3 phCard;\nvarying vec3 vPhCard;\nvarying vec3 vPhWorld;"
+          ? "attribute vec4 phCard;\nvarying vec4 vPhCard;\nvarying vec3 vPhWorld;"
           : "attribute float phEdge;\nvarying float vPhEdge;\nvarying vec3 vPhWorld;";
         shader.vertexShader = shader.vertexShader.replace(
           "#include <common>",
@@ -1261,8 +1306,8 @@
         );
         shader.fragmentShader = shader.fragmentShader.replace(
           "#include <common>",
-          "#include <common>\nuniform vec3 skullWorld;\nvarying vec3 vPhWorld;\n" +
-            (kind === "card" ? "varying vec3 vPhCard;" : "varying float vPhEdge;")
+          "#include <common>\nuniform vec3 skullWorld;\nuniform vec3 eyeWorldL;\nuniform vec3 eyeWorldR;\nvarying vec3 vPhWorld;\n" +
+            (kind === "card" ? "varying vec4 vPhCard;" : "varying float vPhEdge;")
         );
         shader.fragmentShader = shader.fragmentShader.replace(
           "#include <map_fragment>",
@@ -2467,6 +2512,7 @@
     SOCKET_SHADE: SOCKET_SHADE,
     hairShaderChunk: hairShaderChunk,
     hairNormalChunk: hairNormalChunk,
+    hairEyeClearChunk: hairEyeClearChunk,
     hairBoundaryDistance: hairBoundaryDistance,
     buildHairCards: buildHairCards,
     makeHairMaterials: makeHairMaterials,

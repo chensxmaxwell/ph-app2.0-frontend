@@ -142,6 +142,8 @@ type ViewerRig = {
     edgeDissolve: number;
     coreAlpha: number;
     fringeAlpha: number;
+    eyeClear: number;
+    eyeClearFeather: number;
   };
   HAIR_CARDS: {
     perSquareMetre: number;
@@ -152,10 +154,13 @@ type ViewerRig = {
     albedo: number;
     flyawayShare: number;
     flyawayLift: number;
+    overhang: number;
+    edgeMargin: number;
   };
   hairBoundaryDistance: (geometry: unknown) => Float32Array;
   buildHairCards: (shell: unknown, options?: { seed?: number }) => unknown;
   hairNormalChunk: () => string;
+  hairEyeClearChunk: () => string;
   makeHairMaterials: (
     base: unknown,
     envMap: unknown,
@@ -2606,6 +2611,8 @@ describe("soft semi-real default look", () => {
       expect(spec.flyawayShare).toBeLessThanOrEqual(0.5);
       expect(spec.flyawayLift).toBeGreaterThan(spec.lift * 2);
       expect(spec.flyawayLift).toBeLessThanOrEqual(0.03);
+      expect(spec.overhang).toBeGreaterThanOrEqual(0.005);
+      expect(spec.overhang).toBeLessThanOrEqual(0.02);
       const cards = rig.buildHairCards(mesh, { seed: 3 });
       expect(cards).not.toBeNull();
       const geo = (cards as { geometry: Three }).geometry;
@@ -2616,15 +2623,23 @@ describe("soft semi-real default look", () => {
       const skinWeight = geo.attributes.skinWeight;
       const vertsPerCard = (spec.segments + 1) * 2;
       let flyaways = 0;
-      // Card count follows the surface area (8 cm square = 0.0064 m^2).
+      // Card count follows the surface area (8 cm square = 0.0064 m^2),
+      // less the edge margin no card is seeded in (the shell's own dissolve
+      // fringes its open edges; a card seeded there crossed the eye).
+      expect(spec.edgeMargin).toBeGreaterThanOrEqual(0.008);
+      expect(spec.edgeMargin).toBeLessThanOrEqual(0.025);
+      const interior = Math.pow(0.08 - 2 * spec.edgeMargin, 2);
       const count = pos.count / vertsPerCard;
       expect(Number.isInteger(count)).toBe(true);
       expect(count).toBeGreaterThanOrEqual(
-        Math.floor(0.0064 * spec.perSquareMetre * 0.8)
+        Math.floor(interior * spec.perSquareMetre * 0.6)
       );
       expect(count).toBeLessThanOrEqual(
-        Math.ceil(0.0064 * spec.perSquareMetre * 1.2) + 1
+        Math.ceil(interior * spec.perSquareMetre * 1.5) + 1
       );
+      // Every card was seeded at least edgeMargin from the rim: with a 2 cm
+      // grid the distance field is 0 on the rim, 2 cm one ring in.
+      expect(count).toBeGreaterThan(0);
       expect(geo.index.count).toBe(count * spec.segments * 6);
       const v = (attr: Three, i: number) =>
         Array.from({ length: attr.itemSize }, (_, k) =>
@@ -2662,7 +2677,13 @@ describe("soft semi-real default look", () => {
         }
         // Flow is gravity on the surface: the root (along 0) is above the
         // tip (along 1) and the card is at least half its nominal length.
-        expect(rootY - tipY).toBeGreaterThan(spec.length * 0.5);
+        // (a card at the shell's rim is clamped to `overhang` past it)
+        expect(rootY - tipY).toBeGreaterThan(
+          Math.min(spec.length * 0.5, spec.length * 0.3 + spec.overhang)
+        );
+        // Nothing hangs more than `overhang` outside the 8 cm shell.
+        expect(rootY).toBeLessThanOrEqual(1.7 + spec.overhang + 1e-6);
+        expect(tipY).toBeGreaterThanOrEqual(1.7 - 0.08 - spec.overhang - 1e-6);
         // Width across the card at the root (the two along-0 vertices).
         const a = v(pos, base);
         const b = v(pos, base + 1);
@@ -2681,7 +2702,14 @@ describe("soft semi-real default look", () => {
       // Roughly the flyaway share of the cards lift off.
       expect(flyaways / count).toBeGreaterThan(spec.flyawayShare * 0.4);
       expect(flyaways / count).toBeLessThan(spec.flyawayShare * 1.8 + 0.1);
-      expect(card.itemSize).toBe(3);
+      expect(card.itemSize).toBe(4);
+      // The fourth component is the local distance to the shell's open edge
+      // (0 at the rim, 2 cm one grid ring in), so cards dissolve with it.
+      for (let c = 0; c < count; c += 1) {
+        const w0 = v(card, c * vertsPerCard)[3];
+        expect(w0).toBeGreaterThanOrEqual(0);
+        expect(w0).toBeLessThanOrEqual(0.04 + 1e-6);
+      }
       // Deterministic for a seed, different for another.
       const again = rig.buildHairCards(mesh, { seed: 3 }) as { geometry: Three };
       expect(Array.from(again.geometry.attributes.position.array)).toEqual(
@@ -2723,12 +2751,28 @@ describe("soft semi-real default look", () => {
       expect(card).toContain("vPhCard");
       // Flyaway cards (vPhCard.z) carry sparser strands.
       expect(card).toMatch(/vPhCard\.z/);
+      // ...and dissolve toward the shell's open edges with it.
+      expect(card).toContain(`clamp(vPhCard.w / ${look.edgeDissolve.toFixed(3)}, 0.0, 1.0)`);
+      expect(card).toMatch(/diffuseColor\.a \*= body \* tip \* root \* cardEdge;/);
       // Tapered, strand-broken tips and fringed sides.
       expect(card).toMatch(/float tip = /);
       expect(card).toMatch(/float strand = /);
       expect(card).toContain("diffuseColor.a *=");
       // Root darker than tip.
       expect(card).toMatch(/mix\([0-9.]+, [0-9.]+, along\)/);
+      // Hair never covers the locked eye: both kinds fade out within
+      // eyeClear of an eye centre (fed per frame with the skull centre).
+      expect(look.eyeClear).toBeGreaterThanOrEqual(0.018);
+      expect(look.eyeClear).toBeLessThanOrEqual(0.03);
+      expect(look.eyeClearFeather).toBeGreaterThan(0);
+      const clear = rig.hairEyeClearChunk();
+      expect(clear).toContain("min(distance(vPhWorld, eyeWorldL), distance(vPhWorld, eyeWorldR))");
+      expect(clear).toContain(`smoothstep(${look.eyeClear.toFixed(3)}, ${(look.eyeClear + look.eyeClearFeather).toFixed(3)}, eyeD)`);
+      expect(shell.endsWith(clear)).toBe(true);
+      expect(card.endsWith(clear)).toBe(true);
+      const uniforms = sliceBetween(viewerHtml(), "function updateHairUniforms(", "// The two materials one hair mesh");
+      expect(uniforms).toMatch(/shader\.uniforms\.eyeWorldL\.value\.copy\(_eyeWorld\[0\]\);/);
+      expect(uniforms).toMatch(/shader\.uniforms\.eyeWorldR\.value\.copy\(_eyeWorld\[1\]\);/);
       const normals = rig.hairNormalChunk();
       expect(normals).toContain("skullWorld");
       expect(normals).toContain(`${look.scalpNormal.toFixed(2)}`);
@@ -2742,7 +2786,10 @@ describe("soft semi-real default look", () => {
       expect(mats.core.alphaTest).toBeGreaterThanOrEqual(0.4);
       expect(mats.fringe.transparent).toBe(true);
       expect(mats.fringe.depthWrite).toBe(false);
-      expect(mats.fringe.alphaTest).toBeLessThanOrEqual(0.1);
+      expect(mats.fringe.alphaTest).toBeLessThanOrEqual(0.2);
+      // (0.04 let a faint strand haze lift the liner and the skin; 0.14 keeps
+      // only real wisps)
+      expect(mats.fringe.alphaTest).toBeGreaterThanOrEqual(0.1);
       expect(mats.fringe.alphaTest).toBeGreaterThan(0);
       expect(mats.core.side).toBe(THREE.DoubleSide);
       // The card layer has no map: it must declare USE_UV itself or vUv is
@@ -2883,6 +2930,99 @@ describe("soft semi-real default look", () => {
     expect(script).toMatch(/const irisAt = irisRowCentre\(png, cx, cy, rIris\);/);
     expect(script).toMatch(/const pdx = x \+ 0\.5 - pcx;/);
     expect(script).toMatch(/pdy > -rPupil \* 0\.85 &&\s*pdy < -rPupil \* 0\.45/);
+  });
+
+  it("the headless check's Style C gates tell plates from strands and a Lambert shell from subsurface skin", () => {
+    const script = fs.readFileSync(
+      path.join(ROOT, "scripts", "check-avatar-viewer.js"),
+      "utf8"
+    );
+    const source = script.slice(
+      script.indexOf("const CRAFT_BG = "),
+      script.indexOf("const craftPass = ")
+    );
+    const sandbox: Record<string, unknown> = {};
+    vm.createContext(sandbox);
+    vm.runInContext(
+      `${source}\nthis.hairCrownMetrics = hairCrownMetrics; this.skinRednessShift = skinRednessShift; this.HAIR_MAX_FLAT_SHARE = HAIR_MAX_FLAT_SHARE; this.HAIR_MIN_OUTLINE_BREAK = HAIR_MIN_OUTLINE_BREAK; this.SKIN_MIN_SSS_SHIFT = SKIN_MIN_SSS_SHIFT;`,
+      sandbox
+    );
+    type Png = { width: number; height: number; data: number[] };
+    const hairCrownMetrics = sandbox.hairCrownMetrics as (
+      png: Png
+    ) => { flatShare: number; outlineBreak: number };
+    const skinRednessShift = sandbox.skinRednessShift as (
+      png: Png
+    ) => number | null;
+    const W = 120;
+    const H = 60;
+    const image = (
+      paint: (x: number, y: number) => [number, number, number] | null
+    ): Png => {
+      const data = new Array<number>(W * H * 4).fill(255);
+      for (let y = 0; y < H; y += 1) {
+        for (let x = 0; x < W; x += 1) {
+          const rgb = paint(x, y) || [255, 0, 255];
+          const i = (y * W + x) * 4;
+          data[i] = rgb[0];
+          data[i + 1] = rgb[1];
+          data[i + 2] = rgb[2];
+        }
+      }
+      return { width: W, height: H, data };
+    };
+    // Plates: two flat hair tones with a hard step, smooth arc against the
+    // background (the #41 crown).
+    const plates = image((x, y) =>
+      y > 20 + Math.round(6 * Math.sin(x / 30))
+        ? x < 60
+          ? [90, 70, 60]
+          : [70, 52, 44]
+        : null
+    );
+    const plateMetrics = hairCrownMetrics(plates);
+    expect(plateMetrics.flatShare).toBeGreaterThan(0.6);
+    expect(plateMetrics.outlineBreak).toBeLessThan(1.5);
+    // Strands: per-pixel tone noise and a ragged outline.
+    let seed = 1;
+    const rnd = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const strands = image((x, y) => {
+      const edge = 20 + Math.round(12 * rnd());
+      if (y < edge) return null;
+      const t = 60 + Math.round(40 * rnd());
+      return [t + 20, t, t - 8];
+    });
+    const strandMetrics = hairCrownMetrics(strands);
+    expect(strandMetrics.flatShare).toBeLessThan(
+      sandbox.HAIR_MAX_FLAT_SHARE as number
+    );
+    expect(strandMetrics.outlineBreak).toBeGreaterThan(
+      sandbox.HAIR_MIN_OUTLINE_BREAK as number
+    );
+    // Skin: a Lambert ramp keeps its hue from light to dark...
+    const lambert = image((x) => {
+      const k = 0.45 + (0.5 * x) / W;
+      return [Math.round(230 * k), Math.round(180 * k), Math.round(150 * k)];
+    });
+    expect(Math.abs(skinRednessShift(lambert) as number)).toBeLessThan(0.02);
+    // ...while subsurface skin goes redder as it darkens.
+    const sss = image((x) => {
+      const k = 0.45 + (0.5 * x) / W;
+      const red = (1 - k) * 0.5;
+      return [
+        Math.round(230 * k * (1 + red)),
+        Math.round(180 * k * (1 - red * 0.6)),
+        Math.round(150 * k * (1 - red * 0.6)),
+      ];
+    });
+    expect(skinRednessShift(sss) as number).toBeGreaterThan(
+      sandbox.SKIN_MIN_SSS_SHIFT as number
+    );
+    // No skin in the crop -> not measurable, never a pass.
+    expect(skinRednessShift(image(() => null))).toBeNull();
   });
 
   it("keeps the headless check's PRESETS table equal to CHARACTER_PRESETS", () => {
