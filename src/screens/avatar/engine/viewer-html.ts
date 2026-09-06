@@ -1,6 +1,12 @@
+// Mirrored verbatim in assets/avatar-engine/viewer-page.html (the 3D viewer
+// cannot import this module); __tests__/avatar-viewer-rig.test.ts fails if
+// the two drift. Style C (soft semi-real intimate, 2026-09-06): swatch 1 of
+// hair is a soft dark brown (was the #5c3310 orange chestnut) and swatch 1 of
+// skin a peach with pink under it (was the #e2b089 tan) - both are the
+// default look's picks.
 export const HAIR_COLORS = [
   "#1a1410",
-  "#5c3310",
+  "#55392a",
   "#d4b483",
   "#8b2a1a",
   "#e891b0",
@@ -9,7 +15,7 @@ export const HAIR_COLORS = [
 
 export const SKIN_COLORS = [
   "#f3d0bc",
-  "#e2b089",
+  "#e4b696",
   "#c17a45",
   "#8a4f28",
 ] as const;
@@ -76,6 +82,11 @@ export const CHARACTER_PRESETS: AvatarLook[] = [
     eyeSize: 0.52,
     age: 0.32,
   },
+  // The default look (DEFAULT_LOOK). Style C: Face / Jaw sit lower on the
+  // same mild sculpt axes (caps 0.45 / 0.45 / 0.50 unchanged) for a softer
+  // oval than the #41 default's 0.48 / 0.46, which the raised caps had made
+  // squarer and sterner than the reviewed bust; chin as signed off; Eyes
+  // Size 0.5 = the locked 0.85 eye.
   {
     appearanceIndex: 2,
     hairStyle: 2,
@@ -86,8 +97,8 @@ export const CHARACTER_PRESETS: AvatarLook[] = [
     chest: 0.5,
     forearms: 0.45,
     backAndHips: 0.48,
-    faceWidth: 0.48,
-    jaw: 0.46,
+    faceWidth: 0.4,
+    jaw: 0.38,
     chin: 0.5,
     eyeSize: 0.5,
     age: 0.28,

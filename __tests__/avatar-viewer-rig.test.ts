@@ -4,7 +4,11 @@ import vm from "vm";
 import { beforeAll, describe, expect, it } from "@jest/globals";
 import {
   CHARACTER_PRESETS,
+  DEFAULT_LOOK,
+  EYE_COLORS,
+  HAIR_COLORS,
   HAIR_STYLE_COUNT,
+  SKIN_COLORS,
 } from "../src/screens/avatar/engine/viewer-html";
 
 /**
@@ -89,6 +93,84 @@ type ViewerRig = {
   LASH_LENGTH: number;
   OUTER_CORNER_LIFT: number;
   HAIR_ROUGHNESS: number;
+  HAIR_COLORS: string[];
+  SKIN_COLORS: string[];
+  EYE_COLORS: string[];
+  LIGHT_RIG: {
+    exposure: number;
+    hemisphere: { sky: number; ground: number; intensity: number };
+    key: { color: number; intensity: number; position: Vec3 };
+    fill: { color: number; intensity: number; position: Vec3 };
+    rim: { color: number; intensity: number; position: Vec3 };
+    env: { sky: number; floor: number; warm: number };
+  };
+  SKIN_LOOK: {
+    roughness: number;
+    ageRoughness: number;
+    clearcoat: number;
+    clearcoatRoughness: number;
+    envMapIntensity: number;
+    sssTint: [number, number, number];
+    sssHead: number;
+    sssBody: number;
+    shadowWarm: [number, number, number];
+    shadowLift: number;
+    poreRoughness: number;
+    poreAlbedo: number;
+    cardRoughness: number;
+  };
+  LIP_PAINT: {
+    color: [number, number, number];
+    mix: number;
+    line: [number, number, number];
+    lineMix: number;
+    gloss: number;
+  };
+  CHEEK_PAINT: { color: [number, number, number]; mix: number };
+  BROW_SKIN_INK: number;
+  BROW_THICKNESS: number;
+  LASH_CLUSTER: { count: number; tipThin: number };
+  WETLINE: { from: number; peak: number; to: number; strength: number };
+  HAIR_LOOK: {
+    strandFrequency: number;
+    strandDepth: number;
+    stripMean: number;
+    stripContrast: number;
+    metalness: number;
+    envMapIntensity: number;
+    scalpNormal: number;
+    edgeDissolve: number;
+    coreAlpha: number;
+    fringeAlpha: number;
+    eyeClear: number;
+    eyeClearFeather: number;
+  };
+  HAIR_CARDS: {
+    perSquareMetre: number;
+    width: number;
+    length: number;
+    lift: number;
+    segments: number;
+    albedo: number;
+    flyawayShare: number;
+    flyawayLift: number;
+    overhang: number;
+    edgeMargin: number;
+  };
+  hairBoundaryDistance: (geometry: unknown) => Float32Array;
+  buildHairCards: (shell: unknown, options?: { seed?: number }) => unknown;
+  hairNormalChunk: () => string;
+  hairEyeClearChunk: () => string;
+  makeHairMaterials: (
+    base: unknown,
+    envMap: unknown,
+    kind: "shell" | "card"
+  ) => { core: Three; fringe: Three };
+  SOCKET_SHADE: number;
+  hairShaderChunk: (kind: "shell" | "card") => string;
+  skinDetailChunk: () => string;
+  eyeBoneSlots: (mesh: unknown) => [number, number];
+  eyeWeightVertexChunk: () => string;
   SCULPT_CAPS: { squareness: number; stern: number; sharpness: number };
   SCULPT_MORPHS: string[];
   sculptMorphs: (
@@ -692,17 +774,19 @@ describe("eyes", () => {
     expect(chunk).toMatch(/float spec = smoothstep\([^)]*dot\(ballN,/);
     expect(chunk).not.toMatch(/float spec = smoothstep\([^)]*dot\(vn,/);
     const { lo, hi, mix, mix2 } = rig.CATCHLIGHT;
-    // cos(9deg) = 0.9877: the spot's soft edge starts inside 9deg.
-    expect(lo).toBeGreaterThanOrEqual(0.987);
+    // cos(10deg) = 0.9848: the spot's soft edge starts inside 10deg.
+    expect(lo).toBeGreaterThanOrEqual(0.985);
     expect(hi).toBeGreaterThan(lo);
     expect(hi).toBeLessThan(1);
-    // The reference pass: a hard glassy glint - the edge spans at most 0.005
-    // in cos (about 2deg) and the spot is 86-92% white; #36's 0.8 / 4deg edge
-    // read as a haze. Never the 1.2 (12) 92%-white 12deg blob: the footprint
-    // stays inside 9deg above.
-    expect(hi - lo).toBeLessThanOrEqual(0.005 + 1e-9);
-    expect(mix).toBeLessThanOrEqual(0.92);
-    expect(mix).toBeGreaterThanOrEqual(0.86);
+    // Style C (soft semi-real): a small *wet* highlight, not the reference
+    // pass's hard glassy glint and never the 1.2 (12) 92%-white 12deg blob.
+    // The white core is under 6deg (cos 0.9945) with a soft edge of 0.006-
+    // 0.012 in cos (about 3-4deg of falloff), mixed 78-88% white.
+    expect(hi).toBeGreaterThanOrEqual(0.9945);
+    expect(hi - lo).toBeGreaterThanOrEqual(0.006 - 1e-9);
+    expect(hi - lo).toBeLessThanOrEqual(0.012 + 1e-9);
+    expect(mix).toBeLessThanOrEqual(0.88);
+    expect(mix).toBeGreaterThanOrEqual(0.78);
     // Soft secondary glint low on the other side, clearly weaker.
     expect(mix2).toBeGreaterThanOrEqual(0.15);
     expect(mix2).toBeLessThanOrEqual(0.35);
@@ -857,7 +941,7 @@ describe("eyes", () => {
         )});`
       );
       expect(chunk).toContain(
-        `lashCard * ${rig.LASH_INK.density.toFixed(2)});`
+        `lashCard * ${rig.LASH_INK.density.toFixed(2)} * lashInk);`
       );
       // Liner: dark, warm, dense.
       for (const channel of rig.LASH_INK.color) {
@@ -874,7 +958,7 @@ describe("eyes", () => {
       // the ink, so the cards are painted last.
       expect(chunk.indexOf("float lip = ")).toBeGreaterThanOrEqual(0);
       expect(chunk.indexOf("float lashCard = ")).toBeGreaterThan(
-        chunk.indexOf("max(cL, cR) * 0.12")
+        chunk.indexOf(`max(cL, cR) * ${rig.CHEEK_PAINT.mix.toFixed(2)}`)
       );
       // Only the head material (wrap < 0.1) gets the chunk and the uniform;
       // the body skin material keeps its shader.
@@ -2065,5 +2149,894 @@ describe("hair", () => {
     expect(tint).toMatch(/mat\.roughness = HAIR_ROUGHNESS \+ age \* 0\.12;/);
     expect(html).not.toMatch(/mat\.roughness = 0\.42 \+ age \* 0\.12/);
     expect(html).not.toMatch(/mat\.roughness = 0\.42;/);
+  });
+});
+
+// Style C - Soft Semi-Real Intimate (Maxwell, 2026-09-06): the default face,
+// eye finish, skin and hair move off the "clay placeholder" of the #41 bust
+// toward the style board (soft key, gentle warm bounce, weak rim; skin with
+// a subsurface-warm terminator and a soft specular; natural lips; strand
+// cards; a wet small catchlight). The eye *band* is locked and untouched.
+describe("soft semi-real default look", () => {
+  const hexToRgb = (hex: number) => [
+    (hex >> 16) & 255,
+    (hex >> 8) & 255,
+    hex & 255,
+  ];
+  const viewerHtml = () => fs.readFileSync(VIEWER_SOURCE, "utf8");
+  const sliceBetween = (html: string, from: string, to: string) =>
+    html.slice(html.indexOf(from), html.indexOf(to));
+
+  it("keeps the locked eye band exactly: 0.74 / 0.85 / 0.96, lid 0.29 -> 0.21, iris share 1.10 -> 1.0, gaze clamp", () => {
+    expect(rig.EYE_SCALE_MIN).toBe(0.74);
+    expect(rig.EYE_SCALE).toBe(rig.eyeScaleFor(0.5));
+    expect(rig.EYE_SCALE).toBeCloseTo(0.85, 9);
+    expect(rig.EYE_SCALE_MAX).toBe(0.96);
+    expect(rig.UPPER_LID_DROP).toBe(0.29);
+    expect(rig.UPPER_LID_DROP_LARGE).toBe(0.21);
+    expect(rig.IRIS_SIZE_SMALL).toBe(1.1);
+    expect(rig.IRIS_SIZE_LARGE).toBe(1);
+    expect(rig.IRIS_RADIUS).toBe(0.31);
+    expect(rig.PUPIL_RADIUS).toBe(0.115);
+    expect(rig.MAX_GAZE_ANGLE).toBe(0.24);
+    // The feel pack's morph weights and ink windows are still written in.
+    expect(rig.LASH_LENGTH).toBe(0.8);
+    expect(rig.OUTER_CORNER_LIFT).toBe(0.9);
+    expect(rig.LASH_INK.density).toBeGreaterThanOrEqual(0.85);
+    // The lid covers 10-20% of the iris at the default Size (0.25 -> ~16%).
+    expect(rig.upperLidDrop(0.5)).toBeGreaterThanOrEqual(0.21);
+    expect(rig.upperLidDrop(0.5)).toBeLessThanOrEqual(0.28);
+  });
+
+  it("lights the bust soft and warm: a warm key strongest, a warm (not blue) fill bounce, a weak rim, warm hemisphere ground", () => {
+    const light = rig.LIGHT_RIG;
+    const [kr, , kb] = hexToRgb(light.key.color);
+    const [fr, , fb] = hexToRgb(light.fill.color);
+    const [rr, , rb] = hexToRgb(light.rim.color);
+    const [gr, , gb] = hexToRgb(light.hemisphere.ground);
+    // The #41 fill was 0x9eb0d4 at 0.4 - a blue-grey bounce that turned the
+    // shadow side of the face into clay - and the hemisphere ground was
+    // purple (0x2a2036). Every light in the Style C rig is warm.
+    expect(fr).toBeGreaterThanOrEqual(fb);
+    expect(kr).toBeGreaterThan(kb);
+    expect(rr).toBeGreaterThan(rb);
+    expect(gr).toBeGreaterThan(gb);
+    expect(light.key.intensity).toBeGreaterThan(light.fill.intensity);
+    expect(light.key.intensity).toBeGreaterThan(light.rim.intensity);
+    // Key soft: not the 1.25 spot of #41, still the main light.
+    expect(light.key.intensity).toBeGreaterThanOrEqual(0.9);
+    expect(light.key.intensity).toBeLessThanOrEqual(1.15);
+    // Gentle fill: 35-55% of the key.
+    expect(light.fill.intensity / light.key.intensity).toBeGreaterThanOrEqual(
+      0.35
+    );
+    expect(light.fill.intensity / light.key.intensity).toBeLessThanOrEqual(
+      0.55
+    );
+    // Weak rim (the #41 pink rim ran 0.7 and blew the hair crown out).
+    expect(light.rim.intensity).toBeLessThanOrEqual(0.4);
+    expect(light.rim.intensity).toBeGreaterThan(0);
+    // Key from above and in front (camera side), fill from the other side.
+    expect(light.key.position[1]).toBeGreaterThan(1);
+    expect(light.key.position[2]).toBeGreaterThan(0);
+    expect(Math.sign(light.fill.position[0])).toBe(
+      -Math.sign(light.key.position[0])
+    );
+    expect(light.rim.position[2]).toBeLessThan(0);
+    // The env sky is no longer lavender (0xcbbdd8 tinted the sclera and skin).
+    const [er, , eb] = hexToRgb(light.env.sky);
+    expect(er).toBeGreaterThanOrEqual(eb);
+    expect(light.exposure).toBeGreaterThanOrEqual(1);
+    expect(light.exposure).toBeLessThanOrEqual(1.15);
+    // And the scene is built from this table, not from literals.
+    const boot = sliceBetween(
+      viewerHtml(),
+      "renderer.setClearColor(0x000000, 0);",
+      "addGroundContact();"
+    );
+    expect(boot).toMatch(
+      /new THREE\.HemisphereLight\(LIGHT_RIG\.hemisphere\.sky, LIGHT_RIG\.hemisphere\.ground, LIGHT_RIG\.hemisphere\.intensity\)/
+    );
+    expect(boot).toMatch(/directional\(LIGHT_RIG\.key\)/);
+    expect(boot).toMatch(/directional\(LIGHT_RIG\.fill\)/);
+    expect(boot).toMatch(/directional\(LIGHT_RIG\.rim\)/);
+    expect(boot).toMatch(/renderer\.toneMappingExposure = LIGHT_RIG\.exposure;/);
+    expect(boot).not.toMatch(/0x9eb0d4/);
+    const env = sliceBetween(viewerHtml(), "function makeEnvMap(", "// Head_0 carries");
+    expect(env).toMatch(/color: LIGHT_RIG\.env\.sky, side: THREE\.BackSide/);
+    expect(env).toMatch(/color: LIGHT_RIG\.env\.floor/);
+    expect(env).not.toMatch(/0xcbbdd8/);
+  });
+
+  it("shades skin as skin: subsurface-warm terminator and warm shadow lift on the key light, a soft specular, pores in the roughness", () => {
+    const skin = rig.SKIN_LOOK;
+    // Matte-but-not-plastic dielectric with a thin oily clearcoat.
+    expect(skin.roughness).toBeGreaterThanOrEqual(0.48);
+    expect(skin.roughness).toBeLessThanOrEqual(0.58);
+    expect(skin.clearcoat).toBeGreaterThanOrEqual(0.1);
+    expect(skin.clearcoat).toBeLessThanOrEqual(0.25);
+    expect(skin.clearcoatRoughness).toBeGreaterThanOrEqual(0.4);
+    expect(skin.clearcoatRoughness).toBeLessThanOrEqual(0.65);
+    // The SSS approximation is red-dominant and lands on head and body.
+    expect(skin.sssTint[0]).toBeGreaterThan(skin.sssTint[1]);
+    expect(skin.sssTint[1]).toBeGreaterThanOrEqual(skin.sssTint[2]);
+    expect(skin.sssHead).toBeGreaterThan(0.15);
+    expect(skin.sssHead).toBeLessThanOrEqual(0.6);
+    expect(skin.sssBody).toBeGreaterThan(0.1);
+    expect(skin.shadowWarm[0]).toBeGreaterThan(skin.shadowWarm[2]);
+    expect(skin.shadowLift).toBeGreaterThan(0.05);
+    expect(skin.shadowLift).toBeLessThanOrEqual(0.3);
+    // Subtle: pores modulate roughness by <= 0.12 and albedo by <= 4%.
+    expect(skin.poreRoughness).toBeGreaterThan(0);
+    expect(skin.poreRoughness).toBeLessThanOrEqual(0.12);
+    expect(skin.poreAlbedo).toBeGreaterThan(0);
+    expect(skin.poreAlbedo).toBeLessThanOrEqual(0.04);
+    const chunk = rig.skinDetailChunk();
+    // Wrap lighting against the key direction fed per frame (view space).
+    expect(chunk).toContain("keyDirView");
+    expect(chunk).toMatch(/float ndl = dot\(normal, keyDirView\);/);
+    expect(chunk).toContain(
+      `vec3(${skin.sssTint.map((v) => v.toFixed(2)).join(", ")})`
+    );
+    expect(chunk).toContain(
+      `vec3(${skin.shadowWarm.map((v) => v.toFixed(2)).join(", ")})`
+    );
+    expect(chunk).toContain("outgoingLight +=");
+    // The brow / lash cards are hair: no subsurface term on them, so the
+    // liner stays near-black.
+    expect(chunk.match(/\* \(1\.0 - phCard\);/g)).toHaveLength(2);
+    const html = viewerHtml();
+    const inject = sliceBetween(
+      html,
+      "function injectSkinWrap(",
+      "function upgradeSkinMat("
+    );
+    expect(inject).toMatch(/shader\.uniforms\.keyDirView = /);
+    expect(inject).toMatch(/uniform vec3 keyDirView;/);
+    expect(inject).toMatch(/#include <roughnessmap_fragment>\\n/);
+    expect(inject).toContain("skinDetailChunk(");
+    // Old fixed-direction wrap is gone.
+    expect(inject).not.toContain("vec3(0.15, 0.35, 0.92)");
+    const upgrade = sliceBetween(
+      html,
+      "function upgradeSkinMat(",
+      "// Eye shape and gaze"
+    );
+    expect(upgrade).toMatch(/mat\.roughness = SKIN_LOOK\.roughness;/);
+    expect(upgrade).toMatch(/mat\.clearcoat = SKIN_LOOK\.clearcoat;/);
+    expect(upgrade).toMatch(
+      /mat\.clearcoatRoughness = SKIN_LOOK\.clearcoatRoughness;/
+    );
+    // tintLook ages the roughness from the same table.
+    const tint = sliceBetween(html, "function tintLook(", "function canvasTexture(");
+    expect(tint).toMatch(
+      /mat\.roughness = SKIN_LOOK\.roughness \+ age \* SKIN_LOOK\.ageRoughness;/
+    );
+    // The frame loop feeds the key direction to every skin material.
+    const animateBody = sliceBetween(html, "function animate(", "function fail(");
+    expect(animateBody).toMatch(/updateKeyDirection\(\);/);
+    // three r128 has no <output_fragment> include - #41's wrap term targeted
+    // it and never reached the shader. The light chunk is spliced in front of
+    // the shader's real last line, which the bundled three.min.js must carry.
+    expect(html).not.toContain("<output_fragment>");
+    expect(inject).toMatch(/OUTPUT_LINE,\s*skinDetailChunk\("light", sss\) \+ OUTPUT_LINE/);
+    const three = fs.readFileSync(path.join(ENGINE_DIR, "three.min.js"), "utf8");
+    expect(three).toContain("gl_FragColor = vec4( outgoingLight, diffuseColor.a );");
+    expect(three).not.toContain("output_fragment");
+  });
+
+  it("shades the lid skin into a soft socket by its own eye-bone weight, on the head material only", () => {
+    // The lid margin is skinned 1.0 to eyeRoot_l/r, the crease ~0.3, the brow
+    // 0 (measured on the GLB): that weight, carried from the vertex shader,
+    // is the socket falloff. Subtle (<= 20%): a shading cue, not eye shadow.
+    expect(rig.SOCKET_SHADE).toBeGreaterThan(0.06);
+    expect(rig.SOCKET_SHADE).toBeLessThanOrEqual(0.2);
+    expect(rig.headPaintChunk()).toContain(
+      `diffuseColor.rgb *= 1.0 - vPhEye * ${rig.SOCKET_SHADE.toFixed(2)};`
+    );
+    const vertex = rig.eyeWeightVertexChunk();
+    expect(vertex).toContain("vPhEye = 0.0;");
+    expect(vertex).toContain("#ifdef USE_SKINNING");
+    for (const c of ["x", "y", "z", "w"]) {
+      expect(vertex).toContain(
+        `abs(skinIndex.${c} - eyeSlots.x) < 0.5 || abs(skinIndex.${c} - eyeSlots.y) < 0.5) ? skinWeight.${c} : 0.0;`
+      );
+    }
+    // Slots come from the mesh's own skeleton (JOINTS_0 order), -1 without
+    // an eye bone, so a body material contributes nothing.
+    const head = new THREE.Bone();
+    head.name = "head";
+    const eyeL = new THREE.Bone();
+    eyeL.name = "eyeRoot_l_2";
+    eyeL.userData.name = "eyeRoot_l";
+    const eyeR = new THREE.Bone();
+    eyeR.name = "eyeRoot_r";
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute([0, 0, 0], 3)
+    );
+    const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+    const bones = [head, eyeR, eyeL];
+    mesh.bind(
+      new THREE.Skeleton(
+        bones,
+        bones.map(() => new THREE.Matrix4())
+      ),
+      new THREE.Matrix4()
+    );
+    expect(rig.eyeBoneSlots(mesh)).toEqual([2, 1]);
+    expect(
+      rig.eyeBoneSlots(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial()))
+    ).toEqual([-1, -1]);
+    const html = viewerHtml();
+    const inject = sliceBetween(
+      html,
+      "function injectSkinWrap(",
+      "function upgradeSkinMat("
+    );
+    expect(inject).toMatch(/uniform vec2 eyeSlots;\\nvarying float vPhEye;/);
+    expect(inject).toMatch(
+      /"#include <skinbase_vertex>\\n" \+ eyeWeightVertexChunk\(\)/
+    );
+    expect(inject).toMatch(/var slots = mat\.userData\.eyeSlots \|\| \[-1, -1\];/);
+    const load = sliceBetween(
+      html,
+      "new THREE.GLTFLoader().load(",
+      "function boxOf("
+    );
+    expect(load).toMatch(/swapped\.userData\.eyeSlots = eyeBoneSlots\(obj\);/);
+  });
+
+  it("paints natural lips and a faint flush instead of the #41 mauve lipstick, and a thinner, deeper brow", () => {
+    const lip = rig.LIP_PAINT;
+    // Rose-nude: red-dominant, green and blue close (no purple), mixed at
+    // half or less so the skin shows through; a soft sheen via roughness.
+    expect(lip.color[0]).toBeGreaterThan(lip.color[1]);
+    expect(lip.color[1]).toBeGreaterThanOrEqual(lip.color[2] - 0.02);
+    expect(lip.color[0] - lip.color[1]).toBeLessThanOrEqual(0.42);
+    expect(lip.mix).toBeGreaterThanOrEqual(0.4);
+    expect(lip.mix).toBeLessThanOrEqual(0.58);
+    expect(lip.lineMix).toBeLessThan(0.48);
+    expect(lip.gloss).toBeGreaterThan(0);
+    expect(lip.gloss).toBeLessThanOrEqual(0.3);
+    const cheek = rig.CHEEK_PAINT;
+    expect(cheek.mix).toBeGreaterThanOrEqual(0.12);
+    expect(cheek.mix).toBeLessThanOrEqual(0.22);
+    expect(cheek.color[0]).toBeGreaterThan(cheek.color[1]);
+    const chunk = rig.headPaintChunk();
+    expect(chunk).toContain(
+      `vec3(${lip.color.map((v) => v.toFixed(2)).join(", ")}), lip * ${lip.mix.toFixed(2)}`
+    );
+    expect(chunk).toContain(
+      `vec3(${lip.line.map((v) => v.toFixed(2)).join(", ")}), lipLine * ${lip.lineMix.toFixed(2)}`
+    );
+    expect(chunk).toContain(
+      `vec3(${cheek.color.map((v) => v.toFixed(2)).join(", ")}), max(cL, cR) * ${cheek.mix.toFixed(2)}`
+    );
+    expect(chunk).not.toContain("vec3(0.70, 0.26, 0.30), lip * 0.62");
+    // The lip mask is kept for the roughness pass (soft sheen on the lips).
+    expect(chunk).toContain("float phLip = lip;");
+    expect(rig.skinDetailChunk()).toContain(
+      `phLip * ${lip.gloss.toFixed(2)}`
+    );
+    // The painted skin brow under the slab is softer than the 0.92 slab of
+    // #41 (the card ink carries the brow), and the slab is thinner.
+    expect(rig.BROW_SKIN_INK).toBeLessThanOrEqual(0.75);
+    expect(chunk).toContain(`max(bL, bR) * ${rig.BROW_SKIN_INK.toFixed(2)}`);
+    expect(rig.BROW_THICKNESS).toBeGreaterThanOrEqual(0.1);
+    expect(rig.BROW_THICKNESS).toBeLessThanOrEqual(0.24);
+    const meshLook = sliceBetween(
+      viewerHtml(),
+      "function applyMeshLook(",
+      "function prefixIndex("
+    );
+    expect(meshLook).toMatch(/"Shape_BrowsThickness", BROW_THICKNESS\)/);
+    expect(meshLook).not.toMatch(/"Shape_BrowsThickness", 0\.32\)/);
+    // Brow colour: darker than the hair and pulled toward a neutral dark so a
+    // chestnut head does not get orange slabs.
+    const brow = rig.browColorFor(new THREE.Color(0x55392a));
+    expect(brow.r).toBeLessThan(0.2);
+    expect(brow.r - brow.b).toBeLessThan(0.08);
+  });
+
+  it("clusters the lashes toward their tips and keeps the liner solid at the root", () => {
+    const cluster = rig.LASH_CLUSTER;
+    // Measured on the GLB: the upper lash card's root is at u ~0.146 and the
+    // Shape_LashLength tips move most at u ~0.143, so the card's u axis runs
+    // tip -> root; v runs along the lid (0.214-0.243). Clusters are a sine
+    // along v; the ink thins between them only toward the tip.
+    expect(cluster.count).toBeGreaterThanOrEqual(6);
+    expect(cluster.count).toBeLessThanOrEqual(16);
+    expect(cluster.tipThin).toBeGreaterThan(0.2);
+    expect(cluster.tipThin).toBeLessThanOrEqual(0.7);
+    const chunk = rig.headPaintChunk();
+    expect(chunk).toMatch(/float lashTip = 1\.0 - smoothstep\(/);
+    expect(chunk).toMatch(/float lashCluster = 0\.5 \+ 0\.5 \* sin\(fu\.y \* /);
+    expect(chunk).toContain(
+      `lashCard * ${rig.LASH_INK.density.toFixed(2)} * lashInk);`
+    );
+    expect(chunk).toMatch(
+      /float lashInk = mix\(1\.0, lashCluster, lashTip \* [0-9.]+\);/
+    );
+  });
+
+  it("adds a wet line along the lower lid on the eyeball, under the iris and never over the pupil", () => {
+    const wet = rig.WETLINE;
+    // p.y is up in the eyeball shader; the lower lid rests near -0.35, so the
+    // meniscus sits between -0.42 and -0.24 and peaks just above the lid.
+    expect(wet.from).toBeLessThan(wet.peak);
+    expect(wet.peak).toBeLessThan(wet.to);
+    expect(wet.from).toBeGreaterThanOrEqual(-0.48);
+    expect(wet.to).toBeLessThanOrEqual(-0.2);
+    // Subtle: never a second catchlight.
+    expect(wet.strength).toBeGreaterThan(0.1);
+    expect(wet.strength).toBeLessThanOrEqual(0.4);
+    const chunk = rig.irisFragmentChunk();
+    expect(chunk).toContain(
+      `float wet = smoothstep(${wet.from.toFixed(2)}, ${wet.peak.toFixed(
+        2
+      )}, p.y) * (1.0 - smoothstep(${wet.peak.toFixed(2)}, ${wet.to.toFixed(
+        2
+      )}, p.y));`
+    );
+    expect(chunk).toContain(`wet * ${wet.strength.toFixed(2)}`);
+    // The wet line is applied after the pupil so the pupil stays dark, and
+    // before the catchlights.
+    expect(chunk.indexOf("float wet = ")).toBeGreaterThan(
+      chunk.indexOf("col = mix(col, pupilCol, pupilM);")
+    );
+    expect(chunk.indexOf("float wet = ")).toBeLessThan(
+      chunk.indexOf("float spec = smoothstep(")
+    );
+  });
+
+  // Style C hair, second cut (design rejected #42's tip on "block hair").
+  // Measured on the GLB: every hair style is four sculpted clump shells
+  // (0.12 x 0.30 m each, one connected surface per mesh), not cards - so the
+  // brick / step read is the shell's own facets and open edges, and no
+  // texture can fix it. The viewer now builds the geometry at load: a layer
+  // of thin strand cards grown on the shell surface along the hair flow,
+  // skinned to the shell's bones; the shell itself dissolves into strands at
+  // its open edges (hairline, tips) by a baked distance-to-boundary; hair
+  // normals blend toward a scalp sphere so facet shading steps vanish; and
+  // hair renders in two passes (opaque core + soft fringe) so the fringes do
+  // not punch holes.
+  describe("strand-card hair", () => {
+    // A 5 x 5 vertex skinned plane facing +z, 2 cm spacing (8 cm square),
+    // hanging in the x/y plane with y up, bound to two bones.
+    const shellFixture = () => {
+      const N = 5;
+      const step = 0.02;
+      const positions: number[] = [];
+      const normals: number[] = [];
+      const uvs: number[] = [];
+      const skinIndex: number[] = [];
+      const skinWeight: number[] = [];
+      for (let j = 0; j < N; j += 1) {
+        for (let i = 0; i < N; i += 1) {
+          positions.push(i * step - 0.04, 1.7 - j * step, 0);
+          normals.push(0, 0, 1);
+          uvs.push(0.5 + i / (N - 1) / 4, j / (N - 1) / 4);
+          // Left half on bone 1, right half on bone 0 - so a card copies
+          // whichever its shell vertex carries.
+          skinIndex.push(i < 2 ? 1 : 0, 0, 0, 0);
+          skinWeight.push(1, 0, 0, 0);
+        }
+      }
+      const index: number[] = [];
+      for (let j = 0; j < N - 1; j += 1) {
+        for (let i = 0; i < N - 1; i += 1) {
+          const a = j * N + i;
+          index.push(a, a + 1, a + N, a + 1, a + N + 1, a + N);
+        }
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(positions, 3)
+      );
+      geometry.setAttribute(
+        "normal",
+        new THREE.Float32BufferAttribute(normals, 3)
+      );
+      geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setAttribute(
+        "skinIndex",
+        new THREE.Uint16BufferAttribute(skinIndex, 4)
+      );
+      geometry.setAttribute(
+        "skinWeight",
+        new THREE.Float32BufferAttribute(skinWeight, 4)
+      );
+      geometry.setIndex(index);
+      const mesh = new THREE.SkinnedMesh(
+        geometry,
+        new THREE.MeshStandardMaterial()
+      );
+      const head = new THREE.Bone();
+      head.name = "head";
+      const hairBone = new THREE.Bone();
+      hairBone.name = "HairFront";
+      head.add(hairBone);
+      const bones = [head, hairBone];
+      mesh.bind(
+        new THREE.Skeleton(
+          bones,
+          bones.map(() => new THREE.Matrix4())
+        ),
+        new THREE.Matrix4()
+      );
+      mesh.name = "Hair_2_0_0";
+      return { mesh, geometry, N, step };
+    };
+
+    it("bakes each shell vertex's distance to the nearest open edge, in metres", () => {
+      const { geometry, N, step } = shellFixture();
+      const dist = rig.hairBoundaryDistance(geometry);
+      expect(dist).toHaveLength(N * N);
+      // Every rim vertex is on the boundary.
+      for (let i = 0; i < N; i += 1) {
+        expect(dist[i]).toBe(0);
+        expect(dist[(N - 1) * N + i]).toBe(0);
+        expect(dist[i * N]).toBe(0);
+        expect(dist[i * N + N - 1]).toBe(0);
+      }
+      // The centre vertex is two edges (4 cm) in; its neighbours one.
+      const centre = Math.floor(N / 2) * N + Math.floor(N / 2);
+      expect(dist[centre]).toBeCloseTo(2 * step, 6);
+      expect(dist[centre - 1]).toBeCloseTo(step, 6);
+      expect(dist[centre - N]).toBeCloseTo(step, 6);
+      // A closed surface (no open edge) is far from any edge everywhere.
+      const sphere = new THREE.SphereGeometry(0.1, 8, 6);
+      const closed = rig.hairBoundaryDistance(sphere);
+      expect(Math.min(...Array.from(closed))).toBeGreaterThan(0.05);
+    });
+
+    it("grows strand cards on the shell along the hair flow, skinned like the surface under them", () => {
+      const { mesh, step } = shellFixture();
+      const spec = rig.HAIR_CARDS;
+      expect(spec.perSquareMetre).toBeGreaterThanOrEqual(1500);
+      expect(spec.perSquareMetre).toBeLessThanOrEqual(8000);
+      expect(spec.width).toBeGreaterThanOrEqual(0.008);
+      expect(spec.width).toBeLessThanOrEqual(0.03);
+      expect(spec.length).toBeGreaterThanOrEqual(0.04);
+      expect(spec.length).toBeLessThanOrEqual(0.14);
+      expect(spec.lift).toBeGreaterThan(0);
+      expect(spec.lift).toBeLessThanOrEqual(0.01);
+      expect(spec.segments).toBeGreaterThanOrEqual(3);
+      // A share of the cards are flyaways: they lift off the surface toward
+      // the tip (up to flyawayLift) so the silhouette breaks into wisps.
+      expect(spec.flyawayShare).toBeGreaterThanOrEqual(0.15);
+      expect(spec.flyawayShare).toBeLessThanOrEqual(0.5);
+      expect(spec.flyawayLift).toBeGreaterThan(spec.lift * 2);
+      expect(spec.flyawayLift).toBeLessThanOrEqual(0.03);
+      expect(spec.overhang).toBeGreaterThanOrEqual(0.005);
+      expect(spec.overhang).toBeLessThanOrEqual(0.02);
+      const cards = rig.buildHairCards(mesh, { seed: 3 });
+      expect(cards).not.toBeNull();
+      const geo = (cards as { geometry: Three }).geometry;
+      const pos = geo.attributes.position;
+      const uv = geo.attributes.uv;
+      const card = geo.attributes.phCard;
+      const skinIndex = geo.attributes.skinIndex;
+      const skinWeight = geo.attributes.skinWeight;
+      const vertsPerCard = (spec.segments + 1) * 2;
+      let flyaways = 0;
+      // Card count follows the surface area (8 cm square = 0.0064 m^2),
+      // less the edge margin no card is seeded in (the shell's own dissolve
+      // fringes its open edges; a card seeded there crossed the eye).
+      expect(spec.edgeMargin).toBeGreaterThanOrEqual(0.008);
+      expect(spec.edgeMargin).toBeLessThanOrEqual(0.025);
+      const interior = Math.pow(0.08 - 2 * spec.edgeMargin, 2);
+      const count = pos.count / vertsPerCard;
+      expect(Number.isInteger(count)).toBe(true);
+      expect(count).toBeGreaterThanOrEqual(
+        Math.floor(interior * spec.perSquareMetre * 0.6)
+      );
+      expect(count).toBeLessThanOrEqual(
+        Math.ceil(interior * spec.perSquareMetre * 1.5) + 1
+      );
+      // Every card was seeded at least edgeMargin from the rim: with a 2 cm
+      // grid the distance field is 0 on the rim, 2 cm one ring in.
+      expect(count).toBeGreaterThan(0);
+      expect(geo.index.count).toBe(count * spec.segments * 6);
+      const v = (attr: Three, i: number) =>
+        Array.from({ length: attr.itemSize }, (_, k) =>
+          attr.array[i * attr.itemSize + k]
+        );
+      for (let c = 0; c < count; c += 1) {
+        const base = c * vertsPerCard;
+        const id = v(card, base)[0];
+        const flyaway = v(card, base)[2];
+        expect([0, 1]).toContain(flyaway);
+        if (flyaway) flyaways += 1;
+        let rootY = -Infinity;
+        let tipY = Infinity;
+        for (let k = 0; k < vertsPerCard; k += 1) {
+          const p = v(pos, base + k);
+          // Lifted off the surface, never behind it; flyaways may float up
+          // to flyawayLift + lift above it.
+          // (a twisted flyaway's side vertex may dip toward the surface)
+          expect(p[2]).toBeGreaterThan(flyaway ? -spec.width : spec.lift * 0.5);
+          expect(p[2]).toBeLessThan(
+            flyaway ? spec.flyawayLift + spec.lift * 2 + spec.width : spec.lift * 3
+          );
+          // Same card id on every vertex of the card.
+          expect(v(card, base + k)[0]).toBe(id);
+          // Skinning copied from the nearest shell vertex: the grid columns
+          // at x = -0.04 / -0.02 carry bone 1, the rest bone 0, weight 1.
+          const idx = v(skinIndex, base + k)[0];
+          if (Math.abs(p[0] + 0.01) > 1e-4) {
+            expect(idx).toBe(p[0] < -0.01 ? 1 : 0);
+          }
+          expect(v(skinWeight, base + k)[0]).toBe(1);
+          const along = v(uv, base + k)[1];
+          if (along === 0) rootY = Math.max(rootY, p[1]);
+          if (along === 1) tipY = Math.min(tipY, p[1]);
+        }
+        // Flow is gravity on the surface: the root (along 0) is above the
+        // tip (along 1) and the card is at least half its nominal length.
+        // (a card at the shell's rim is clamped to `overhang` past it)
+        expect(rootY - tipY).toBeGreaterThan(
+          Math.min(spec.length * 0.5, spec.length * 0.3 + spec.overhang)
+        );
+        // Nothing hangs more than `overhang` outside the 8 cm shell.
+        expect(rootY).toBeLessThanOrEqual(1.7 + spec.overhang + 1e-6);
+        expect(tipY).toBeGreaterThanOrEqual(1.7 - 0.08 - spec.overhang - 1e-6);
+        // Width across the card at the root (the two along-0 vertices).
+        const a = v(pos, base);
+        const b = v(pos, base + 1);
+        const width = Math.hypot(a[0] - b[0], a[1] - b[1]);
+        // (flyaways are 0.6x as wide; the twist keeps the x/y span within
+        // the card width)
+        expect(width).toBeGreaterThan(spec.width * (flyaway ? 0.2 : 0.5));
+        expect(width).toBeLessThan(spec.width * 1.6);
+        // Across runs 0 -> 1 on each pair.
+        expect(v(uv, base)[0]).toBe(0);
+        expect(v(uv, base + 1)[0]).toBe(1);
+        // The card's normal is the surface normal (+z), not the ribbon's.
+        const n = v(geo.attributes.normal, base);
+        expect(n[2]).toBeGreaterThan(0.9);
+      }
+      // Roughly the flyaway share of the cards lift off.
+      expect(flyaways / count).toBeGreaterThan(spec.flyawayShare * 0.4);
+      expect(flyaways / count).toBeLessThan(spec.flyawayShare * 1.8 + 0.1);
+      expect(card.itemSize).toBe(4);
+      // The fourth component is the local distance to the shell's open edge
+      // (0 at the rim, 2 cm one grid ring in), so cards dissolve with it.
+      for (let c = 0; c < count; c += 1) {
+        const w0 = v(card, c * vertsPerCard)[3];
+        expect(w0).toBeGreaterThanOrEqual(0);
+        expect(w0).toBeLessThanOrEqual(0.04 + 1e-6);
+      }
+      // Deterministic for a seed, different for another.
+      const again = rig.buildHairCards(mesh, { seed: 3 }) as { geometry: Three };
+      expect(Array.from(again.geometry.attributes.position.array)).toEqual(
+        Array.from(pos.array)
+      );
+      const other = rig.buildHairCards(mesh, { seed: 4 }) as { geometry: Three };
+      expect(Array.from(other.geometry.attributes.position.array)).not.toEqual(
+        Array.from(pos.array)
+      );
+      // The card mesh is a SkinnedMesh on the shell's skeleton and is named
+      // so figureMeshVisible follows the hair style.
+      const cardMesh = cards as Three;
+      expect(cardMesh.isSkinnedMesh).toBe(true);
+      expect(cardMesh.skeleton).toBe(mesh.skeleton);
+      expect(cardMesh.name).toBe("Hair_2_0_0_cards");
+      expect(rig.figureMeshVisible("Hair_2_0_0_cards", { appearanceIndex: 2, hairStyle: 2 })).toBe(true);
+      expect(rig.figureMeshVisible("Hair_2_0_0_cards", { appearanceIndex: 2, hairStyle: 1 })).toBe(false);
+      expect(rig.figureMeshVisible("Hair_2_0_0_fringe", { appearanceIndex: 2, hairStyle: 2 })).toBe(true);
+      expect(step).toBeGreaterThan(0);
+    });
+
+    it("shades the shell as strands: mirrored strip, edge dissolve by the baked boundary distance, scalp-sphere normals, two render passes", () => {
+      const look = rig.HAIR_LOOK;
+      expect(rig.HAIR_ROUGHNESS).toBeGreaterThanOrEqual(0.58);
+      expect(rig.HAIR_ROUGHNESS).toBeLessThanOrEqual(0.66);
+      expect(look.scalpNormal).toBeGreaterThanOrEqual(0.4);
+      expect(look.scalpNormal).toBeLessThanOrEqual(0.85);
+      expect(look.edgeDissolve).toBeGreaterThanOrEqual(0.02);
+      expect(look.edgeDissolve).toBeLessThanOrEqual(0.06);
+      const shell = rig.hairShaderChunk("shell");
+      expect(shell).toMatch(/if \(hUv\.x > 0\.75\) hUv\.x = 1\.5 - hUv\.x;/);
+      expect(shell).toContain("texture2D(map, hUv)");
+      expect(shell).toContain("vPhEdge");
+      expect(shell).toContain(`/ ${look.edgeDissolve.toFixed(3)}`);
+      expect(shell).toMatch(/float strand = /);
+      expect(shell).toContain("diffuseColor.a *=");
+      const card = rig.hairShaderChunk("card");
+      expect(card).not.toContain("texture2D(map");
+      expect(card).toContain("vPhCard");
+      // Flyaway cards (vPhCard.z) carry sparser strands.
+      expect(card).toMatch(/vPhCard\.z/);
+      // ...and dissolve toward the shell's open edges with it.
+      expect(card).toContain(`clamp(vPhCard.w / ${look.edgeDissolve.toFixed(3)}, 0.0, 1.0)`);
+      expect(card).toMatch(/diffuseColor\.a \*= body \* tip \* root \* cardEdge;/);
+      // Tapered, strand-broken tips and fringed sides.
+      expect(card).toMatch(/float tip = /);
+      expect(card).toMatch(/float strand = /);
+      expect(card).toContain("diffuseColor.a *=");
+      // Root darker than tip.
+      expect(card).toMatch(/mix\([0-9.]+, [0-9.]+, along\)/);
+      // Hair never covers the locked eye: both kinds fade out within
+      // eyeClear of an eye centre (fed per frame with the skull centre).
+      expect(look.eyeClear).toBeGreaterThanOrEqual(0.018);
+      expect(look.eyeClear).toBeLessThanOrEqual(0.03);
+      expect(look.eyeClearFeather).toBeGreaterThan(0);
+      const clear = rig.hairEyeClearChunk();
+      expect(clear).toContain("min(distance(vPhWorld, eyeWorldL), distance(vPhWorld, eyeWorldR))");
+      expect(clear).toContain(`smoothstep(${look.eyeClear.toFixed(3)}, ${(look.eyeClear + look.eyeClearFeather).toFixed(3)}, eyeD)`);
+      expect(shell.endsWith(clear)).toBe(true);
+      expect(card.endsWith(clear)).toBe(true);
+      const uniforms = sliceBetween(viewerHtml(), "function updateHairUniforms(", "// The two materials one hair mesh");
+      expect(uniforms).toMatch(/shader\.uniforms\.eyeWorldL\.value\.copy\(_eyeWorld\[0\]\);/);
+      expect(uniforms).toMatch(/shader\.uniforms\.eyeWorldR\.value\.copy\(_eyeWorld\[1\]\);/);
+      const normals = rig.hairNormalChunk();
+      expect(normals).toContain("skullWorld");
+      expect(normals).toContain(`${look.scalpNormal.toFixed(2)}`);
+      expect(normals).toMatch(/normal = normalize\(mix\(normal, /);
+      // Two materials per hair mesh: an opaque core that writes depth and a
+      // blended fringe that does not.
+      const base = new THREE.MeshStandardMaterial();
+      const mats = rig.makeHairMaterials(base, null, "shell");
+      expect(mats.core.transparent).toBe(false);
+      expect(mats.core.depthWrite).toBe(true);
+      expect(mats.core.alphaTest).toBeGreaterThanOrEqual(0.4);
+      expect(mats.fringe.transparent).toBe(true);
+      expect(mats.fringe.depthWrite).toBe(false);
+      expect(mats.fringe.alphaTest).toBeLessThanOrEqual(0.2);
+      // (0.04 let a faint strand haze lift the liner and the skin; 0.14 keeps
+      // only real wisps)
+      expect(mats.fringe.alphaTest).toBeGreaterThanOrEqual(0.1);
+      expect(mats.fringe.alphaTest).toBeGreaterThan(0);
+      expect(mats.core.side).toBe(THREE.DoubleSide);
+      // The card layer has no map: it must declare USE_UV itself or vUv is
+      // undeclared and the shader never compiles (the layer drew nothing).
+      const cardMats = rig.makeHairMaterials(null, null, "card");
+      expect(cardMats.core.defines).toEqual({ USE_UV: "" });
+      expect(cardMats.fringe.defines).toEqual({ USE_UV: "" });
+      expect(mats.core.defines || {}).not.toHaveProperty("USE_UV");
+      // The core pass writes alpha 1 (the canvas is transparent; a fractional
+      // alpha from an opaque pass lets the page show through the hair).
+      const make = sliceBetween(viewerHtml(), "function makeHairMaterials(", "function dressHair(");
+      expect(make).toMatch(/if \(!mat\.transparent\) \{[\s\S]*OUTPUT_LINE,\s*"gl_FragColor = vec4\( outgoingLight, 1\.0 \);"/);
+      expect(mats.core.roughness).toBe(rig.HAIR_ROUGHNESS);
+      const html = viewerHtml();
+      const load = sliceBetween(html, "new THREE.GLTFLoader().load(", "function boxOf(");
+      // The load path: shell -> core material, fringe clone, card layer.
+      expect(load).toMatch(/dressHair\(obj, envMap\)/);
+      const dress = sliceBetween(html, "function dressHair(", "function upgradeIrisMat(");
+      expect(dress).toMatch(/hairBoundaryDistance\(/);
+      expect(dress).toMatch(/buildHairCards\(/);
+      expect(dress).toMatch(/_fringe/);
+      // The frame loop feeds the skull centre.
+      const animateBody = sliceBetween(html, "function animate(", "function fail(");
+      expect(animateBody).toMatch(/updateHairUniforms\(\);/);
+    });
+  });
+
+  it("keeps the viewer's colour tables identical to the app's swatches, and the default preset softer than #41", () => {
+    expect(rig.HAIR_COLORS).toEqual([...HAIR_COLORS]);
+    expect(rig.SKIN_COLORS).toEqual([...SKIN_COLORS]);
+    expect(rig.EYE_COLORS).toEqual([...EYE_COLORS]);
+    // The default hair is a soft dark brown, not the #5c3310 orange chestnut.
+    const hair = new THREE.Color(HAIR_COLORS[1]);
+    expect(hair.r).toBeLessThan(0.36);
+    expect(hair.r - hair.b).toBeLessThan(0.2);
+    // The default skin tone is a peach with pink under it, less orange.
+    const skin = new THREE.Color(SKIN_COLORS[1]);
+    expect(skin.r).toBeGreaterThan(0.85);
+    expect(skin.g - skin.b).toBeLessThan(0.16);
+    // Face proportions: a softer oval than the #41 default (0.48 / 0.46),
+    // still on the same mild axes (caps untouched), chin as signed off.
+    expect(DEFAULT_LOOK.faceWidth).toBeLessThan(0.48);
+    expect(DEFAULT_LOOK.faceWidth).toBeGreaterThanOrEqual(0.34);
+    expect(DEFAULT_LOOK.jaw).toBeLessThan(0.46);
+    expect(DEFAULT_LOOK.jaw).toBeGreaterThanOrEqual(0.3);
+    expect(DEFAULT_LOOK.chin).toBe(0.5);
+    expect(DEFAULT_LOOK.eyeSize).toBe(0.5);
+    expect(DEFAULT_LOOK.hairColor).toBe(1);
+    expect(DEFAULT_LOOK.skinTone).toBe(1);
+    expect(rig.SCULPT_CAPS).toEqual({
+      squareness: 0.45,
+      stern: 0.45,
+      sharpness: 0.5,
+    });
+    // The viewer's boot look is the same preset.
+    const html = viewerHtml();
+    const bootLook = html.slice(
+      html.indexOf("var look = {"),
+      html.indexOf("viewMode:")
+    );
+    expect(bootLook).toContain(
+      `faceWidth: ${DEFAULT_LOOK.faceWidth}, jaw: ${DEFAULT_LOOK.jaw}, chin: ${DEFAULT_LOOK.chin}, eyeSize: ${DEFAULT_LOOK.eyeSize}, age: ${DEFAULT_LOOK.age}`
+    );
+  });
+
+  it("the headless check anchors its pupil probe on the rendered iris row, not on the projected bone", () => {
+    // Measured on every pixel-pass crop since #36: the painted iris renders
+    // ~0.2 eyeball radii below the bone's projection at the bust camera, so
+    // a probe centred on the bone reads the lid margin as the pupil top and
+    // only passed while that skin was dark under the blue fill. The check
+    // now finds the iris's widest visible row (bounded by sclera, 1.2-2.3
+    // iris radii long) and probes the pupil top above its midpoint; a lid
+    // that has come down over the pupil still fails because the window
+    // above that centre is then skin.
+    const script = fs.readFileSync(
+      path.join(ROOT, "scripts", "check-avatar-viewer.js"),
+      "utf8"
+    );
+    const source = script.slice(
+      script.indexOf("const classifyPixel = "),
+      script.indexOf("const measureEye = ")
+    );
+    const sandbox: Record<string, unknown> = {};
+    vm.createContext(sandbox);
+    vm.runInContext(
+      `${source}\nthis.irisRowCentre = irisRowCentre; this.classifyPixel = classifyPixel;`,
+      sandbox
+    );
+    const irisRowCentre = sandbox.irisRowCentre as (
+      png: { width: number; height: number; data: number[] },
+      cx: number,
+      cy: number,
+      rIris: number
+    ) => { x: number; y: number; len: number } | null;
+    // A synthetic eye: skin everywhere, a sclera band, a dark iris disc of
+    // radius 12 whose centre sits 6 px below the analytic centre, a lid
+    // (skin) covering the top 4 rows of the iris, and a liner row of dark
+    // pixels running the whole width just above the lid.
+    const W = 80;
+    const H = 80;
+    const data = new Array<number>(W * H * 4).fill(255);
+    const put = (x: number, y: number, rgb: [number, number, number]) => {
+      const i = (y * W + x) * 4;
+      data[i] = rgb[0];
+      data[i + 1] = rgb[1];
+      data[i + 2] = rgb[2];
+      data[i + 3] = 255;
+    };
+    const skin: [number, number, number] = [200, 150, 120];
+    const scleraRgb: [number, number, number] = [230, 228, 225];
+    const irisRgb: [number, number, number] = [60, 40, 30];
+    const cx = 40;
+    const cy = 34;
+    const irisCy = cy + 6;
+    const rIris = 12;
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < W; x += 1) {
+        put(x, y, skin);
+        const inAperture = Math.abs(y - irisCy) < 16 && Math.abs(x - cx) < 30;
+        if (inAperture) put(x, y, scleraRgb);
+        if (Math.hypot(x + 0.5 - cx, y + 0.5 - irisCy) <= rIris) put(x, y, irisRgb);
+        if (y <= irisCy - rIris + 4) put(x, y, skin);
+        if (y === irisCy - rIris + 3) put(x, y, [20, 15, 15]);
+      }
+    }
+    const found = irisRowCentre({ width: W, height: H, data }, cx, cy, rIris);
+    expect(found).not.toBeNull();
+    // Widest row is the iris centre row (the lid covers only the top third).
+    expect(Math.abs((found as { y: number }).y - irisCy)).toBeLessThanOrEqual(1);
+    expect(Math.abs((found as { x: number }).x - cx)).toBeLessThanOrEqual(1);
+    expect((found as { len: number }).len).toBeGreaterThanOrEqual(2 * rIris - 2);
+    // Without an iris there is nothing to anchor on.
+    const blank = new Array<number>(W * H * 4).fill(255);
+    expect(
+      irisRowCentre({ width: W, height: H, data: blank }, cx, cy, rIris)
+    ).toBeNull();
+    // And the probe in measureEye is taken from that point.
+    expect(script).toMatch(/const irisAt = irisRowCentre\(png, cx, cy, rIris\);/);
+    expect(script).toMatch(/const pdx = x \+ 0\.5 - pcx;/);
+    expect(script).toMatch(/pdy > -rPupil \* 0\.85 &&\s*pdy < -rPupil \* 0\.45/);
+  });
+
+  it("the headless check's Style C gates tell plates from strands and a Lambert shell from subsurface skin", () => {
+    const script = fs.readFileSync(
+      path.join(ROOT, "scripts", "check-avatar-viewer.js"),
+      "utf8"
+    );
+    const source = script.slice(
+      script.indexOf("const CRAFT_BG = "),
+      script.indexOf("const craftPass = ")
+    );
+    const sandbox: Record<string, unknown> = {};
+    vm.createContext(sandbox);
+    vm.runInContext(
+      `${source}\nthis.hairCrownMetrics = hairCrownMetrics; this.skinRednessShift = skinRednessShift; this.HAIR_MAX_FLAT_SHARE = HAIR_MAX_FLAT_SHARE; this.HAIR_MIN_OUTLINE_BREAK = HAIR_MIN_OUTLINE_BREAK; this.SKIN_MIN_SSS_SHIFT = SKIN_MIN_SSS_SHIFT;`,
+      sandbox
+    );
+    type Png = { width: number; height: number; data: number[] };
+    const hairCrownMetrics = sandbox.hairCrownMetrics as (
+      png: Png
+    ) => { flatShare: number; outlineBreak: number };
+    const skinRednessShift = sandbox.skinRednessShift as (
+      png: Png
+    ) => number | null;
+    const W = 120;
+    const H = 60;
+    const image = (
+      paint: (x: number, y: number) => [number, number, number] | null
+    ): Png => {
+      const data = new Array<number>(W * H * 4).fill(255);
+      for (let y = 0; y < H; y += 1) {
+        for (let x = 0; x < W; x += 1) {
+          const rgb = paint(x, y) || [255, 0, 255];
+          const i = (y * W + x) * 4;
+          data[i] = rgb[0];
+          data[i + 1] = rgb[1];
+          data[i + 2] = rgb[2];
+        }
+      }
+      return { width: W, height: H, data };
+    };
+    // Plates: two flat hair tones with a hard step, smooth arc against the
+    // background (the #41 crown).
+    const plates = image((x, y) =>
+      y > 20 + Math.round(6 * Math.sin(x / 30))
+        ? x < 60
+          ? [90, 70, 60]
+          : [70, 52, 44]
+        : null
+    );
+    const plateMetrics = hairCrownMetrics(plates);
+    expect(plateMetrics.flatShare).toBeGreaterThan(0.6);
+    expect(plateMetrics.outlineBreak).toBeLessThan(1.5);
+    // Strands: per-pixel tone noise and a ragged outline.
+    let seed = 1;
+    const rnd = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const strands = image((x, y) => {
+      const edge = 20 + Math.round(12 * rnd());
+      if (y < edge) return null;
+      const t = 60 + Math.round(40 * rnd());
+      return [t + 20, t, t - 8];
+    });
+    const strandMetrics = hairCrownMetrics(strands);
+    expect(strandMetrics.flatShare).toBeLessThan(
+      sandbox.HAIR_MAX_FLAT_SHARE as number
+    );
+    expect(strandMetrics.outlineBreak).toBeGreaterThan(
+      sandbox.HAIR_MIN_OUTLINE_BREAK as number
+    );
+    // Skin: a Lambert ramp keeps its hue from light to dark...
+    const lambert = image((x) => {
+      const k = 0.45 + (0.5 * x) / W;
+      return [Math.round(230 * k), Math.round(180 * k), Math.round(150 * k)];
+    });
+    expect(Math.abs(skinRednessShift(lambert) as number)).toBeLessThan(0.02);
+    // ...while subsurface skin goes redder as it darkens.
+    const sss = image((x) => {
+      const k = 0.45 + (0.5 * x) / W;
+      const red = (1 - k) * 0.5;
+      return [
+        Math.round(230 * k * (1 + red)),
+        Math.round(180 * k * (1 - red * 0.6)),
+        Math.round(150 * k * (1 - red * 0.6)),
+      ];
+    });
+    expect(skinRednessShift(sss) as number).toBeGreaterThan(
+      sandbox.SKIN_MIN_SSS_SHIFT as number
+    );
+    // No skin in the crop -> not measurable, never a pass.
+    expect(skinRednessShift(image(() => null))).toBeNull();
+  });
+
+  it("keeps the headless check's PRESETS table equal to CHARACTER_PRESETS", () => {
+    const script = fs.readFileSync(
+      path.join(ROOT, "scripts", "check-avatar-viewer.js"),
+      "utf8"
+    );
+    const table = script.slice(
+      script.indexOf("const PRESETS = ["),
+      script.indexOf("];", script.indexOf("const PRESETS = [")) + 2
+    );
+    const presets = vm.runInNewContext(
+      table.replace("const PRESETS = ", "")
+    ) as unknown[];
+    expect(presets).toEqual(CHARACTER_PRESETS);
   });
 });
