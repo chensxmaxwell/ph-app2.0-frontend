@@ -57,12 +57,13 @@ const slidersForCategory = (category: Category): SliderConfig[] => {
     case "Hair":
     case "Skin":
       return [];
+    // Face shape only; the eye is the Eyes tab's Size slider (same eyeSize
+    // key), so one value is never driven from two tabs.
     case "Face":
       return [
         { key: "faceWidth", label: "Face" },
         { key: "jaw", label: "Jaw" },
         { key: "chin", label: "Chin" },
-        { key: "eyeSize", label: "Eyes" },
       ];
     case "Body":
       return [

@@ -110,6 +110,35 @@
     return clamp01(v) * (amount == null ? 0.28 : amount);
   }
 
+  // The Face / Jaw / Chin sliders drive Head_0's three sculpt morphs through
+  // mild(v, cap) from the base mesh. The caps were 0.22 / 0.22 / 0.18:
+  // measured on the GLB the sculpts move the face 9.7 / 14.2 / 8.4 mm at
+  // weight 1, so that was a 2-3 mm silhouette change end to end, which at
+  // the bust camera (about 1 px per mm) the design review's headless renders
+  // read as not obvious, chin weakest. The caps signed off are 0.45 / 0.45
+  // and, for the chin, 0.50: at the 0.40 first asked for the chin still
+  // measured half the travel of the other two (Sharpness is the kit's only
+  // chin sculpt and most of its 8.4 mm lives in the eye region the mask
+  // removes), so it took the extra raise design allowed. SCULPT_WIDTH_FACTOR
+  // carries the Squareness raise onto the Face slider's NoseWidth /
+  // MouthWide companions; EyesSquare reshapes the eye and stays at 0.1.
+  // Their reach over the eyes is masked out at load
+  // (maskEyeRegion): Stern moves the lid margin 10.8 mm at weight 1, so at
+  // these caps the lids would otherwise hood by ~2 mm already at the
+  // default look. Design re-signs Face / Jaw / Chin 0 / 0.5 / 1 after this
+  // bump - the default preset (0.48 / 0.46 / 0.5) now sits about halfway up.
+  var SCULPT_MORPHS = ["Shape_Squareness", "Shape_Stern", "Shape_Sharpness"];
+  var SCULPT_CAPS = { squareness: 0.45, stern: 0.45, sharpness: 0.5 };
+  var SCULPT_WIDTH_FACTOR = SCULPT_CAPS.squareness / 0.22;
+
+  function sculptMorphs(faceWidth, jaw, chin) {
+    return {
+      squareness: mild(faceWidth, SCULPT_CAPS.squareness),
+      stern: mild(jaw, SCULPT_CAPS.stern),
+      sharpness: mild(chin, SCULPT_CAPS.sharpness)
+    };
+  }
+
   // Head_0's Shape_EyeLidHeight drops the upper lid (the margin moves ~28mm
   // at 1.0 = fully closed; the lower lid barely moves). At rest the BoZo
   // lids open ~24deg above and ~32deg below the iris axis - a round,
@@ -145,13 +174,14 @@
     var hips = clamp01(next.backAndHips);
     var eye = clamp01(next.eyeSize);
     var brows = browMorphs(eye, next.jaw);
-    setMorph(mesh, "Shape_Squareness", mild(next.faceWidth, 0.22));
-    setMorph(mesh, "Shape_Stern", mild(next.jaw, 0.22));
-    setMorph(mesh, "Shape_Sharpness", mild(next.chin, 0.18));
+    var sculpt = sculptMorphs(next.faceWidth, next.jaw, next.chin);
+    setMorph(mesh, "Shape_Squareness", sculpt.squareness);
+    setMorph(mesh, "Shape_Stern", sculpt.stern);
+    setMorph(mesh, "Shape_Sharpness", sculpt.sharpness);
     setMorph(mesh, "Shape_EyesSquare", mild(next.faceWidth, 0.1));
     setMorph(mesh, "Shape_EyeLidHeight", upperLidDrop(eye));
-    setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16));
-    setMorph(mesh, "Shape_MouthWide", mild(next.faceWidth, 0.14));
+    setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16 * SCULPT_WIDTH_FACTOR));
+    setMorph(mesh, "Shape_MouthWide", mild(next.faceWidth, 0.14 * SCULPT_WIDTH_FACTOR));
     setMorph(mesh, "Shape_MouthThin", (1 - clamp01(next.chin)) * 0.1);
     setMorph(mesh, "Shape_RaiseBrows", brows.raise);
     setMorph(mesh, "Shape_LowerBrows", brows.lower);
@@ -396,7 +426,7 @@
     });
     hairMats.forEach(function (mat) {
       mat.color.copy(hair);
-      mat.roughness = 0.42 + age * 0.12;
+      mat.roughness = HAIR_ROUGHNESS + age * 0.12;
       mat.needsUpdate = true;
     });
     var iris = hexColor(EYE_COLORS[next.eyeColor] || EYE_COLORS[0]);
@@ -480,6 +510,14 @@
   // bring the stare back.
   var OUTER_CORNER_LIFT = 0.9;
 
+  // Hair gloss. At 0.42 (+ 0.12 * age) the pink rim light's specular blew
+  // the crown cards out to a white-pink fringe along the top of the hair
+  // (TF 1.2.21 bust; measured with the lights toggled one at a time: 5,300
+  // near-white pixels in a 4x crop, 0 with the rim off, 0 at roughness 0.6).
+  // The hair map's lighter strands carry the sheen; the material only needs
+  // enough gloss to read as hair, not glass.
+  var HAIR_ROUGHNESS = 0.58;
+
   // Brow colour from the hair colour: darker than the hair, never lighter
   // than a mid brown, so blonde hair gets defined brows instead of tan slabs.
   function browColorFor(hair) {
@@ -555,7 +593,7 @@
     mat.clearcoat = 0.12;
     mat.clearcoatRoughness = 0.62;
     mat.envMapIntensity = 0.2;
-    mat.morphTargets = true;
+    // Morphs are baked into the positions (bakeMorphs); the shader path stays off.
     mat.skinning = true;
     if (envMap) mat.envMap = envMap;
     if (mat.sheen && mat.sheen.isColor) mat.sheen.setRGB(0.32, 0.12, 0.08);
@@ -803,7 +841,6 @@
     // The lavender sky in makeEnvMap tinted the sclera blue-grey; keep just
     // enough reflection for a wet look.
     mat.envMapIntensity = 0.05;
-    mat.morphTargets = true;
     mat.skinning = true;
     // Head_0 carries a skin-textured copy of both eyeballs (dished to ~0.7 r
     // at the iris, flush with the sphere at the rim); pull the real eyeball
@@ -1102,13 +1139,113 @@
     if (modelRoot) modelRoot.updateMatrixWorld(true);
   }
 
+  // three r128 uploads at most eight morph influences per draw
+  // (WebGLMorphtargets keeps the eight largest by |influence|; the vertex
+  // shader sums morphTarget0..7). Head_0 carries 24 Shape_* targets and a
+  // default look drives eighteen of them, so the weakest were silently
+  // dropped - among them the body-shared Shape_NeckThickness and
+  // Shape_Weight, which Body_Neck (nine targets, eight active) did apply.
+  // Both meshes share the seam ring vertex for vertex, so the ring moved on
+  // the neck and not on the head: a ~2 mm gap that showed the page
+  // background as a white line round the base of the neck (TF 1.2.21 bust).
+  // The morphs are therefore summed here, on the CPU, into the position
+  // attribute on every look (skinning stays on the GPU; the GLB has no morph
+  // normals, so the shader path never lit them differently either), and no
+  // material turns the shader morph path on. Absolute, from a copy of the
+  // base positions, so it is idempotent; a mesh whose influences did not
+  // change is skipped. Returns whether the positions were rewritten.
+  function bakeMorphs(mesh) {
+    var geo = mesh.geometry;
+    var infl = mesh.morphTargetInfluences;
+    var targets = geo && geo.morphAttributes && geo.morphAttributes.position;
+    if (!geo || !infl || !targets || !targets.length || !geo.attributes.position) return false;
+    var pos = geo.attributes.position;
+    var base = geo.userData.phMorphBase;
+    if (!base) {
+      base = Float32Array.from(pos.array);
+      geo.userData.phMorphBase = base;
+    }
+    var baked = geo.userData.phMorphBaked;
+    var k;
+    if (baked && baked.length === infl.length) {
+      var same = true;
+      for (k = 0; k < infl.length; k++) {
+        if (baked[k] !== infl[k]) { same = false; break; }
+      }
+      if (same) return false;
+    }
+    var out = pos.array;
+    out.set(base);
+    var i, w, d;
+    for (k = 0; k < targets.length && k < infl.length; k++) {
+      w = infl[k];
+      if (!w) continue;
+      d = targets[k].array;
+      for (i = 0; i < out.length; i++) out[i] += w * d[i];
+    }
+    pos.needsUpdate = true;
+    geo.userData.phMorphBaked = Float32Array.from(infl);
+    return true;
+  }
+
+  // Measured on the GLB, Shape_Stern moves the lid margin up to 10.8 mm and
+  // Shape_Sharpness 6.5 mm at weight 1, while Eyes_0 carries neither: with
+  // the Jaw / Chin caps at 0.45 / 0.50 the lids would hood over the eyeball
+  // as the sliders rise (~2 mm already at the default look) - the eye the
+  // Size slider was tuned for.
+  // So the sculpt deltas are faded out over each vertex's weight on the eye
+  // bones (1.0 on the lid margin and the Head_0 eye cap, fading to 0 by the
+  // brow), the same falloff applyEyeScale relies on. Once, at load, after
+  // pruneToShapes and before the first bake. Returns whether the mesh has an
+  // eye bone to mask against.
+  function maskEyeRegion(mesh) {
+    var geo = mesh.geometry;
+    if (!mesh.isSkinnedMesh || !mesh.skeleton || !geo || !geo.attributes.skinIndex || !geo.attributes.skinWeight) return false;
+    if (!mesh.morphTargetDictionary || !geo.morphAttributes || !geo.morphAttributes.position) return false;
+    var eyeSlots = {};
+    var hasEye = false;
+    mesh.skeleton.bones.forEach(function (bone, slot) {
+      if (rigName(bone).indexOf("eyeRoot") === 0) { eyeSlots[slot] = true; hasEye = true; }
+    });
+    if (!hasEye) return false;
+    var skinIndex = geo.attributes.skinIndex;
+    var skinWeight = geo.attributes.skinWeight;
+    var count = geo.attributes.position.count;
+    var eyeWeight = new Float32Array(count);
+    var i, k, w;
+    for (i = 0; i < count; i++) {
+      w = 0;
+      for (k = 0; k < skinIndex.itemSize; k++) {
+        if (eyeSlots[skinIndex.array[i * skinIndex.itemSize + k]]) w += skinWeight.array[i * skinWeight.itemSize + k];
+      }
+      eyeWeight[i] = Math.min(1, w);
+    }
+    SCULPT_MORPHS.forEach(function (name) {
+      var idx = mesh.morphTargetDictionary[name];
+      var source = idx === undefined ? null : geo.morphAttributes.position[idx];
+      if (!source) return;
+      var masked = Float32Array.from(source.array);
+      for (i = 0; i < count; i++) {
+        var keep = 1 - eyeWeight[i];
+        masked[i * 3] *= keep;
+        masked[i * 3 + 1] *= keep;
+        masked[i * 3 + 2] *= keep;
+      }
+      geo.morphAttributes.position[idx] = new THREE.Float32BufferAttribute(masked, 3);
+    });
+    return true;
+  }
+
   function applyLook(next) {
     look = Object.assign(look, next || {});
     if (!ready) { pendingLook = look; return; }
     applyVisibility(look);
     applyOutfitPose(look.appearanceIndex | 0);
     applyEyeScale(eyeBones, eyeScaleFor(look.eyeSize));
-    morphMeshes.forEach(function (mesh) { applyMeshLook(mesh, look); });
+    morphMeshes.forEach(function (mesh) {
+      applyMeshLook(mesh, look);
+      bakeMorphs(mesh);
+    });
     tintLook(look);
     frameCamera(look.viewMode === "bust" ? "bust" : "full");
   }
@@ -1259,8 +1396,7 @@
                 skinMats.push(swapped);
               } else if (matLabel.indexOf("MAT_Hair") === 0) {
                 mat.skinning = skinned;
-                mat.morphTargets = !!obj.morphTargetInfluences;
-                mat.roughness = 0.42;
+                mat.roughness = HAIR_ROUGHNESS;
                 mat.metalness = 0.04;
                 mat.transparent = true;
                 mat.alphaTest = 0.35;
@@ -1274,7 +1410,6 @@
                 eyeMats.push(swapped);
               } else {
                 mat.skinning = skinned;
-                mat.morphTargets = !!obj.morphTargetInfluences;
                 if (envMap) {
                   mat.envMap = envMap;
                   mat.envMapIntensity = 0.12;
@@ -1295,7 +1430,10 @@
             }
             if (obj.morphTargetInfluences && obj.morphTargetDictionary) {
               pruneToShapes(obj);
-              if (obj.morphTargetInfluences.length) morphMeshes.push(obj);
+              if (obj.morphTargetInfluences.length) {
+                maskEyeRegion(obj);
+                morphMeshes.push(obj);
+              }
             }
           });
           armBones.sort(function (a, b) {
@@ -1396,10 +1534,86 @@
       figureFrame: boxToFrame(figure),
       camera: camera ? { fov: camera.fov, position: [camera.position.x, camera.position.y, camera.position.z] } : null,
       eyes: eyeState(),
+      face: faceProfile(),
       visible: visible,
       meshes: meshes
     };
   };
+
+  // Face silhouette probe for scripts/check-avatar-viewer.js: Head_0's
+  // skinned, morph-baked vertices measured against the eye line, in metres
+  // (world space). Measured on the GLB, the ears end 4.5 cm under the eyes,
+  // the chin tip sits ~6.3 cm under them and the head mesh runs on down the
+  // neck to ~12 cm. The widths are the full x extent of a height band (the
+  // frontal silhouette): cheek 5-6 cm under the eyes (below the ears), jaw
+  // 6.5-8 cm, chin 8-9.5 cm (the underside of the jaw, which the bust camera
+  // sees from below - where the sculpts move the silhouette most).
+  // chinDepth / chinForward place the chin tip (the most forward point of
+  // the lower face on the centre line, under the lower lip) against the eye
+  // line. Read in the rest pose: the idle sway (root yaw / roll / breathe,
+  // head nod) is undone for the measurement and restored, so the numbers do
+  // not depend on which frame the caller parked. Hair-independent, so the
+  // Face / Jaw / Chin travel can be read without a pixel classifier.
+  function faceProfile() {
+    var head = null;
+    morphMeshes.forEach(function (mesh) {
+      if ((mesh.name || "").indexOf("Head_") === 0) head = mesh;
+    });
+    if (!head || eyeBones.length < 2 || !modelRoot) return null;
+    var savedRoot = {
+      rotation: modelRoot.rotation.clone(),
+      scale: modelRoot.scale.clone(),
+      y: modelRoot.position.y
+    };
+    var savedHeads = headBones.map(function (bone) { return bone.rotation.clone(); });
+    modelRoot.rotation.set(0, 0, 0);
+    modelRoot.scale.set(1, 1, 1);
+    modelRoot.position.y = modelRestY;
+    headBones.forEach(function (bone, i) {
+      bone.rotation.set(headRests[i].x, headRests[i].y, headRests[i].z);
+    });
+    modelRoot.updateMatrixWorld(true);
+    var eye = eyeBones[0].getWorldPosition(new THREE.Vector3())
+      .add(eyeBones[1].getWorldPosition(new THREE.Vector3()))
+      .multiplyScalar(0.5);
+    var pos = head.geometry.attributes.position;
+    var v = new THREE.Vector3();
+    var bands = {
+      cheekWidth: { from: 0.05, to: 0.06, min: Infinity, max: -Infinity },
+      jawWidth: { from: 0.065, to: 0.08, min: Infinity, max: -Infinity },
+      chinWidth: { from: 0.08, to: 0.095, min: Infinity, max: -Infinity }
+    };
+    var chin = null;
+    var i;
+    for (i = 0; i < pos.count; i++) {
+      sampleMeshPoint(head, i, v);
+      var below = eye.y - v.y;
+      Object.keys(bands).forEach(function (key) {
+        var band = bands[key];
+        if (below >= band.from && below <= band.to) {
+          band.min = Math.min(band.min, v.x);
+          band.max = Math.max(band.max, v.x);
+        }
+      });
+      if (below > 0.06 && Math.abs(v.x - eye.x) < 0.012 && (!chin || v.z > chin.z)) {
+        chin = v.clone();
+      }
+    }
+    modelRoot.rotation.copy(savedRoot.rotation);
+    modelRoot.scale.copy(savedRoot.scale);
+    modelRoot.position.y = savedRoot.y;
+    headBones.forEach(function (bone, i) { bone.rotation.copy(savedHeads[i]); });
+    modelRoot.updateMatrixWorld(true);
+    var out = {
+      chinDepth: chin ? eye.y - chin.y : null,
+      chinForward: chin ? chin.z - eye.z : null
+    };
+    Object.keys(bands).forEach(function (key) {
+      var band = bands[key];
+      out[key] = band.max > band.min ? band.max - band.min : null;
+    });
+    return out;
+  }
 
   // Gaze and lid state: where each eyeball sits, where its iris axis points,
   // how far that is from the camera, and the Head_0 upper-lid morph weight.
@@ -1480,6 +1694,13 @@
     BROW_INK: BROW_INK,
     LASH_LENGTH: LASH_LENGTH,
     OUTER_CORNER_LIFT: OUTER_CORNER_LIFT,
+    HAIR_ROUGHNESS: HAIR_ROUGHNESS,
+    SCULPT_CAPS: SCULPT_CAPS,
+    SCULPT_MORPHS: SCULPT_MORPHS,
+    sculptMorphs: sculptMorphs,
+    applyMeshLook: applyMeshLook,
+    bakeMorphs: bakeMorphs,
+    maskEyeRegion: maskEyeRegion,
     browColorFor: browColorFor,
     headPaintChunk: headPaintChunk,
     irisDetailFor: irisDetailFor,
