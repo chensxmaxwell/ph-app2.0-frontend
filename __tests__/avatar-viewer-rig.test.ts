@@ -141,8 +141,11 @@ type ViewerRig = {
     envMapIntensity: number;
     alphaTest: number;
   };
+  SOCKET_SHADE: number;
   hairShaderChunk: () => string;
   skinDetailChunk: () => string;
+  eyeBoneSlots: (mesh: unknown) => [number, number];
+  eyeWeightVertexChunk: () => string;
   SCULPT_CAPS: { squareness: number; stern: number; sharpness: number };
   SCULPT_MORPHS: string[];
   sculptMorphs: (
@@ -2284,6 +2287,69 @@ describe("soft semi-real default look", () => {
     // The frame loop feeds the key direction to every skin material.
     const animateBody = sliceBetween(html, "function animate(", "function fail(");
     expect(animateBody).toMatch(/updateKeyDirection\(\);/);
+  });
+
+  it("shades the lid skin into a soft socket by its own eye-bone weight, on the head material only", () => {
+    // The lid margin is skinned 1.0 to eyeRoot_l/r, the crease ~0.3, the brow
+    // 0 (measured on the GLB): that weight, carried from the vertex shader,
+    // is the socket falloff. Subtle (<= 20%): a shading cue, not eye shadow.
+    expect(rig.SOCKET_SHADE).toBeGreaterThan(0.06);
+    expect(rig.SOCKET_SHADE).toBeLessThanOrEqual(0.2);
+    expect(rig.headPaintChunk()).toContain(
+      `diffuseColor.rgb *= 1.0 - vPhEye * ${rig.SOCKET_SHADE.toFixed(2)};`
+    );
+    const vertex = rig.eyeWeightVertexChunk();
+    expect(vertex).toContain("vPhEye = 0.0;");
+    expect(vertex).toContain("#ifdef USE_SKINNING");
+    for (const c of ["x", "y", "z", "w"]) {
+      expect(vertex).toContain(
+        `abs(skinIndex.${c} - eyeSlots.x) < 0.5 || abs(skinIndex.${c} - eyeSlots.y) < 0.5) ? skinWeight.${c} : 0.0;`
+      );
+    }
+    // Slots come from the mesh's own skeleton (JOINTS_0 order), -1 without
+    // an eye bone, so a body material contributes nothing.
+    const head = new THREE.Bone();
+    head.name = "head";
+    const eyeL = new THREE.Bone();
+    eyeL.name = "eyeRoot_l_2";
+    eyeL.userData.name = "eyeRoot_l";
+    const eyeR = new THREE.Bone();
+    eyeR.name = "eyeRoot_r";
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute([0, 0, 0], 3)
+    );
+    const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+    const bones = [head, eyeR, eyeL];
+    mesh.bind(
+      new THREE.Skeleton(
+        bones,
+        bones.map(() => new THREE.Matrix4())
+      ),
+      new THREE.Matrix4()
+    );
+    expect(rig.eyeBoneSlots(mesh)).toEqual([2, 1]);
+    expect(
+      rig.eyeBoneSlots(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial()))
+    ).toEqual([-1, -1]);
+    const html = viewerHtml();
+    const inject = sliceBetween(
+      html,
+      "function injectSkinWrap(",
+      "function upgradeSkinMat("
+    );
+    expect(inject).toMatch(/uniform vec2 eyeSlots;\\nvarying float vPhEye;/);
+    expect(inject).toMatch(
+      /"#include <skinbase_vertex>\\n" \+ eyeWeightVertexChunk\(\)/
+    );
+    expect(inject).toMatch(/var slots = mat\.userData\.eyeSlots \|\| \[-1, -1\];/);
+    const load = sliceBetween(
+      html,
+      "new THREE.GLTFLoader().load(",
+      "function boxOf("
+    );
+    expect(load).toMatch(/swapped\.userData\.eyeSlots = eyeBoneSlots\(obj\);/);
   });
 
   it("paints natural lips and a faint flush instead of the #41 mauve lipstick, and a thinner, deeper brow", () => {

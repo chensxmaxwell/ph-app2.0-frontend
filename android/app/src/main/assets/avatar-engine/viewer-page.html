@@ -538,11 +538,47 @@
   var BROW_SKIN_INK = 0.6;
   // Shape_BrowsThickness on Head_0: 0.32 in #41 made the slab a ridge.
   var BROW_THICKNESS = 0.12;
+  // Soft eye-socket shade on the head skin: the lid skin is darkened by its
+  // own weight on the eye bones (1.0 on the lid margin, ~0.3 at the crease,
+  // 0 by the brow - the same falloff applyEyeScale and maskEyeRegion rely
+  // on), carried from the vertex shader as vPhEye. A shading cue, not
+  // makeup: the flat albedo otherwise lights the lid margin as bright as the
+  // cheek and the eye sits on the face instead of in it.
+  var SOCKET_SHADE = 0.14;
+
+  // Slot indices of eyeRoot_l / eyeRoot_r in a skinned mesh's skeleton (the
+  // JOINTS_0 values its vertices carry), -1 when the rig has no eye bone.
+  function eyeBoneSlots(mesh) {
+    var slots = [-1, -1];
+    if (!mesh || !mesh.isSkinnedMesh || !mesh.skeleton) return slots;
+    mesh.skeleton.bones.forEach(function (bone, i) {
+      var name = rigName(bone);
+      if (name === "eyeRoot_l") slots[0] = i;
+      if (name === "eyeRoot_r") slots[1] = i;
+    });
+    return slots;
+  }
+
+  // GLSL after skinbase_vertex: the vertex's summed weight on the two eye
+  // bone slots (uniform eyeSlots; -1 when the material's mesh has none).
+  function eyeWeightVertexChunk() {
+    return [
+      "vPhEye = 0.0;",
+      "#ifdef USE_SKINNING",
+      "vPhEye += (abs(skinIndex.x - eyeSlots.x) < 0.5 || abs(skinIndex.x - eyeSlots.y) < 0.5) ? skinWeight.x : 0.0;",
+      "vPhEye += (abs(skinIndex.y - eyeSlots.x) < 0.5 || abs(skinIndex.y - eyeSlots.y) < 0.5) ? skinWeight.y : 0.0;",
+      "vPhEye += (abs(skinIndex.z - eyeSlots.x) < 0.5 || abs(skinIndex.z - eyeSlots.y) < 0.5) ? skinWeight.z : 0.0;",
+      "vPhEye += (abs(skinIndex.w - eyeSlots.x) < 0.5 || abs(skinIndex.w - eyeSlots.y) < 0.5) ? skinWeight.w : 0.0;",
+      "#endif",
+      "vPhEye = clamp(vPhEye, 0.0, 1.0);"
+    ].join("\n") + "\n";
+  }
+
   // Lash clusters on the upper lash card: `count` bundles along the lid (v
   // runs along the card, 0.214-0.243), the ink thinning by `tipThin` between
   // them toward the tips (u ~0.143; the root at u ~0.146 stays a solid line,
   // the "wet line" of the lid margin).
-  var LASH_CLUSTER = { count: 11, tipThin: 0.55 };
+  var LASH_CLUSTER = { count: 11, tipThin: 0.45 };
 
   // Brow colour from the hair colour: darker than the hair and pulled toward
   // a neutral dark, so a chestnut head does not get orange slabs and blonde
@@ -578,6 +614,7 @@
       "float cL = 1.0 - smoothstep(0.35, 1.0, length((fu - vec2(0.080, 0.155)) / vec2(0.018, 0.014)));",
       "float cR = 1.0 - smoothstep(0.35, 1.0, length((fu - vec2(0.172, 0.155)) / vec2(0.018, 0.014)));",
       "diffuseColor.rgb = mix(diffuseColor.rgb, " + vec3Of(CHEEK_PAINT.color) + ", max(cL, cR) * " + CHEEK_PAINT.mix.toFixed(2) + ");",
+      "diffuseColor.rgb *= 1.0 - vPhEye * " + SOCKET_SHADE.toFixed(2) + ";",
       cardMask("lashCard", LASH_CARD_U),
       cardMask("browCard", BROW_CARD_U),
       "diffuseColor.rgb = mix(diffuseColor.rgb, browColor, browCard * " + BROW_INK.toFixed(2) + ");",
@@ -598,8 +635,8 @@
   // the crown pink-white - the "clay placeholder" read. Positions are world
   // metres round a 1.8 m figure; the key sits high on the camera's right.
   var LIGHT_RIG = {
-    exposure: 1.1,
-    hemisphere: { sky: 0xfff0e6, ground: 0x5a4038, intensity: 0.6 },
+    exposure: 1.08,
+    hemisphere: { sky: 0xfff0e6, ground: 0x5a4038, intensity: 0.56 },
     key: { color: 0xffe4cf, intensity: 1.15, position: [0.6, 1.85, 1.6] },
     fill: { color: 0xf4dfd4, intensity: 0.5, position: [-1.4, 0.7, 0.6] },
     rim: { color: 0xffd6c2, intensity: 0.34, position: [0.1, 1.2, -1.7] },
@@ -623,7 +660,7 @@
     sssHead: 0.42,
     sssBody: 0.3,
     shadowWarm: [0.55, 0.22, 0.16],
-    shadowLift: 0.16,
+    shadowLift: 0.12,
     poreRoughness: 0.08,
     poreAlbedo: 0.025,
     cardRoughness: 0.4
@@ -686,7 +723,17 @@
       shader.uniforms.keyDirView = { value: new THREE.Vector3(0, 0.5, 0.86) };
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <common>",
-        "#include <common>\nuniform vec3 keyDirView;" + (isHead ? "\nuniform vec3 browColor;" : "")
+        "#include <common>\nuniform vec3 keyDirView;\nvarying float vPhEye;" + (isHead ? "\nuniform vec3 browColor;" : "")
+      );
+      var slots = mat.userData.eyeSlots || [-1, -1];
+      shader.uniforms.eyeSlots = { value: new THREE.Vector2(slots[0], slots[1]) };
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <common>",
+        "#include <common>\nuniform vec2 eyeSlots;\nvarying float vPhEye;"
+      );
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <skinbase_vertex>",
+        "#include <skinbase_vertex>\n" + eyeWeightVertexChunk()
       );
       if (isHead) {
         shader.uniforms.browColor = { value: mat.userData.browColor };
@@ -1592,6 +1639,7 @@
                 swapped = upgradeSkinMat(mat, envMap, 0.07);
                 swapped.color.copy(hexColor(SKIN_COLORS[1]));
                 swapped.skinning = skinned;
+                swapped.userData.eyeSlots = eyeBoneSlots(obj);
                 headMats.push(swapped);
               } else if (matLabel.indexOf("MAT_Skin") === 0) {
                 swapped = upgradeSkinMat(mat, envMap, 0.18);
@@ -1904,8 +1952,11 @@
     LASH_CLUSTER: LASH_CLUSTER,
     WETLINE: WETLINE,
     HAIR_LOOK: HAIR_LOOK,
+    SOCKET_SHADE: SOCKET_SHADE,
     hairShaderChunk: hairShaderChunk,
     skinDetailChunk: skinDetailChunk,
+    eyeBoneSlots: eyeBoneSlots,
+    eyeWeightVertexChunk: eyeWeightVertexChunk,
     SCULPT_CAPS: SCULPT_CAPS,
     SCULPT_MORPHS: SCULPT_MORPHS,
     sculptMorphs: sculptMorphs,
