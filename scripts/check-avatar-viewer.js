@@ -26,6 +26,15 @@
  * per Size and camera (pixels-outfit2-<view>-size<n>-frame.png) for review
  * collages.
  *
+ * A third, craft pass renders the bust over a magenta page background: the
+ * head / neck seam must show no background through it (three r128 applied
+ * only the eight strongest morph influences, so Head_0 dropped the
+ * body-shared ones Body_Neck applied and a 2 mm ring opened - the viewer
+ * now bakes the morphs on the CPU), and Face / Jaw / Chin at 0 vs 1 must move the
+ * silhouette by a readable number of CSS px (phViewerState().face) while the
+ * eye's iris exposure stays where the Eyes tab put it (maskEyeRegion). The
+ * crops (craft-*.png) are the review collage for those sliders.
+ *
  *   node scripts/check-avatar-viewer.js [--out DIR] [--chrome PATH]
  *
  * Needs Google Chrome / Chromium. Talks CDP over --remote-debugging-pipe, so
@@ -734,6 +743,76 @@ const resumeAnimation = (cdp, session) =>
     })()`
   );
 
+// Classify both eyes of the current frame (3x CSS size, animation parked):
+// per-eye measureEye results plus their average, in CSS px (1x) where a size
+// is reported. `saveLeftTo` keeps the left eye's clip for review.
+const measureBothEyes = async (
+  cdp,
+  session,
+  state,
+  irisSize,
+  [IRIS_RADIUS, PUPIL_RADIUS],
+  saveLeftTo
+) => {
+  const eyes = [];
+  for (const bone of ["eyeRoot_l", "eyeRoot_r"]) {
+    const gaze = state.eyes.gaze[bone];
+    if (!gaze || !gaze.screen) continue;
+    const r = EYEBALL_RADIUS * gaze.scale * gaze.screen.pxPerMetre;
+    const rIris = r * Math.sin((IRIS_RADIUS * irisSize * Math.PI) / 2);
+    const rPupil = r * Math.sin((PUPIL_RADIUS * irisSize * Math.PI) / 2);
+    const half = 1.6 * r;
+    const clip = {
+      x: gaze.screen.x - half,
+      y: gaze.screen.y - half,
+      width: 2 * half,
+      height: 2 * half,
+      scale: 1,
+    };
+    const shot = await cdp.send(
+      "Page.captureScreenshot",
+      { format: "png", clip },
+      session
+    );
+    const png = await pixelsOf(cdp, session, shot.data);
+    const scaleX = png.width / clip.width;
+    const scaleY = png.height / clip.height;
+    const eye = measureEye(
+      png,
+      (gaze.screen.x - clip.x) * scaleX,
+      (gaze.screen.y - clip.y) * scaleY,
+      r * scaleX,
+      rIris * scaleX,
+      rPupil * scaleX
+    );
+    // Back to CSS px (1x) so the numbers match what the phone lays out.
+    eye.irisDiameterCss = (2 * rIris) / PIXEL_SCALE;
+    eye.openingCss2 =
+      eye.openingPx / (scaleX * scaleY * PIXEL_SCALE * PIXEL_SCALE);
+    eyes.push(eye);
+    if (bone === "eyeRoot_l" && saveLeftTo) {
+      fs.writeFileSync(saveLeftTo, Buffer.from(shot.data, "base64"));
+    }
+  }
+  if (eyes.length !== 2) return { eyes, avg: null };
+  const measurable = eyes.every((eye) => eye.pupilClear !== null);
+  const mean = (key) => (eyes[0][key] + eyes[1][key]) / 2;
+  return {
+    eyes,
+    avg: {
+      irisExposure: mean("irisExposure"),
+      scleraShare: mean("scleraShare"),
+      irisDiameterCss: mean("irisDiameterCss"),
+      openingCss2: mean("openingCss2"),
+      irisExposureNoInk: mean("irisExposureNoInk"),
+      linerShare: mean("linerShare"),
+      rimOverMid: mean("rimOverMid"),
+      glintShare: mean("glintShare"),
+      pupilClear: measurable ? eyes[0].pupilClear && eyes[1].pupilClear : null,
+    },
+  };
+};
+
 const pixelPass = async (cdp, session) => {
   const width = WIDTH * PIXEL_SCALE;
   const height = HEIGHT * PIXEL_SCALE;
@@ -788,67 +867,16 @@ const pixelPass = async (cdp, session) => {
         ),
         Buffer.from(frame.data, "base64")
       );
-      const eyes = [];
-      for (const bone of ["eyeRoot_l", "eyeRoot_r"]) {
-        const gaze = state.eyes.gaze[bone];
-        if (!gaze || !gaze.screen) continue;
-        const r = EYEBALL_RADIUS * gaze.scale * gaze.screen.pxPerMetre;
-        const rIris = r * Math.sin((IRIS_RADIUS * irisSize * Math.PI) / 2);
-        const rPupil = r * Math.sin((PUPIL_RADIUS * irisSize * Math.PI) / 2);
-        const half = 1.6 * r;
-        const clip = {
-          x: gaze.screen.x - half,
-          y: gaze.screen.y - half,
-          width: 2 * half,
-          height: 2 * half,
-          scale: 1,
-        };
-        const shot = await cdp.send(
-          "Page.captureScreenshot",
-          { format: "png", clip },
-          session
-        );
-        const png = await pixelsOf(cdp, session, shot.data);
-        const scaleX = png.width / clip.width;
-        const scaleY = png.height / clip.height;
-        const eye = measureEye(
-          png,
-          (gaze.screen.x - clip.x) * scaleX,
-          (gaze.screen.y - clip.y) * scaleY,
-          r * scaleX,
-          rIris * scaleX,
-          rPupil * scaleX
-        );
-        // Back to CSS px (1x) so the numbers match what the phone lays out.
-        eye.irisDiameterCss = (2 * rIris) / PIXEL_SCALE;
-        eye.openingCss2 =
-          eye.openingPx / (scaleX * scaleY * PIXEL_SCALE * PIXEL_SCALE);
-        eyes.push(eye);
-        if (bone === "eyeRoot_l") {
-          fs.writeFileSync(
-            path.join(OUT_DIR, `pixels-outfit2-${viewMode}-size${eyeSize}.png`),
-            Buffer.from(shot.data, "base64")
-          );
-        }
-      }
+      const { eyes, avg } = await measureBothEyes(
+        cdp,
+        session,
+        state,
+        irisSize,
+        [IRIS_RADIUS, PUPIL_RADIUS],
+        path.join(OUT_DIR, `pixels-outfit2-${viewMode}-size${eyeSize}.png`)
+      );
       check(`${tag}: both eyes located on screen`, eyes.length === 2);
       if (eyes.length !== 2) continue;
-      const measurable = eyes.every((eye) => eye.pupilClear !== null);
-      const avg = {
-        irisExposure: (eyes[0].irisExposure + eyes[1].irisExposure) / 2,
-        scleraShare: (eyes[0].scleraShare + eyes[1].scleraShare) / 2,
-        irisDiameterCss:
-          (eyes[0].irisDiameterCss + eyes[1].irisDiameterCss) / 2,
-        openingCss2: (eyes[0].openingCss2 + eyes[1].openingCss2) / 2,
-        irisExposureNoInk:
-          (eyes[0].irisExposureNoInk + eyes[1].irisExposureNoInk) / 2,
-        linerShare: (eyes[0].linerShare + eyes[1].linerShare) / 2,
-        rimOverMid: (eyes[0].rimOverMid + eyes[1].rimOverMid) / 2,
-        glintShare: (eyes[0].glintShare + eyes[1].glintShare) / 2,
-        pupilClear: measurable
-          ? eyes[0].pupilClear && eyes[1].pupilClear
-          : null,
-      };
       results[`${viewMode}-${eyeSize}`] = avg;
       console.log(
         `     ${tag}: iris ${avg.irisDiameterCss.toFixed(
@@ -977,6 +1005,291 @@ const pixelPass = async (cdp, session) => {
     );
   }
   await resumeAnimation(cdp, session);
+  await cdp.send(
+    "Emulation.setDeviceMetricsOverride",
+    { width: WIDTH, height: HEIGHT, deviceScaleFactor: 1, mobile: true },
+    session
+  );
+};
+
+// Third pass: craft. Same 3x CSS size and parked loop as the pixel pass, with
+// the page background forced to magenta so a gap between meshes (the canvas
+// is transparent) cannot be mistaken for skin, cloth or the QA collage's
+// white. Checks the head / neck seam, then the Face / Jaw / Chin travel on the
+// rendered silhouette and that the eyes hold still while the face moves.
+const CRAFT_BG = { r: 255, g: 0, b: 255, a: 1 };
+const isCraftBg = (R, G, B) => R > 200 && G < 90 && B > 200;
+const rgbAt = (png, x, y) => {
+  const i = (y * png.width + x) * 4;
+  return [png.data[i], png.data[i + 1], png.data[i + 2]];
+};
+
+// Background pixels with figure pixels within `reach` rows above and below:
+// a horizontal crack between two meshes, not the open background beside
+// the neck (which is background all the way up or down).
+const seamCrackPixels = (png, reach) => {
+  let cracks = 0;
+  for (let y = reach; y < png.height - reach; y += 1) {
+    for (let x = 0; x < png.width; x += 1) {
+      if (!isCraftBg(...rgbAt(png, x, y))) continue;
+      let above = false;
+      let below = false;
+      for (let k = 1; k <= reach && !(above && below); k += 1) {
+        if (!above && !isCraftBg(...rgbAt(png, x, y - k))) above = true;
+        if (!below && !isCraftBg(...rgbAt(png, x, y + k))) below = true;
+      }
+      if (above && below) cracks += 1;
+    }
+  }
+  return cracks;
+};
+
+// The neck seam sits ~127 px under the eye line in the bust; the band scanned
+// for cracks runs from under the chin to the collar.
+const SEAM_BAND = { top: 105, height: 40, halfWidth: 22 };
+// Before the CPU morph bake (three r128 keeps eight morph influences; Head_0
+// dropped the body-shared ones Body_Neck applied) the ring measured ~80 CSS
+// px^2 in this band; a closed seam measures 0.
+const MAX_SEAM_CRACK_PX2 = 3;
+// Face / Jaw / Chin at 0 vs 1, read from phViewerState().face (Head_0's
+// skinned, morph-baked vertices against the eye line) and reported in CSS px
+// at the bust camera (about 1 px per mm), read in the rest pose so the parked
+// sway phase does not enter. Measured on this viewer the lower face
+// silhouette (jaw / chin bands) moves 14 px for Face, 15 px for Jaw and 11
+// px for Chin (whose tip also drops 3 px); the old
+// 0.22 / 0.22 / 0.18 caps moved it 2-3 px end to end, which the design
+// review read as no change. The thresholds sit at about half the measured
+// travel, so a slide back toward the old caps fails here.
+const MIN_FACE_WIDTH_TRAVEL_PX = 7;
+const MIN_JAW_WIDTH_TRAVEL_PX = 7;
+const MIN_CHIN_TRAVEL_PX = 6;
+// While the face moves, the eye must not: iris exposure (liner excluded) at
+// either end of every sculpt slider stays within this much of neutral, and
+// inside the Size 0.5 band. Without maskEyeRegion Stern 0 opened the lids
+// to a stare (exposure +0.1 and more) and Stern 1 hooded them.
+const MAX_EYE_DRIFT_UNDER_SCULPT = 0.06;
+
+const craftPass = async (cdp, session) => {
+  await cdp.send(
+    "Emulation.setDeviceMetricsOverride",
+    {
+      width: WIDTH * PIXEL_SCALE,
+      height: HEIGHT * PIXEL_SCALE,
+      deviceScaleFactor: 1,
+      mobile: true,
+    },
+    session
+  );
+  await cdp.send(
+    "Emulation.setDefaultBackgroundColorOverride",
+    { color: CRAFT_BG },
+    session
+  );
+  await evaluate(
+    cdp,
+    session,
+    "new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(function () { setTimeout(r, 80); }); }); })"
+  );
+  await freezeAnimation(cdp, session);
+  const radii = await evaluate(
+    cdp,
+    session,
+    "[window.phViewerRig.IRIS_RADIUS, window.phViewerRig.PUPIL_RADIUS]"
+  );
+  const irisSize = await evaluate(
+    cdp,
+    session,
+    `window.phViewerRig.irisSizeFor(${PIXEL_PRESET.eyeSize})`
+  );
+  const S = PIXEL_SCALE;
+  // Render a bust look with the loop parked and return its state plus the
+  // eye line and face centre on the canvas (3x px).
+  const render = async (look, tag) => {
+    await evaluate(
+      cdp,
+      session,
+      `window.applyLook(${JSON.stringify({
+        ...look,
+        viewMode: "bust",
+        revealBody: false,
+      })}); true`
+    );
+    const stillParked = await stepFrames(cdp, session, 2);
+    check(`${tag}: rendered two frames with the animation parked`, stillParked);
+    const state = await evaluate(cdp, session, "window.phViewerState()");
+    const l = state.eyes.gaze.eyeRoot_l.screen;
+    const r = state.eyes.gaze.eyeRoot_r.screen;
+    return { state, cx: (l.x + r.x) / 2, eyeY: (l.y + r.y) / 2 };
+  };
+  const capture = async (clip, file) => {
+    const shot = await cdp.send(
+      "Page.captureScreenshot",
+      { format: "png", clip: { ...clip, scale: 1 } },
+      session
+    );
+    fs.writeFileSync(
+      path.join(OUT_DIR, file),
+      Buffer.from(shot.data, "base64")
+    );
+    return pixelsOf(cdp, session, shot.data);
+  };
+
+  // 1. The head / neck seam on the default look.
+  {
+    const tag = "craft outfit2-bust: head / neck seam";
+    const { cx, eyeY } = await render(PIXEL_PRESET, tag);
+    const clip = {
+      x: cx - SEAM_BAND.halfWidth * S,
+      y: eyeY + SEAM_BAND.top * S,
+      width: 2 * SEAM_BAND.halfWidth * S,
+      height: SEAM_BAND.height * S,
+    };
+    const png = await capture(clip, "craft-neck-seam.png");
+    const cracksCss2 = seamCrackPixels(png, 5 * S) / (S * S);
+    check(
+      `${tag} closed: no background showing through between Head_0 and Body_Neck (<= ${MAX_SEAM_CRACK_PX2} CSS px^2)`,
+      cracksCss2 <= MAX_SEAM_CRACK_PX2,
+      `${cracksCss2.toFixed(1)} CSS px^2 of background in the neck band`
+    );
+  }
+
+  // 2. Face / Jaw / Chin at 0 and 1: silhouette travel and eye stability.
+  const neutral = await render(PIXEL_PRESET, "craft outfit2-bust: neutral");
+  const neutralEyes = await measureBothEyes(
+    cdp,
+    session,
+    neutral.state,
+    irisSize,
+    radii,
+    null
+  );
+  check(
+    "craft outfit2-bust: neutral eyes located",
+    neutralEyes.eyes.length === 2
+  );
+  // Render one sculpt slider at `value`, keep a face crop for the review
+  // collage, and read the silhouette (metres -> CSS px at the eye's depth)
+  // and the eye metrics back.
+  const faceProfile = async (key, value) => {
+    const tag = `craft outfit2-bust: ${key}=${value}`;
+    const { state, cx, eyeY } = await render(
+      { ...PIXEL_PRESET, [key]: value },
+      tag
+    );
+    await capture(
+      { x: cx - 90 * S, y: eyeY - 45 * S, width: 180 * S, height: 190 * S },
+      `craft-${key}-${value}.png`
+    );
+    const pxPerMetre = state.eyes.gaze.eyeRoot_l.screen.pxPerMetre / S;
+    const face = state.face || {};
+    const toPx = (metres) =>
+      typeof metres === "number" ? metres * pxPerMetre : NaN;
+    const profile = {
+      cheekWidth: toPx(face.cheekWidth),
+      jawWidth: toPx(face.jawWidth),
+      chinWidth: toPx(face.chinWidth),
+      chinDepth: toPx(face.chinDepth),
+      chinForward: toPx(face.chinForward),
+    };
+    check(
+      `${tag}: face silhouette probe reports the cheek, jaw and chin`,
+      Object.values(profile).every((v) => Number.isFinite(v)),
+      JSON.stringify(face)
+    );
+    const { eyes, avg } = await measureBothEyes(
+      cdp,
+      session,
+      state,
+      irisSize,
+      radii,
+      null
+    );
+    check(`${tag}: both eyes located`, eyes.length === 2);
+    console.log(
+      `     ${tag}: cheek ${profile.cheekWidth.toFixed(
+        1
+      )} px, jaw ${profile.jawWidth.toFixed(
+        1
+      )} px, chin ${profile.chinWidth.toFixed(
+        1
+      )} px wide, chin tip ${profile.chinDepth.toFixed(
+        1
+      )} px under / ${profile.chinForward.toFixed(1)} px in front of the eyes${
+        avg
+          ? `, iris exposure ${avg.irisExposureNoInk.toFixed(
+              3
+            )} (liner excluded), sclera share ${avg.scleraShare.toFixed(3)}`
+          : ""
+      }`
+    );
+    return { ...profile, avg };
+  };
+  const travelReport = (low, high) =>
+    ["cheekWidth", "jawWidth", "chinWidth", "chinDepth", "chinForward"]
+      .map((key) => `${key} ${low[key].toFixed(1)} -> ${high[key].toFixed(1)}`)
+      .join(", ") + " px";
+  const band = EYE_BANDS[PIXEL_PRESET.eyeSize];
+  for (const key of ["faceWidth", "jaw", "chin"]) {
+    const low = await faceProfile(key, 0);
+    const high = await faceProfile(key, 1);
+    // The lower face silhouette: whichever band the sculpt moves most.
+    const widthTravel = Math.max(
+      high.jawWidth - low.jawWidth,
+      high.chinWidth - low.chinWidth
+    );
+    switch (key) {
+      case "faceWidth":
+        check(
+          `craft: Face 0 -> 1 widens the lower face by >= ${MIN_FACE_WIDTH_TRAVEL_PX} CSS px at the bust camera`,
+          widthTravel >= MIN_FACE_WIDTH_TRAVEL_PX,
+          travelReport(low, high)
+        );
+        break;
+      case "jaw":
+        check(
+          `craft: Jaw 0 -> 1 widens the jaw by >= ${MIN_JAW_WIDTH_TRAVEL_PX} CSS px at the bust camera`,
+          widthTravel >= MIN_JAW_WIDTH_TRAVEL_PX,
+          travelReport(low, high)
+        );
+        break;
+      case "chin":
+        check(
+          `craft: Chin 0 -> 1 reshapes the chin by >= ${MIN_CHIN_TRAVEL_PX} CSS px at the bust camera (width, or the tip down / forward)`,
+          Math.max(
+            widthTravel,
+            high.chinDepth - low.chinDepth,
+            high.chinForward - low.chinForward
+          ) >= MIN_CHIN_TRAVEL_PX,
+          travelReport(low, high)
+        );
+        break;
+      default:
+        throw new Error(`unexpected sculpt key ${key}`);
+    }
+    for (const [value, profile] of [
+      [0, low],
+      [1, high],
+    ]) {
+      if (!profile.avg || !neutralEyes.avg) continue;
+      const drift = Math.abs(
+        profile.avg.irisExposureNoInk - neutralEyes.avg.irisExposureNoInk
+      );
+      check(
+        `craft: ${key}=${value} leaves the eye where the Eyes tab put it (iris exposure within ${MAX_EYE_DRIFT_UNDER_SCULPT} of neutral, inside the Size 0.5 band)`,
+        drift <= MAX_EYE_DRIFT_UNDER_SCULPT &&
+          within(profile.avg.irisExposureNoInk, band.irisExposure) &&
+          within(profile.avg.scleraShare, band.scleraShare),
+        `exposure ${profile.avg.irisExposureNoInk.toFixed(
+          3
+        )} vs neutral ${neutralEyes.avg.irisExposureNoInk.toFixed(
+          3
+        )}, sclera share ${profile.avg.scleraShare.toFixed(3)}`
+      );
+    }
+  }
+
+  await resumeAnimation(cdp, session);
+  await cdp.send("Emulation.setDefaultBackgroundColorOverride", {}, session);
   await cdp.send(
     "Emulation.setDeviceMetricsOverride",
     { width: WIDTH, height: HEIGHT, deviceScaleFactor: 1, mobile: true },
@@ -1150,6 +1463,7 @@ const main = async () => {
       ).toFixed(1)} mm`
     );
     await pixelPass(cdp, sessionId);
+    await craftPass(cdp, sessionId);
   } finally {
     await cdp.close();
     server.close();

@@ -88,6 +88,20 @@ type ViewerRig = {
   BROW_INK: number;
   LASH_LENGTH: number;
   OUTER_CORNER_LIFT: number;
+  SCULPT_GAIN: {
+    squareness: { low: number; high: number };
+    stern: { low: number; high: number };
+    sharpness: { low: number; high: number };
+  };
+  SCULPT_MORPHS: string[];
+  sculptMorphs: (
+    faceWidth: number,
+    jaw: number,
+    chin: number
+  ) => { squareness: number; stern: number; sharpness: number };
+  applyMeshLook: (mesh: unknown, next: Record<string, unknown>) => void;
+  bakeMorphs: (mesh: unknown) => boolean;
+  maskEyeRegion: (mesh: unknown) => boolean;
   browColorFor: (hair: unknown) => { r: number; g: number; b: number };
   headPaintChunk: () => string;
   irisDetailFor: (radiusPx: number) => number;
@@ -164,6 +178,11 @@ const FOREARM = 0.224;
 // Minimal glTF reader for the Head_0 attributes the eye tests need: the card
 // mask (COLOR_1) and the UVs, so the shader's ink windows can be checked
 // against the asset instead of against remembered numbers.
+type GltfSparse = {
+  count: number;
+  indices: { bufferView: number; byteOffset?: number; componentType: number };
+  values: { bufferView: number; byteOffset?: number };
+};
 type GltfAccessor = {
   bufferView?: number;
   byteOffset?: number;
@@ -171,6 +190,7 @@ type GltfAccessor = {
   normalized?: boolean;
   count: number;
   type: string;
+  sparse?: GltfSparse;
 };
 type GltfJson = {
   accessors: GltfAccessor[];
@@ -181,8 +201,14 @@ type GltfJson = {
   }[];
   meshes: {
     name: string;
-    primitives: { attributes: Record<string, number> }[];
+    extras?: { targetNames?: string[] };
+    primitives: {
+      attributes: Record<string, number>;
+      targets?: Record<string, number>[];
+    }[];
   }[];
+  nodes: { name: string; mesh?: number; skin?: number }[];
+  skins: { joints: number[] }[];
 };
 const COMPONENT_BYTES: Record<number, number> = {
   5120: 1,
@@ -199,56 +225,119 @@ const TYPE_SIZE: Record<string, number> = {
   VEC4: 4,
 };
 
-const readGlbHead = () => {
+type GlbMesh = {
+  position: number[][];
+  uv: number[][];
+  cardMask: number[][];
+  // Bone names per skin joint slot, and each vertex's four joint slots and
+  // weights, so a vertex's weight on a named bone can be summed.
+  jointNames: string[];
+  joints: number[][];
+  weights: number[][];
+  // Relative morph deltas per Shape_* target name (sparse targets expanded).
+  targets: Record<string, number[][]>;
+};
+
+const readGlbMesh = (name: string): GlbMesh => {
   const glb = fs.readFileSync(path.join(ENGINE_DIR, "bozo-male.glb"));
   const jsonLength = glb.readUInt32LE(12);
   const json = JSON.parse(
     glb.subarray(20, 20 + jsonLength).toString("utf8")
   ) as GltfJson;
   const bin = glb.subarray(20 + jsonLength + 8);
+  const readScalar = (
+    componentType: number,
+    normalized: boolean | undefined,
+    offset: number
+  ) => {
+    switch (componentType) {
+      case 5126:
+        return bin.readFloatLE(offset);
+      case 5125:
+        return bin.readUInt32LE(offset);
+      case 5123:
+        return bin.readUInt16LE(offset) / (normalized ? 65535 : 1);
+      case 5121:
+        return bin.readUInt8(offset) / (normalized ? 255 : 1);
+      default:
+        throw new Error(`unexpected componentType ${componentType}`);
+    }
+  };
   const readAccessor = (index: number) => {
     const accessor = json.accessors[index];
-    const view = json.bufferViews[accessor.bufferView as number];
     const size = COMPONENT_BYTES[accessor.componentType];
     const width = TYPE_SIZE[accessor.type];
-    const stride = view.byteStride || size * width;
-    const base = (view.byteOffset || 0) + (accessor.byteOffset || 0);
     const out: number[][] = [];
     for (let i = 0; i < accessor.count; i += 1) {
-      const row: number[] = [];
-      for (let c = 0; c < width; c += 1) {
-        const offset = base + i * stride + c * size;
-        let value: number;
-        switch (accessor.componentType) {
-          case 5126:
-            value = bin.readFloatLE(offset);
-            break;
-          case 5123:
-            value =
-              bin.readUInt16LE(offset) / (accessor.normalized ? 65535 : 1);
-            break;
-          case 5121:
-            value = bin.readUInt8(offset) / (accessor.normalized ? 255 : 1);
-            break;
-          default:
-            throw new Error(
-              `unexpected componentType ${accessor.componentType}`
-            );
+      out.push(new Array<number>(width).fill(0));
+    }
+    if (accessor.bufferView !== undefined) {
+      const view = json.bufferViews[accessor.bufferView];
+      const stride = view.byteStride || size * width;
+      const base = (view.byteOffset || 0) + (accessor.byteOffset || 0);
+      for (let i = 0; i < accessor.count; i += 1) {
+        for (let c = 0; c < width; c += 1) {
+          out[i][c] = readScalar(
+            accessor.componentType,
+            accessor.normalized,
+            base + i * stride + c * size
+          );
         }
-        row.push(value);
       }
-      out.push(row);
+    }
+    // Morph targets are stored sparse: only the moved vertices are listed.
+    const sparse = accessor.sparse;
+    if (sparse) {
+      const indexView = json.bufferViews[sparse.indices.bufferView];
+      const indexBase =
+        (indexView.byteOffset || 0) + (sparse.indices.byteOffset || 0);
+      const indexSize = COMPONENT_BYTES[sparse.indices.componentType];
+      const valueView = json.bufferViews[sparse.values.bufferView];
+      const valueBase =
+        (valueView.byteOffset || 0) + (sparse.values.byteOffset || 0);
+      for (let k = 0; k < sparse.count; k += 1) {
+        const vertex = readScalar(
+          sparse.indices.componentType,
+          false,
+          indexBase + k * indexSize
+        );
+        for (let c = 0; c < width; c += 1) {
+          out[vertex][c] = readScalar(
+            accessor.componentType,
+            accessor.normalized,
+            valueBase + (k * width + c) * size
+          );
+        }
+      }
     }
     return out;
   };
-  const head = json.meshes.find((mesh) => mesh.name === "Head_0");
-  if (!head) throw new Error("Head_0 missing from bozo-male.glb");
-  const attributes = head.primitives[0].attributes;
+  const meshIndex = json.meshes.findIndex((mesh) => mesh.name === name);
+  if (meshIndex < 0) throw new Error(`${name} missing from bozo-male.glb`);
+  const mesh = json.meshes[meshIndex];
+  const primitive = mesh.primitives[0];
+  const attributes = primitive.attributes;
+  const node = json.nodes.find((entry) => entry.mesh === meshIndex);
+  const skin = node && node.skin !== undefined ? json.skins[node.skin] : null;
+  const targetNames = mesh.extras?.targetNames ?? [];
+  const targets: Record<string, number[][]> = {};
+  (primitive.targets ?? []).forEach((target, index) => {
+    if (target.POSITION !== undefined) {
+      targets[targetNames[index]] = readAccessor(target.POSITION);
+    }
+  });
   return {
+    position: readAccessor(attributes.POSITION),
     uv: readAccessor(attributes.TEXCOORD_0),
     cardMask: readAccessor(attributes.COLOR_1),
+    jointNames: skin ? skin.joints.map((joint) => json.nodes[joint].name) : [],
+    joints: readAccessor(attributes.JOINTS_0),
+    weights: readAccessor(attributes.WEIGHTS_0),
+    targets,
   };
 };
+
+const readGlbHead = () => readGlbMesh("Head_0");
 
 const loadViewer = () => {
   const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
@@ -1476,5 +1565,482 @@ describe("skeleton retargeting", () => {
     expect(
       hairFront.getWorldPosition(new THREE.Vector3()).distanceTo(hairFrontRest)
     ).toBeLessThan(1e-5);
+  });
+});
+
+// Every look the default preset can drive through applyMeshLook.
+const DEFAULT_LOOK_VALUES = {
+  ...CHARACTER_PRESETS[2],
+  viewMode: "bust",
+  revealBody: false,
+};
+
+// A mesh with `names` as its morph dictionary and zeroed influences, enough
+// for applyMeshLook (setMorph writes by dictionary index).
+const morphDictionaryMesh = (names: string[]) => ({
+  morphTargetDictionary: Object.fromEntries(
+    names.map((name, index) => [name, index])
+  ) as Record<string, number>,
+  morphTargetInfluences: names.map(() => 0),
+});
+
+// A three-vertex geometry with `count` relative morph targets: target k moves
+// vertex k % 3 by (k + 1) mm along x, y, z in turn. Base positions are 1, 2, 3
+// on x so a bake can be checked exactly.
+const morphFixture = (count: number) => {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute([1, 0, 0, 2, 0, 0, 3, 0, 0], 3)
+  );
+  geometry.morphTargetsRelative = true;
+  geometry.morphAttributes.position = [];
+  const names: string[] = [];
+  for (let k = 0; k < count; k += 1) {
+    const delta = new Float32Array(9);
+    delta[(k % 3) * 3 + (k % 3)] = (k + 1) / 1000;
+    geometry.morphAttributes.position.push(
+      new THREE.Float32BufferAttribute(delta, 3)
+    );
+    names.push(`Shape_T${k}`);
+  }
+  const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial());
+  mesh.morphTargetDictionary = Object.fromEntries(
+    names.map((name, index) => [name, index])
+  );
+  mesh.morphTargetInfluences = names.map(() => 0);
+  return { mesh, geometry, names };
+};
+
+const expectedBake = (geometry: Three, influences: number[]): number[] => {
+  const base = [1, 0, 0, 2, 0, 0, 3, 0, 0];
+  const out = base.slice();
+  influences.forEach((weight, k) => {
+    const delta = geometry.morphAttributes.position[k].array as Float32Array;
+    for (let i = 0; i < 9; i += 1) out[i] += weight * delta[i];
+  });
+  return out;
+};
+
+describe("morph targets", () => {
+  // three r128 uploads at most 8 morph influences per draw (WebGLMorphtargets
+  // sorts by |influence| and keeps eight; the vertex shader sums
+  // morphTarget0..7). Head_0 carries 24 Shape_* targets and a default look
+  // drives well over eight of them at once, so the weakest were silently
+  // dropped - among them the body-shared Shape_NeckThickness and Shape_Weight
+  // that Body_Neck (nine targets, eight active) did apply, which is what
+  // opened the ring at the head / neck seam (TF 1.2.21 bust: a white line
+  // round the base of the neck = the page background through a 2 mm gap).
+  // The viewer therefore morphs on the CPU: bakeMorphs sums every influence
+  // into the position attribute (skinning stays on the GPU) and the shader
+  // morph path is left off.
+  const GPU_MORPH_SLOTS = 8;
+
+  it("the default look drives more Head_0 morphs than the r128 shader can carry", () => {
+    const { targets } = readGlbHead();
+    const names = Object.keys(targets);
+    expect(names.length).toBeGreaterThan(GPU_MORPH_SLOTS);
+    const head = morphDictionaryMesh(names);
+    // Head_0's influences for a look, strongest first - the order the r128
+    // shader path would have kept the first eight of.
+    const rankedFor = (look: Record<string, unknown>) => {
+      rig.applyMeshLook(head, look);
+      return names
+        .map(
+          (name) =>
+            [
+              name,
+              Math.abs(
+                head.morphTargetInfluences[head.morphTargetDictionary[name]]
+              ),
+            ] as const
+        )
+        .filter(([, w]) => w > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([name]) => name);
+    };
+    const atDefault = rankedFor(DEFAULT_LOOK_VALUES);
+    expect(atDefault.length).toBeGreaterThan(GPU_MORPH_SLOTS);
+    // Body_Neck applies Shape_Weight at the same weight; on the head it ranks
+    // past the eighth and would have been dropped - the seam gap.
+    expect(atDefault.indexOf("Shape_Weight")).toBeGreaterThanOrEqual(
+      GPU_MORPH_SLOTS
+    );
+    // With the sculpts up, Shape_NeckThickness (jaw's neck share, which
+    // Body_Neck also applies) falls out as well.
+    const atHard = rankedFor({
+      ...DEFAULT_LOOK_VALUES,
+      faceWidth: 1,
+      jaw: 1,
+      chin: 1,
+    });
+    expect(atHard.length).toBeGreaterThan(GPU_MORPH_SLOTS);
+    expect(atHard.indexOf("Shape_NeckThickness")).toBeGreaterThanOrEqual(
+      GPU_MORPH_SLOTS
+    );
+    expect(atHard.indexOf("Shape_Weight")).toBeGreaterThanOrEqual(
+      GPU_MORPH_SLOTS
+    );
+  });
+
+  it("bakeMorphs sums every non-zero influence into the positions, not just the eight strongest", () => {
+    const { mesh, geometry } = morphFixture(12);
+    const influences = [
+      0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12,
+    ];
+    influences.forEach((w, k) => {
+      mesh.morphTargetInfluences[k] = w;
+    });
+    const versionBefore = geometry.attributes.position.version;
+
+    expect(rig.bakeMorphs(mesh)).toBe(true);
+
+    const want = expectedBake(geometry, influences);
+    const got = Array.from(geometry.attributes.position.array as Float32Array);
+    got.forEach((value, i) => expect(value).toBeCloseTo(want[i], 7));
+    // The upload is flagged for the renderer.
+    expect(geometry.attributes.position.version).toBeGreaterThan(versionBefore);
+    // Negative weights (the sculpt sliders' soft side) are summed as-is.
+    mesh.morphTargetInfluences[0] = -0.5;
+    expect(rig.bakeMorphs(mesh)).toBe(true);
+    const wantNeg = expectedBake(geometry, [-0.5, ...influences.slice(1)]);
+    Array.from(geometry.attributes.position.array as Float32Array).forEach(
+      (value, i) => expect(value).toBeCloseTo(wantNeg[i], 7)
+    );
+  });
+
+  it("bakeMorphs is absolute: re-baking from new influences starts at the base mesh, unchanged influences are a no-op", () => {
+    const { mesh, geometry } = morphFixture(3);
+    mesh.morphTargetInfluences[0] = 1;
+    rig.bakeMorphs(mesh);
+    mesh.morphTargetInfluences[0] = 1;
+    mesh.morphTargetInfluences[1] = 0.5;
+    rig.bakeMorphs(mesh);
+    // Not 2 x target 0 from baking twice.
+    Array.from(geometry.attributes.position.array as Float32Array).forEach(
+      (value, i) =>
+        expect(value).toBeCloseTo(expectedBake(geometry, [1, 0.5, 0])[i], 7)
+    );
+    const version = geometry.attributes.position.version;
+    // Same influences again: nothing to do, no re-upload.
+    expect(rig.bakeMorphs(mesh)).toBe(false);
+    expect(geometry.attributes.position.version).toBe(version);
+    // All influences back to 0 restores the base positions exactly.
+    mesh.morphTargetInfluences[0] = 0;
+    mesh.morphTargetInfluences[1] = 0;
+    expect(rig.bakeMorphs(mesh)).toBe(true);
+    expect(
+      Array.from(geometry.attributes.position.array as Float32Array)
+    ).toEqual([1, 0, 0, 2, 0, 0, 3, 0, 0]);
+    // A mesh without morph targets is left alone.
+    const plain = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial()
+    );
+    expect(rig.bakeMorphs(plain)).toBe(false);
+  });
+
+  it("applyLook bakes every morph mesh after applyMeshLook, and no material turns the shader morph path back on", () => {
+    const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+    const applyLookBody = html.slice(
+      html.indexOf("function applyLook("),
+      html.indexOf("function cameraDistance(")
+    );
+    expect(applyLookBody).toMatch(
+      /morphMeshes\.forEach\(function \(mesh\) \{\s*applyMeshLook\(mesh, look\);\s*bakeMorphs\(mesh\);\s*\}\)/
+    );
+    // With the positions baked, a shader morph pass would apply the eight
+    // strongest a second time.
+    expect(html).not.toMatch(/morphTargets = true/);
+    expect(html).not.toMatch(/morphTargets = !!/);
+    expect(html).not.toMatch(/morphNormals = true/);
+  });
+
+  it("the GLB keeps the head / neck seam closed as long as every influence is applied: Body_Neck's morphs move the shared ring exactly as Head_0's do", () => {
+    const head = readGlbHead();
+    const neck = readGlbMesh("Body_Neck");
+    // The seam: Head_0 vertices coincident with a Body_Neck vertex.
+    const pairs: [number, number][] = [];
+    head.position.forEach((hp, v) => {
+      const u = neck.position.findIndex(
+        (np) => Math.hypot(hp[0] - np[0], hp[1] - np[1], hp[2] - np[2]) < 0.0005
+      );
+      if (u >= 0) pairs.push([v, u]);
+    });
+    expect(pairs.length).toBeGreaterThanOrEqual(20);
+    Object.keys(neck.targets).forEach((name) => {
+      const neckDelta = neck.targets[name];
+      const headDelta = head.targets[name];
+      pairs.forEach(([v, u]) => {
+        const [nx, ny, nz] = neckDelta[u];
+        if (!headDelta) {
+          // A body-only morph (Chest, Belly, Curvy, WaistSize, ButtSize) must
+          // not reach the ring, or the head could never follow it (measured:
+          // under 0.005 mm of float noise at weight 1).
+          expect(Math.hypot(nx, ny, nz)).toBeLessThan(0.0001);
+          return;
+        }
+        const [hx, hy, hz] = headDelta[v];
+        expect(Math.hypot(hx - nx, hy - ny, hz - nz)).toBeLessThan(0.00005);
+      });
+    });
+    // The shared morphs do move the ring - by millimetres at weight 1 - so
+    // dropping them on one side is a visible gap, not a rounding error.
+    const shared = [
+      "Shape_NeckThickness",
+      "Shape_Weight",
+      "Shape_Muscle",
+      "Shape_BodyType",
+    ];
+    shared.forEach((name) => {
+      const maxMove = Math.max(
+        ...pairs.map(([v]) => {
+          const [x, y, z] = head.targets[name][v];
+          return Math.hypot(x, y, z);
+        })
+      );
+      expect(maxMove).toBeGreaterThan(0.004);
+    });
+    // Head_0's own sculpt morphs stay off the ring, so Face / Jaw / Chin
+    // cannot open it either.
+    rig.SCULPT_MORPHS.forEach((name) => {
+      pairs.forEach(([v]) => {
+        const [x, y, z] = head.targets[name][v];
+        expect(Math.hypot(x, y, z)).toBeLessThan(0.0001);
+      });
+    });
+  });
+});
+
+describe("face sculpt", () => {
+  // The Face / Jaw / Chin sliders ran Shape_Squareness / Shape_Stern /
+  // Shape_Sharpness at 0.22 / 0.22 / 0.18 from the base mesh: at the bust
+  // camera (about 1 px per mm) that is a 2-3 mm silhouette change end to
+  // end, which the design review read as no change. Measured on the GLB the
+  // three sculpts move the face 9.7 / 14.2 / 8.4 mm at weight 1, so the
+  // sliders now run through the whole shape with the reviewed default kept:
+  // 0.5 is the base mesh (the 0.85 bust Maxwell approved), 1 is the sculpt
+  // at `high`, 0 its inverse at `low`. Rendered, the inverted sculpts fold
+  // the lower lip and chin when all three go past about -0.4 together, so
+  // the soft side is shorter than the hard side.
+  const LOW = { squareness: 0.35, stern: 0.35, sharpness: 0.25 };
+  const HIGH = 0.7;
+
+  it("the neutral slider position is the base mesh, so the reviewed default face does not move", () => {
+    expect(rig.sculptMorphs(0.5, 0.5, 0.5)).toEqual({
+      squareness: 0,
+      stern: 0,
+      sharpness: 0,
+    });
+    // The presets sit within a few hundredths of neutral.
+    const preset = rig.sculptMorphs(
+      CHARACTER_PRESETS[2].faceWidth,
+      CHARACTER_PRESETS[2].jaw,
+      CHARACTER_PRESETS[2].chin
+    );
+    expect(Math.abs(preset.squareness)).toBeLessThan(0.03);
+    expect(Math.abs(preset.stern)).toBeLessThan(0.03);
+    expect(Math.abs(preset.sharpness)).toBeLessThan(0.03);
+  });
+
+  it("runs each sculpt to a clearly readable extreme at 1 and its softer inverse at 0", () => {
+    const hard = rig.sculptMorphs(1, 1, 1);
+    const soft = rig.sculptMorphs(0, 0, 0);
+    (["squareness", "stern", "sharpness"] as const).forEach((key) => {
+      expect(hard[key]).toBeCloseTo(HIGH, 9);
+      expect(soft[key]).toBeCloseTo(-LOW[key], 9);
+      expect(rig.SCULPT_GAIN[key]).toEqual({ low: LOW[key], high: HIGH });
+      // End to end the travel is at least 0.9 of the sculpt - four times the
+      // old 0.22 caps - and never past the sculpt's own weight 1.
+      expect(hard[key] - soft[key]).toBeGreaterThanOrEqual(0.9);
+      expect(Math.abs(hard[key])).toBeLessThanOrEqual(1);
+      expect(Math.abs(soft[key])).toBeLessThanOrEqual(1);
+    });
+    // The fold guard: the inverse of Sharpness is the tightest.
+    expect(LOW.sharpness).toBeLessThan(LOW.stern);
+  });
+
+  it("is linear on each side of neutral, so every slider step reads the same, and clamps out-of-range input", () => {
+    const at = (v: number) => rig.sculptMorphs(v, v, v);
+    const steps = [0, 0.25, 0.5, 0.75, 1].map(at);
+    (["squareness", "stern", "sharpness"] as const).forEach((key) => {
+      for (let i = 1; i < steps.length; i += 1) {
+        expect(steps[i][key]).toBeGreaterThan(steps[i - 1][key]);
+      }
+      expect(steps[1][key]).toBeCloseTo(-LOW[key] / 2, 9);
+      expect(steps[3][key]).toBeCloseTo(HIGH / 2, 9);
+    });
+    expect(at(-3)).toEqual(at(0));
+    expect(at(9)).toEqual(at(1));
+    expect(at(NaN)).toEqual(at(0));
+  });
+
+  it("applyMeshLook writes the signed sculpt weights and leaves the companion morphs on their mild caps", () => {
+    const names = Object.keys(readGlbHead().targets);
+    const head = morphDictionaryMesh(names);
+    const at = (name: string) =>
+      head.morphTargetInfluences[head.morphTargetDictionary[name]];
+    rig.applyMeshLook(head, {
+      ...DEFAULT_LOOK_VALUES,
+      faceWidth: 0,
+      jaw: 0,
+      chin: 0,
+    });
+    expect(at("Shape_Squareness")).toBeCloseTo(-LOW.squareness, 9);
+    expect(at("Shape_Stern")).toBeCloseTo(-LOW.stern, 9);
+    expect(at("Shape_Sharpness")).toBeCloseTo(-LOW.sharpness, 9);
+    rig.applyMeshLook(head, {
+      ...DEFAULT_LOOK_VALUES,
+      faceWidth: 1,
+      jaw: 1,
+      chin: 1,
+    });
+    expect(at("Shape_Squareness")).toBeCloseTo(HIGH, 9);
+    expect(at("Shape_Stern")).toBeCloseTo(HIGH, 9);
+    expect(at("Shape_Sharpness")).toBeCloseTo(HIGH, 9);
+    // The small companions keep their original unipolar mapping.
+    expect(at("Shape_EyesSquare")).toBeCloseTo(0.1, 9);
+    expect(at("Shape_NoseWidth")).toBeCloseTo(0.16, 9);
+    expect(at("Shape_MouthWide")).toBeCloseTo(0.14, 9);
+    expect(at("Shape_NeckThickness")).toBeCloseTo(0.22, 9);
+    expect(at("Shape_NoseTiltDown")).toBeCloseTo(0.08, 9);
+    expect(at("Shape_MouthThin")).toBe(0);
+    // No 0.22 / 0.18 cap left on the sculpts themselves.
+    const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+    expect(html).not.toMatch(/"Shape_Squareness", mild\(/);
+    expect(html).not.toMatch(/"Shape_Stern", mild\(/);
+    expect(html).not.toMatch(/"Shape_Sharpness", mild\(/);
+  });
+
+  // A skinned mesh with three vertices: an eye-cap vertex (weight 1.0 on
+  // eyeRoot_l), a lid-crease vertex (0.5 eye / 0.5 head) and brow skin (head
+  // only), with one sculpt target and the lid morph both moving all three.
+  const sculptFixture = () => {
+    const head = new THREE.Bone();
+    head.name = "head";
+    const eye = new THREE.Bone();
+    eye.name = "eyeRoot_l";
+    head.add(eye);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute([0, 0, 0, 0, 1, 0, 0, 2, 0], 3)
+    );
+    geometry.setAttribute(
+      "skinIndex",
+      new THREE.Uint16BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0], 4)
+    );
+    geometry.setAttribute(
+      "skinWeight",
+      new THREE.Float32BufferAttribute(
+        [1, 0, 0, 0, 0.5, 0.5, 0, 0, 1, 0, 0, 0],
+        4
+      )
+    );
+    geometry.morphTargetsRelative = true;
+    const sculpt = new THREE.Float32BufferAttribute(
+      [0.01, 0, 0, 0.01, 0, 0, 0.01, 0, 0],
+      3
+    );
+    const lid = new THREE.Float32BufferAttribute(
+      [0, 0.02, 0, 0, 0.02, 0, 0, 0.02, 0],
+      3
+    );
+    geometry.morphAttributes.position = [sculpt, lid];
+    const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+    mesh.morphTargetDictionary = { Shape_Stern: 0, Shape_EyeLidHeight: 1 };
+    mesh.morphTargetInfluences = [0, 0];
+    const bones = [head, eye];
+    mesh.bind(
+      new THREE.Skeleton(
+        bones,
+        bones.map(() => new THREE.Matrix4())
+      ),
+      new THREE.Matrix4()
+    );
+    return { mesh, geometry };
+  };
+
+  it("maskEyeRegion fades the sculpt deltas out over the eye-bone weights, so Face / Jaw / Chin cannot move the lids off the eyeball", () => {
+    // Measured on the GLB: Shape_Stern moves the lid margin up to 10.8 mm and
+    // Shape_Sharpness 6.5 mm at weight 1, while Eyes_0 carries neither, so
+    // at either extreme the lids would leave the ball (a stare at 0, a hood at
+    // 1) - the eye the Size slider was tuned for. The eye bones' own skin
+    // weights (1.0 on the margin, fading to 0 by the brow) are the falloff,
+    // the same trick applyEyeScale relies on.
+    const { mesh, geometry } = sculptFixture();
+    expect(rig.SCULPT_MORPHS).toEqual([
+      "Shape_Squareness",
+      "Shape_Stern",
+      "Shape_Sharpness",
+    ]);
+
+    expect(rig.maskEyeRegion(mesh)).toBe(true);
+
+    const sculpt = Array.from(
+      geometry.morphAttributes.position[0].array as Float32Array
+    );
+    // Cap vertex pinned, crease vertex halved, brow vertex untouched.
+    expect(sculpt[0]).toBeCloseTo(0, 9);
+    expect(sculpt[3]).toBeCloseTo(0.005, 9);
+    expect(sculpt[6]).toBeCloseTo(0.01, 9);
+    // The lid morph (the Eyes tab's own control) is not masked.
+    expect(
+      Array.from(geometry.morphAttributes.position[1].array as Float32Array)
+    ).toEqual(
+      Array.from(Float32Array.from([0, 0.02, 0, 0, 0.02, 0, 0, 0.02, 0]))
+    );
+    // Dictionary and influence count are unchanged, so setMorph still works.
+    expect(mesh.morphTargetDictionary).toEqual({
+      Shape_Stern: 0,
+      Shape_EyeLidHeight: 1,
+    });
+    expect(mesh.morphTargetInfluences).toHaveLength(2);
+    // A mesh whose skeleton has no eye bone (Body_*) is left alone.
+    const body = new THREE.Bone();
+    body.name = "spine_04";
+    const plainGeometry = new THREE.BufferGeometry();
+    plainGeometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute([0, 0, 0], 3)
+    );
+    plainGeometry.setAttribute(
+      "skinIndex",
+      new THREE.Uint16BufferAttribute([0, 0, 0, 0], 4)
+    );
+    plainGeometry.setAttribute(
+      "skinWeight",
+      new THREE.Float32BufferAttribute([1, 0, 0, 0], 4)
+    );
+    plainGeometry.morphAttributes.position = [
+      new THREE.Float32BufferAttribute([0.01, 0, 0], 3),
+    ];
+    const plain = new THREE.SkinnedMesh(
+      plainGeometry,
+      new THREE.MeshBasicMaterial()
+    );
+    plain.morphTargetDictionary = { Shape_Squareness: 0 };
+    plain.morphTargetInfluences = [0];
+    plain.bind(
+      new THREE.Skeleton([body], [new THREE.Matrix4()]),
+      new THREE.Matrix4()
+    );
+    expect(rig.maskEyeRegion(plain)).toBe(false);
+    expect(
+      Array.from(
+        plainGeometry.morphAttributes.position[0].array as Float32Array
+      )
+    ).toEqual(Array.from(Float32Array.from([0.01, 0, 0])));
+  });
+
+  it("masks every morph mesh once at load, after the Shape_ prune and before the first bake", () => {
+    const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+    const load = html.slice(
+      html.indexOf("new THREE.GLTFLoader().load("),
+      html.indexOf("function boxOf(")
+    );
+    expect(load).toMatch(
+      /pruneToShapes\(obj\);\s*if \(obj\.morphTargetInfluences\.length\) \{\s*maskEyeRegion\(obj\);\s*morphMeshes\.push\(obj\);\s*\}/
+    );
   });
 });
