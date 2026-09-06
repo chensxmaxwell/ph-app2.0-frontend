@@ -686,9 +686,11 @@
       "float ndl = dot(normal, keyDirView);",
       // Terminator band: peaks where the key light grazes the skin.
       "float phTerm = smoothstep(-0.4, 0.0, ndl) * (1.0 - smoothstep(0.0, 0.45, ndl));",
-      "outgoingLight += diffuseColor.rgb * " + vec3Of(SKIN_LOOK.sssTint) + " * phTerm * " + strength.toFixed(2) + ";",
+      // (not on the brow / lash cards: they are hair, and the liner must
+      // stay near-black)
+      "outgoingLight += diffuseColor.rgb * " + vec3Of(SKIN_LOOK.sssTint) + " * phTerm * " + strength.toFixed(2) + " * (1.0 - phCard);",
       // Unlit side: warm lift instead of a grey fill.
-      "outgoingLight += diffuseColor.rgb * " + vec3Of(SKIN_LOOK.shadowWarm) + " * (1.0 - smoothstep(-0.3, 0.45, ndl)) * " + SKIN_LOOK.shadowLift.toFixed(2) + ";"
+      "outgoingLight += diffuseColor.rgb * " + vec3Of(SKIN_LOOK.shadowWarm) + " * (1.0 - smoothstep(-0.3, 0.45, ndl)) * " + SKIN_LOOK.shadowLift.toFixed(2) + " * (1.0 - phCard);"
     ].join("\n") + "\n";
     if (part === "roughness") return roughness;
     if (part === "light") return light;

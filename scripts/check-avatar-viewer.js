@@ -1192,6 +1192,102 @@ const isNearWhite = (R, G, B) =>
 const MIN_FACE_WIDTH_TRAVEL_PX = 4;
 const MIN_JAW_WIDTH_TRAVEL_PX = 5;
 const MIN_CHIN_TRAVEL_PX = 4;
+// Style C hair gates on the crown crop (magenta background). Design rejected
+// the #42 tip on "block hair": the sculpted shells read as flat plates with
+// stepped edges. Measured on the crown crop at 3x: the share of hair pixels
+// whose 7 x 7 neighbourhood is flat (luminance variance < 9 - a card face)
+// was 0.625 on #41 and 0.416 on the rejected tip, 0.06 with the strand-card
+// layer; the hair / background boundary ran 418 px (one smooth arc across
+// the 420 px crop) on both rejected renders and 2,300 px with the fringed
+// strands. Thresholds sit between.
+const HAIR_MAX_FLAT_SHARE = 0.2;
+const HAIR_MIN_OUTLINE_BREAK = 2.0;
+const hairCrownMetrics = (png) => {
+  const { width, height, data } = png;
+  const cls = new Uint8Array(width * height);
+  const lum = new Float32Array(width * height);
+  for (let i = 0; i < width * height; i += 1) {
+    const R = data[i * 4];
+    const G = data[i * 4 + 1];
+    const B = data[i * 4 + 2];
+    lum[i] = 0.299 * R + 0.587 * G + 0.114 * B;
+    // 0 = page background, 1 = blended with it, 2 = solid figure.
+    if (isCraftBg(R, G, B)) cls[i] = 0;
+    else if (R > 140 && B > 140 && B > G + 60) cls[i] = 1;
+    else cls[i] = 2;
+  }
+  const K = 3;
+  let solid = 0;
+  let flat = 0;
+  let boundary = 0;
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const i = y * width + x;
+      if (cls[i] !== 2) continue;
+      solid += 1;
+      if (
+        cls[i - 1] !== 2 ||
+        cls[i + 1] !== 2 ||
+        cls[i - width] !== 2 ||
+        cls[i + width] !== 2
+      ) {
+        boundary += 1;
+      }
+      if (y < K || y >= height - K || x < K || x >= width - K) continue;
+      let sum = 0;
+      let sum2 = 0;
+      let n = 0;
+      let inside = true;
+      for (let dy = -K; dy <= K && inside; dy += 1) {
+        for (let dx = -K; dx <= K; dx += 1) {
+          const j = (y + dy) * width + x + dx;
+          if (cls[j] !== 2) {
+            inside = false;
+            break;
+          }
+          sum += lum[j];
+          sum2 += lum[j] * lum[j];
+          n += 1;
+        }
+      }
+      if (inside && sum2 / n - (sum / n) ** 2 < 9) flat += 1;
+    }
+  }
+  return {
+    flatShare: flat / Math.max(1, solid),
+    outlineBreak: boundary / width,
+  };
+};
+// Skin subsurface read on the face (Style C gate 2): with a subsurface term
+// the darker skin pixels shift red - (R - G) / R rises toward the terminator
+// and in the shadow - while a Lambert / clearcoat shell keeps its hue. The
+// shift between the darkest and brightest quartile of face skin measured
+// 0.033 on #41 and 0.031 on the rejected #42 tip (whose wrap term targeted an
+// <output_fragment> include r128 does not have, so it never ran), 0.098 with
+// the term spliced in.
+const SKIN_MIN_SSS_SHIFT = 0.06;
+const FACE_BAND = { top: 20, height: 75, halfWidth: 55 };
+const skinRednessShift = (png) => {
+  const { width, height, data } = png;
+  const skin = [];
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      const R = data[i];
+      const G = data[i + 1];
+      const B = data[i + 2];
+      if (isCraftBg(R, G, B)) continue;
+      const lum = 0.299 * R + 0.587 * G + 0.114 * B;
+      if (!(R > B + 20 && lum > 60 && lum < 235)) continue;
+      skin.push({ lum, red: (R - G) / Math.max(1, R) });
+    }
+  }
+  if (skin.length < 400) return null;
+  skin.sort((a, b) => a.lum - b.lum);
+  const q = Math.floor(skin.length / 4);
+  const mean = (arr) => arr.reduce((s, o) => s + o.red, 0) / arr.length;
+  return mean(skin.slice(0, q)) - mean(skin.slice(-q));
+};
 // While the face moves, the eye must not: iris exposure (liner excluded) at
 // either end of every sculpt slider stays within this much of neutral, and
 // inside the Size 0.5 band. Without maskEyeRegion Stern 0 opened the lids
@@ -1302,6 +1398,36 @@ const craftPass = async (cdp, session) => {
       `craft outfit2-bust: hair crown not blown out to white by the rim light (<= ${MAX_CROWN_BLOWOUT_PX2} CSS px^2 near-white)`,
       blownCss2 <= MAX_CROWN_BLOWOUT_PX2,
       `${blownCss2.toFixed(1)} CSS px^2 near-white along the crown`
+    );
+    // Style C: strands, not plates, and a broken outline.
+    const hairMetrics = hairCrownMetrics(crown);
+    check(
+      `craft outfit2-bust: hair crown reads as strands, not flat card faces (flat share <= ${HAIR_MAX_FLAT_SHARE})`,
+      hairMetrics.flatShare <= HAIR_MAX_FLAT_SHARE,
+      `flat share ${hairMetrics.flatShare.toFixed(3)} (#41 0.625, rejected tip 0.416)`
+    );
+    check(
+      `craft outfit2-bust: hair outline breaks into strands (boundary >= ${HAIR_MIN_OUTLINE_BREAK} x crop width)`,
+      hairMetrics.outlineBreak >= HAIR_MIN_OUTLINE_BREAK,
+      `outline ${hairMetrics.outlineBreak.toFixed(2)} x width (a smooth shell arc is ~1.0)`
+    );
+    // Style C: subsurface read on the face skin.
+    const face = await capture(
+      {
+        x: cx - FACE_BAND.halfWidth * S,
+        y: eyeY + FACE_BAND.top * S,
+        width: 2 * FACE_BAND.halfWidth * S,
+        height: FACE_BAND.height * S,
+      },
+      "craft-face-skin.png"
+    );
+    const shift = skinRednessShift(face);
+    check(
+      `craft outfit2-bust: skin reads as subsurface, darker skin shifts red (shift >= ${SKIN_MIN_SSS_SHIFT})`,
+      typeof shift === "number" && shift >= SKIN_MIN_SSS_SHIFT,
+      shift === null
+        ? "too little skin in the face band"
+        : `shift ${shift.toFixed(3)} (#41 0.033, rejected tip 0.031)`
     );
   }
 

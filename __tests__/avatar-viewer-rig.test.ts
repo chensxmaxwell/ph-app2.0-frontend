@@ -2277,6 +2277,9 @@ describe("soft semi-real default look", () => {
       `vec3(${skin.shadowWarm.map((v) => v.toFixed(2)).join(", ")})`
     );
     expect(chunk).toContain("outgoingLight +=");
+    // The brow / lash cards are hair: no subsurface term on them, so the
+    // liner stays near-black.
+    expect(chunk.match(/\* \(1\.0 - phCard\);/g)).toHaveLength(2);
     const html = viewerHtml();
     const inject = sliceBetween(
       html,
