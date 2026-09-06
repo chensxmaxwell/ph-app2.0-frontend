@@ -439,7 +439,7 @@
     });
     hairMats.forEach(function (mat) {
       mat.color.copy(hair);
-      mat.roughness = 0.42 + age * 0.12;
+      mat.roughness = HAIR_ROUGHNESS + age * 0.12;
       mat.needsUpdate = true;
     });
     var iris = hexColor(EYE_COLORS[next.eyeColor] || EYE_COLORS[0]);
@@ -522,6 +522,14 @@
   // reference. Opening the corner does not open the aperture, so it cannot
   // bring the stare back.
   var OUTER_CORNER_LIFT = 0.9;
+
+  // Hair gloss. At 0.42 (+ 0.12 * age) the pink rim light's specular blew
+  // the crown cards out to a white-pink fringe along the top of the hair
+  // (TF 1.2.21 bust; measured with the lights toggled one at a time: 5,300
+  // near-white pixels in a 4x crop, 0 with the rim off, 0 at roughness 0.6).
+  // The hair map's lighter strands carry the sheen; the material only needs
+  // enough gloss to read as hair, not glass.
+  var HAIR_ROUGHNESS = 0.58;
 
   // Brow colour from the hair colour: darker than the hair, never lighter
   // than a mid brown, so blonde hair gets defined brows instead of tan slabs.
@@ -1400,7 +1408,7 @@
                 skinMats.push(swapped);
               } else if (matLabel.indexOf("MAT_Hair") === 0) {
                 mat.skinning = skinned;
-                mat.roughness = 0.42;
+                mat.roughness = HAIR_ROUGHNESS;
                 mat.metalness = 0.04;
                 mat.transparent = true;
                 mat.alphaTest = 0.35;
@@ -1698,6 +1706,7 @@
     BROW_INK: BROW_INK,
     LASH_LENGTH: LASH_LENGTH,
     OUTER_CORNER_LIFT: OUTER_CORNER_LIFT,
+    HAIR_ROUGHNESS: HAIR_ROUGHNESS,
     SCULPT_GAIN: SCULPT_GAIN,
     SCULPT_MORPHS: SCULPT_MORPHS,
     sculptMorphs: sculptMorphs,

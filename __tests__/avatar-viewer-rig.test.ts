@@ -88,6 +88,7 @@ type ViewerRig = {
   BROW_INK: number;
   LASH_LENGTH: number;
   OUTER_CORNER_LIFT: number;
+  HAIR_ROUGHNESS: number;
   SCULPT_GAIN: {
     squareness: { low: number; high: number };
     stern: { low: number; high: number };
@@ -2042,5 +2043,26 @@ describe("face sculpt", () => {
     expect(load).toMatch(
       /pruneToShapes\(obj\);\s*if \(obj\.morphTargetInfluences\.length\) \{\s*maskEyeRegion\(obj\);\s*morphMeshes\.push\(obj\);\s*\}/
     );
+  });
+});
+
+describe("hair", () => {
+  it("keeps the hair rough enough that the rim light cannot blow the crown out to white", () => {
+    // TF 1.2.21 bust: a white-pink fringe along the top of the hair. Measured
+    // in headless Chrome with the lights toggled one at a time, it is the
+    // pink rim light's specular highlight on the crown cards (5,300 near-white
+    // pixels in a 4x crop at roughness 0.42 + 0.12 * age; 0 with the rim
+    // off, 0 at roughness 0.6). The hair map's lighter strands carry the
+    // gloss now; the material starts at 0.58 and ages toward 0.70.
+    expect(rig.HAIR_ROUGHNESS).toBeGreaterThanOrEqual(0.58);
+    expect(rig.HAIR_ROUGHNESS).toBeLessThanOrEqual(0.62);
+    const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+    const tint = html.slice(
+      html.indexOf("function tintLook("),
+      html.indexOf("function canvasTexture(")
+    );
+    expect(tint).toMatch(/mat\.roughness = HAIR_ROUGHNESS \+ age \* 0\.12;/);
+    expect(html).not.toMatch(/mat\.roughness = 0\.42 \+ age \* 0\.12/);
+    expect(html).not.toMatch(/mat\.roughness = 0\.42;/);
   });
 });

@@ -30,7 +30,8 @@
  * head / neck seam must show no background through it (three r128 applied
  * only the eight strongest morph influences, so Head_0 dropped the
  * body-shared ones Body_Neck applied and a 2 mm ring opened - the viewer
- * now bakes the morphs on the CPU), and Face / Jaw / Chin at 0 vs 1 must move the
+ * now bakes the morphs on the CPU), the hair crown must not blow out to
+ * white under the rim light, and Face / Jaw / Chin at 0 vs 1 must move the
  * silhouette by a readable number of CSS px (phViewerState().face) while the
  * eye's iris exposure stays where the Eyes tab put it (maskEyeRegion). The
  * crops (craft-*.png) are the review collage for those sliders.
@@ -1051,6 +1052,16 @@ const SEAM_BAND = { top: 105, height: 40, halfWidth: 22 };
 // dropped the body-shared ones Body_Neck applied) the ring measured ~80 CSS
 // px^2 in this band; a closed seam measures 0.
 const MAX_SEAM_CRACK_PX2 = 3;
+// The crown of the hair in the bust: a band from 165 to 115 px above the eye
+// line. TF 1.2.21 showed a white-pink fringe along the top of the hair - the
+// rim light's specular on the crown cards at hair roughness 0.42 (about 330
+// CSS px^2 of near-white on the brown default); at 0.58 it measures 0.
+const CROWN_BAND = { top: 165, height: 50, halfWidth: 70 };
+const MAX_CROWN_BLOWOUT_PX2 = 6;
+const isNearWhite = (R, G, B) =>
+  !isCraftBg(R, G, B) &&
+  0.299 * R + 0.587 * G + 0.114 * B >= 215 &&
+  Math.max(R, G, B) - Math.min(R, G, B) < 60;
 // Face / Jaw / Chin at 0 vs 1, read from phViewerState().face (Head_0's
 // skinned, morph-baked vertices against the eye line) and reported in CSS px
 // at the bust camera (about 1 px per mm), read in the rest pose so the parked
@@ -1150,6 +1161,29 @@ const craftPass = async (cdp, session) => {
       `${tag} closed: no background showing through between Head_0 and Body_Neck (<= ${MAX_SEAM_CRACK_PX2} CSS px^2)`,
       cracksCss2 <= MAX_SEAM_CRACK_PX2,
       `${cracksCss2.toFixed(1)} CSS px^2 of background in the neck band`
+    );
+    // The hair crown on the same (brown-haired) look: brown hair cannot read
+    // near-white without a specular blow-out.
+    const crown = await capture(
+      {
+        x: cx - CROWN_BAND.halfWidth * S,
+        y: eyeY - CROWN_BAND.top * S,
+        width: 2 * CROWN_BAND.halfWidth * S,
+        height: CROWN_BAND.height * S,
+      },
+      "craft-hair-crown.png"
+    );
+    let blown = 0;
+    for (let y = 0; y < crown.height; y += 1) {
+      for (let x = 0; x < crown.width; x += 1) {
+        if (isNearWhite(...rgbAt(crown, x, y))) blown += 1;
+      }
+    }
+    const blownCss2 = blown / (S * S);
+    check(
+      `craft outfit2-bust: hair crown not blown out to white by the rim light (<= ${MAX_CROWN_BLOWOUT_PX2} CSS px^2 near-white)`,
+      blownCss2 <= MAX_CROWN_BLOWOUT_PX2,
+      `${blownCss2.toFixed(1)} CSS px^2 near-white along the crown`
     );
   }
 
