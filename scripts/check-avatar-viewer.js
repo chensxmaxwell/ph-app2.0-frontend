@@ -623,7 +623,13 @@ const irisRowCentre = (png, cx, cy, rIris) => {
       while (cls(x + 1, y) === "iris") x += 1;
       const len = x - x0 + 1;
       const mid = (x0 + x + 1) / 2;
+      // The iris's own rows end in sclera on both sides; a run that ends
+      // in skin is the lid (its shaded margin is as dark as the iris) or the
+      // hair beside the temple.
+      const boundedBySclera =
+        cls(x0 - 1, y) === "sclera" && cls(x + 1, y) === "sclera";
       if (
+        boundedBySclera &&
         len >= 1.2 * rIris &&
         len <= 2.3 * rIris &&
         Math.abs(mid - cx) <= 0.5 * rIris &&
@@ -878,8 +884,14 @@ const measureBothEyes = async (
       ? eye.irisOffsetPx.map((v) => v / (scaleX * PIXEL_SCALE))
       : null;
     eyes.push(eye);
-    if (bone === "eyeRoot_l" && saveLeftTo) {
-      fs.writeFileSync(saveLeftTo, Buffer.from(shot.data, "base64"));
+    if (saveLeftTo) {
+      // The left eye keeps the historical file name; the right eye goes next
+      // to it (`-right.png`) so a one-eyed probe failure can be inspected.
+      const file =
+        bone === "eyeRoot_l"
+          ? saveLeftTo
+          : saveLeftTo.replace(/\.png$/, "-right.png");
+      fs.writeFileSync(file, Buffer.from(shot.data, "base64"));
     }
   }
   if (eyes.length !== 2) return { eyes, avg: null };
