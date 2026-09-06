@@ -2553,6 +2553,83 @@ describe("soft semi-real default look", () => {
     );
   });
 
+  it("the headless check anchors its pupil probe on the rendered iris row, not on the projected bone", () => {
+    // Measured on every pixel-pass crop since #36: the painted iris renders
+    // ~0.2 eyeball radii below the bone's projection at the bust camera, so
+    // a probe centred on the bone reads the lid margin as the pupil top and
+    // only passed while that skin was dark under the blue fill. The check
+    // now finds the iris's widest visible row (bounded by sclera, 1.2-2.3
+    // iris radii long) and probes the pupil top above its midpoint; a lid
+    // that has come down over the pupil still fails because the window
+    // above that centre is then skin.
+    const script = fs.readFileSync(
+      path.join(ROOT, "scripts", "check-avatar-viewer.js"),
+      "utf8"
+    );
+    const source = script.slice(
+      script.indexOf("const classifyPixel = "),
+      script.indexOf("const measureEye = ")
+    );
+    const sandbox: Record<string, unknown> = {};
+    vm.createContext(sandbox);
+    vm.runInContext(
+      `${source}\nthis.irisRowCentre = irisRowCentre; this.classifyPixel = classifyPixel;`,
+      sandbox
+    );
+    const irisRowCentre = sandbox.irisRowCentre as (
+      png: { width: number; height: number; data: number[] },
+      cx: number,
+      cy: number,
+      rIris: number
+    ) => { x: number; y: number; len: number } | null;
+    // A synthetic eye: skin everywhere, a sclera band, a dark iris disc of
+    // radius 12 whose centre sits 6 px below the analytic centre, a lid
+    // (skin) covering the top 4 rows of the iris, and a liner row of dark
+    // pixels running the whole width just above the lid.
+    const W = 80;
+    const H = 80;
+    const data = new Array<number>(W * H * 4).fill(255);
+    const put = (x: number, y: number, rgb: [number, number, number]) => {
+      const i = (y * W + x) * 4;
+      data[i] = rgb[0];
+      data[i + 1] = rgb[1];
+      data[i + 2] = rgb[2];
+      data[i + 3] = 255;
+    };
+    const skin: [number, number, number] = [200, 150, 120];
+    const scleraRgb: [number, number, number] = [230, 228, 225];
+    const irisRgb: [number, number, number] = [60, 40, 30];
+    const cx = 40;
+    const cy = 34;
+    const irisCy = cy + 6;
+    const rIris = 12;
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < W; x += 1) {
+        put(x, y, skin);
+        const inAperture = Math.abs(y - irisCy) < 16 && Math.abs(x - cx) < 30;
+        if (inAperture) put(x, y, scleraRgb);
+        if (Math.hypot(x + 0.5 - cx, y + 0.5 - irisCy) <= rIris) put(x, y, irisRgb);
+        if (y <= irisCy - rIris + 4) put(x, y, skin);
+        if (y === irisCy - rIris + 3) put(x, y, [20, 15, 15]);
+      }
+    }
+    const found = irisRowCentre({ width: W, height: H, data }, cx, cy, rIris);
+    expect(found).not.toBeNull();
+    // Widest row is the iris centre row (the lid covers only the top third).
+    expect(Math.abs((found as { y: number }).y - irisCy)).toBeLessThanOrEqual(1);
+    expect(Math.abs((found as { x: number }).x - cx)).toBeLessThanOrEqual(1);
+    expect((found as { len: number }).len).toBeGreaterThanOrEqual(2 * rIris - 2);
+    // Without an iris there is nothing to anchor on.
+    const blank = new Array<number>(W * H * 4).fill(255);
+    expect(
+      irisRowCentre({ width: W, height: H, data: blank }, cx, cy, rIris)
+    ).toBeNull();
+    // And the probe in measureEye is taken from that point.
+    expect(script).toMatch(/const irisAt = irisRowCentre\(png, cx, cy, rIris\);/);
+    expect(script).toMatch(/const pdx = x \+ 0\.5 - pcx;/);
+    expect(script).toMatch(/pdy > -rPupil \* 0\.85 &&\s*pdy < -rPupil \* 0\.45/);
+  });
+
   it("keeps the headless check's PRESETS table equal to CHARACTER_PRESETS", () => {
     const script = fs.readFileSync(
       path.join(ROOT, "scripts", "check-avatar-viewer.js"),

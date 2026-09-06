@@ -21,7 +21,8 @@
  * the default eye must not be a pinprick at the Outfit camera (iris and
  * opening in CSS px), and the reference-pass feel must be on the render: the
  * inked lash card is on the render round the eye, the limbal ring is darker
- * than the mid iris, one hard glint sits on the iris, and Head_0's lash /
+ * than the mid iris, one small glint sits on the iris (Style C: a wet soft
+ * highlight, never a blob), and Head_0's lash /
  * outer-corner morphs carry the look's weights. It also writes the full frame
  * per Size and camera (pixels-outfit2-<view>-size<n>-frame.png) for review
  * collages.
@@ -571,6 +572,77 @@ const pixelsOf = async (cdp, session, pngBase64) =>
 // tone, lum >= 124 in these renders while the brown iris's light inner ring
 // tops out near 100; anything else inside the iris disc (iris, pupil,
 // catchlight, lash line on the margin) counts as visible iris.
+const classifyPixel = (data, i) => {
+  const R = data[i];
+  const G = data[i + 1];
+  const B = data[i + 2];
+  const mx = Math.max(R, G, B);
+  const mn = Math.min(R, G, B);
+  const lum = 0.299 * R + 0.587 * G + 0.114 * B;
+  const neutral = mx - mn < 24;
+  if (neutral && lum > 120) return "sclera";
+  if (!neutral && R > B + 30 && lum >= 112) return "skin";
+  return "iris";
+};
+
+// Where the iris actually is on the render: the midpoint of its widest
+// visible row (a run of non-skin, non-sclera pixels bounded by sclera, 1.2-2.3
+// iris radii long, within half an iris radius of the analytic centre). The
+// projected eye-bone centre is not that point: measured on every run since
+// #36 the painted iris sits 0.2 eyeball radii (10-13 px at 3x, 3.5-4.5 CSS
+// px) *below* the bone's projection at the bust camera, in every Size and
+// sway phase, so a probe centred on the bone reads the lid margin as the
+// pupil top (and passed only while that skin was dark under the old blue
+// fill). The widest row is the centre row as long as the lid covers less
+// than half the iris, which the locked lid guarantees; the liner's rows run
+// the whole lid and fall out on length. Null when no such run exists.
+const irisRowCentre = (png, cx, cy, rIris) => {
+  const { width, height, data } = png;
+  const cls = (x, y) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return "out";
+    return classifyPixel(data, (y * width + x) * 4);
+  };
+  // Every row's longest qualifying run; the answer is the middle of the band
+  // of rows that share the greatest length (a rasterised disc is widest over
+  // several rows).
+  const rows = [];
+  const yFrom = Math.floor(cy - 1.2 * rIris);
+  const yTo = Math.ceil(cy + 1.2 * rIris);
+  const xFrom = Math.floor(cx - 1.6 * rIris);
+  const xTo = Math.ceil(cx + 1.6 * rIris);
+  for (let y = yFrom; y <= yTo; y += 1) {
+    if (Math.abs(y + 0.5 - cy) > 0.6 * rIris) continue;
+    let rowBest = null;
+    let x = xFrom;
+    while (x <= xTo) {
+      if (cls(x, y) !== "iris") {
+        x += 1;
+        continue;
+      }
+      const x0 = x;
+      while (cls(x + 1, y) === "iris") x += 1;
+      const len = x - x0 + 1;
+      const mid = (x0 + x + 1) / 2;
+      if (
+        len >= 1.2 * rIris &&
+        len <= 2.3 * rIris &&
+        Math.abs(mid - cx) <= 0.5 * rIris &&
+        (!rowBest || len > rowBest.len)
+      ) {
+        rowBest = { len, x: mid, y: y + 0.5 };
+      }
+      x += 1;
+    }
+    if (rowBest) rows.push(rowBest);
+  }
+  if (!rows.length) return null;
+  const maxLen = Math.max(...rows.map((row) => row.len));
+  const widest = rows.filter((row) => row.len >= maxLen - 1);
+  const mean = (key) =>
+    widest.reduce((sum, row) => sum + row[key], 0) / widest.length;
+  return { len: maxLen, x: mean("x"), y: mean("y") };
+};
+
 const measureEye = (png, cx, cy, r, rIris, rPupil) => {
   const { width, height, data } = png;
   let sclera = 0;
@@ -579,6 +651,12 @@ const measureEye = (png, cx, cy, r, rIris, rPupil) => {
   let pupilTopSamples = 0;
   let inkOutside = 0;
   let inkOverIris = 0;
+  // The pupil probe is anchored on the rendered iris, not the bone (see
+  // irisRowCentre); the area metrics keep the analytic centre their bands
+  // were calibrated against.
+  const irisAt = irisRowCentre(png, cx, cy, rIris);
+  const pcx = irisAt ? irisAt.x : cx;
+  const pcy = irisAt ? irisAt.y : cy;
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const dx = x + 0.5 - cx;
@@ -607,23 +685,26 @@ const measureEye = (png, cx, cy, r, rIris, rPupil) => {
           irisVisible += 1;
           if (isInk && dy < 0) inkOverIris += 1;
         }
-        // The upper part of the pupil on the centre line must still be
-        // pupil (dark): the lid has not come down over the pupil. The
-        // catchlight (its core and its soft edge) sits on the pupil's
-        // upper-right edge and the fill light's clearcoat reflection on the
-        // upper-left; both are neutral grey-to-white, the lid is warm skin,
-        // so neutral pixels above the pupil's own luminance are left out.
-        if (
-          Math.abs(dx) <= 0.1 * r &&
-          dy > -rPupil * 0.85 &&
-          dy < -rPupil * 0.45 &&
-          !(neutral && lum >= 90)
-        ) {
-          pupilTopSamples += 1;
-          if (lum < 90) pupilTopDark += 1;
-        }
       } else if (isSclera) {
         sclera += 1;
+      }
+      // The upper part of the pupil on the centre line must still be
+      // pupil (dark): the lid has not come down over the pupil. Measured
+      // from the rendered iris centre (pcx / pcy). The catchlight (its core
+      // and its soft edge) sits on the pupil's upper-right edge and the fill
+      // light's clearcoat reflection on the upper-left; both are neutral
+      // grey-to-white, the lid is warm skin, so neutral pixels above the
+      // pupil's own luminance are left out.
+      const pdx = x + 0.5 - pcx;
+      const pdy = y + 0.5 - pcy;
+      if (
+        Math.abs(pdx) <= 0.1 * r &&
+        pdy > -rPupil * 0.85 &&
+        pdy < -rPupil * 0.45 &&
+        !(neutral && lum >= 90)
+      ) {
+        pupilTopSamples += 1;
+        if (lum < 90) pupilTopDark += 1;
       }
     }
   }
@@ -685,6 +766,9 @@ const measureEye = (png, cx, cy, r, rIris, rPupil) => {
     linerShare: inkOutside / (r * r),
     rimOverMid: rimLum / Math.max(1, midLum),
     glintShare: glintPx / Math.max(1, discPx),
+    // Rendered iris centre relative to the projected bone, render px (the
+    // caller divides by PIXEL_SCALE); null when the iris row was not found.
+    irisOffsetPx: irisAt ? [pcx - cx, pcy - cy] : null,
     // A pupil under ~4 px (the full-body eye at Size 0) has a 2-pixel sample
     // window that antialiasing decides; the lid position is camera-independent
     // (see the parity checks), so the bust view carries this assertion.
@@ -790,6 +874,9 @@ const measureBothEyes = async (
     eye.irisDiameterCss = (2 * rIris) / PIXEL_SCALE;
     eye.openingCss2 =
       eye.openingPx / (scaleX * scaleY * PIXEL_SCALE * PIXEL_SCALE);
+    eye.irisOffsetCss = eye.irisOffsetPx
+      ? eye.irisOffsetPx.map((v) => v / (scaleX * PIXEL_SCALE))
+      : null;
     eyes.push(eye);
     if (bone === "eyeRoot_l" && saveLeftTo) {
       fs.writeFileSync(saveLeftTo, Buffer.from(shot.data, "base64"));
@@ -809,6 +896,11 @@ const measureBothEyes = async (
       linerShare: mean("linerShare"),
       rimOverMid: mean("rimOverMid"),
       glintShare: mean("glintShare"),
+      irisOffsetCss: eyes.every((eye) => eye.irisOffsetCss)
+        ? [0, 1].map(
+            (k) => (eyes[0].irisOffsetCss[k] + eyes[1].irisOffsetCss[k]) / 2
+          )
+        : null,
       pupilClear: measurable ? eyes[0].pupilClear && eyes[1].pupilClear : null,
     },
   };
@@ -892,7 +984,19 @@ const pixelPass = async (cdp, session) => {
           3
         )} r^2, rim/mid ${avg.rimOverMid.toFixed(2)}, glint ${(
           avg.glintShare * 100
-        ).toFixed(1)}%`
+        ).toFixed(1)}%, rendered iris ${
+          avg.irisOffsetCss
+            ? `${avg.irisOffsetCss[0] >= 0 ? "+" : ""}${avg.irisOffsetCss[0].toFixed(
+                1
+              )} / ${avg.irisOffsetCss[1] >= 0 ? "+" : ""}${avg.irisOffsetCss[1].toFixed(
+                1
+              )} CSS px off the bone`
+            : "not found in the pixels"
+        }`
+      );
+      check(
+        `${tag}: rendered iris found in the pixels for the pupil probe`,
+        !!avg.irisOffsetCss
       );
       // The reference pass: lashes lengthened and outer corners lifted on
       // every look (read back from Head_0's morph influences).

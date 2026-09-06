@@ -932,7 +932,7 @@
   // uniform (0 when the iris is under ~6 px on screen, 1 above ~14 px) so
   // the full-body eye does not shimmer under the idle sway. `glow` lifts the
   // iris unlit so a blue eye reads lit from within, as in the reference.
-  var IRIS_LOOK = { rimStart: 0.7, rimMix: 0.85, rimTone: 0.22, fibreStrength: 0.8, glow: 0.14, innerGain: 2.0 };
+  var IRIS_LOOK = { rimStart: 0.7, rimMix: 0.85, rimTone: 0.2, fibreStrength: 0.8, glow: 0.14, innerGain: 2.0 };
   // TestFlight 1.2 (13): with the lids, gaze and 0.31 iris above, Maxwell
   // still read the eyes as too big - the whole eye, not the pupil. Eyes_0 is
   // two 22.2mm-radius spheres (44mm across on a 26cm head; a real eye is
@@ -1085,8 +1085,13 @@
     mat.color.setRGB(1, 1, 1);
     mat.roughness = 0.3;
     mat.metalness = 0;
-    mat.clearcoat = 0.45;
-    mat.clearcoatRoughness = 0.2;
+    // Style C: the wet look is the painted wet line and catchlight; the
+    // clearcoat only carries a soft environment sheen. At 0.45 / 0.2 the
+    // fill light's reflection sat on the pupil's upper-left as a warm blob
+    // (the "light spot" of #36-#41) and, with the warm Style C fill, lit the
+    // top of the Size 0 pupil past the lid probe.
+    mat.clearcoat = 0.3;
+    mat.clearcoatRoughness = 0.32;
     // The lavender sky in makeEnvMap tinted the sclera blue-grey; keep just
     // enough reflection for a wet look.
     mat.envMapIntensity = 0.05;
