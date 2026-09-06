@@ -4,7 +4,11 @@ import vm from "vm";
 import { beforeAll, describe, expect, it } from "@jest/globals";
 import {
   CHARACTER_PRESETS,
+  DEFAULT_LOOK,
+  EYE_COLORS,
+  HAIR_COLORS,
   HAIR_STYLE_COUNT,
+  SKIN_COLORS,
 } from "../src/screens/avatar/engine/viewer-html";
 
 /**
@@ -89,6 +93,56 @@ type ViewerRig = {
   LASH_LENGTH: number;
   OUTER_CORNER_LIFT: number;
   HAIR_ROUGHNESS: number;
+  HAIR_COLORS: string[];
+  SKIN_COLORS: string[];
+  EYE_COLORS: string[];
+  LIGHT_RIG: {
+    exposure: number;
+    hemisphere: { sky: number; ground: number; intensity: number };
+    key: { color: number; intensity: number; position: Vec3 };
+    fill: { color: number; intensity: number; position: Vec3 };
+    rim: { color: number; intensity: number; position: Vec3 };
+    env: { sky: number; floor: number; warm: number };
+  };
+  SKIN_LOOK: {
+    roughness: number;
+    ageRoughness: number;
+    clearcoat: number;
+    clearcoatRoughness: number;
+    envMapIntensity: number;
+    sssTint: [number, number, number];
+    sssHead: number;
+    sssBody: number;
+    shadowWarm: [number, number, number];
+    shadowLift: number;
+    poreRoughness: number;
+    poreAlbedo: number;
+    cardRoughness: number;
+  };
+  LIP_PAINT: {
+    color: [number, number, number];
+    mix: number;
+    line: [number, number, number];
+    lineMix: number;
+    gloss: number;
+  };
+  CHEEK_PAINT: { color: [number, number, number]; mix: number };
+  BROW_SKIN_INK: number;
+  BROW_THICKNESS: number;
+  LASH_CLUSTER: { count: number; tipThin: number };
+  WETLINE: { from: number; peak: number; to: number; strength: number };
+  HAIR_LOOK: {
+    edgeFade: [number, number];
+    strandFrequency: number;
+    strandDepth: number;
+    stripMean: number;
+    stripContrast: number;
+    metalness: number;
+    envMapIntensity: number;
+    alphaTest: number;
+  };
+  hairShaderChunk: () => string;
+  skinDetailChunk: () => string;
   SCULPT_CAPS: { squareness: number; stern: number; sharpness: number };
   SCULPT_MORPHS: string[];
   sculptMorphs: (
@@ -692,17 +746,19 @@ describe("eyes", () => {
     expect(chunk).toMatch(/float spec = smoothstep\([^)]*dot\(ballN,/);
     expect(chunk).not.toMatch(/float spec = smoothstep\([^)]*dot\(vn,/);
     const { lo, hi, mix, mix2 } = rig.CATCHLIGHT;
-    // cos(9deg) = 0.9877: the spot's soft edge starts inside 9deg.
-    expect(lo).toBeGreaterThanOrEqual(0.987);
+    // cos(10deg) = 0.9848: the spot's soft edge starts inside 10deg.
+    expect(lo).toBeGreaterThanOrEqual(0.985);
     expect(hi).toBeGreaterThan(lo);
     expect(hi).toBeLessThan(1);
-    // The reference pass: a hard glassy glint - the edge spans at most 0.005
-    // in cos (about 2deg) and the spot is 86-92% white; #36's 0.8 / 4deg edge
-    // read as a haze. Never the 1.2 (12) 92%-white 12deg blob: the footprint
-    // stays inside 9deg above.
-    expect(hi - lo).toBeLessThanOrEqual(0.005 + 1e-9);
-    expect(mix).toBeLessThanOrEqual(0.92);
-    expect(mix).toBeGreaterThanOrEqual(0.86);
+    // Style C (soft semi-real): a small *wet* highlight, not the reference
+    // pass's hard glassy glint and never the 1.2 (12) 92%-white 12deg blob.
+    // The white core is under 6deg (cos 0.9945) with a soft edge of 0.006-
+    // 0.012 in cos (about 3-4deg of falloff), mixed 78-88% white.
+    expect(hi).toBeGreaterThanOrEqual(0.9945);
+    expect(hi - lo).toBeGreaterThanOrEqual(0.006 - 1e-9);
+    expect(hi - lo).toBeLessThanOrEqual(0.012 + 1e-9);
+    expect(mix).toBeLessThanOrEqual(0.88);
+    expect(mix).toBeGreaterThanOrEqual(0.78);
     // Soft secondary glint low on the other side, clearly weaker.
     expect(mix2).toBeGreaterThanOrEqual(0.15);
     expect(mix2).toBeLessThanOrEqual(0.35);
@@ -857,7 +913,7 @@ describe("eyes", () => {
         )});`
       );
       expect(chunk).toContain(
-        `lashCard * ${rig.LASH_INK.density.toFixed(2)});`
+        `lashCard * ${rig.LASH_INK.density.toFixed(2)} * lashInk);`
       );
       // Liner: dark, warm, dense.
       for (const channel of rig.LASH_INK.color) {
@@ -874,7 +930,7 @@ describe("eyes", () => {
       // the ink, so the cards are painted last.
       expect(chunk.indexOf("float lip = ")).toBeGreaterThanOrEqual(0);
       expect(chunk.indexOf("float lashCard = ")).toBeGreaterThan(
-        chunk.indexOf("max(cL, cR) * 0.12")
+        chunk.indexOf(`max(cL, cR) * ${rig.CHEEK_PAINT.mix.toFixed(2)}`)
       );
       // Only the head material (wrap < 0.1) gets the chunk and the uniform;
       // the body skin material keeps its shader.
@@ -2065,5 +2121,384 @@ describe("hair", () => {
     expect(tint).toMatch(/mat\.roughness = HAIR_ROUGHNESS \+ age \* 0\.12;/);
     expect(html).not.toMatch(/mat\.roughness = 0\.42 \+ age \* 0\.12/);
     expect(html).not.toMatch(/mat\.roughness = 0\.42;/);
+  });
+});
+
+// Style C - Soft Semi-Real Intimate (Maxwell, 2026-09-06): the default face,
+// eye finish, skin and hair move off the "clay placeholder" of the #41 bust
+// toward the style board (soft key, gentle warm bounce, weak rim; skin with
+// a subsurface-warm terminator and a soft specular; natural lips; strand
+// cards; a wet small catchlight). The eye *band* is locked and untouched.
+describe("soft semi-real default look", () => {
+  const hexToRgb = (hex: number) => [
+    (hex >> 16) & 255,
+    (hex >> 8) & 255,
+    hex & 255,
+  ];
+  const viewerHtml = () => fs.readFileSync(VIEWER_SOURCE, "utf8");
+  const sliceBetween = (html: string, from: string, to: string) =>
+    html.slice(html.indexOf(from), html.indexOf(to));
+
+  it("keeps the locked eye band exactly: 0.74 / 0.85 / 0.96, lid 0.29 -> 0.21, iris share 1.10 -> 1.0, gaze clamp", () => {
+    expect(rig.EYE_SCALE_MIN).toBe(0.74);
+    expect(rig.EYE_SCALE).toBe(rig.eyeScaleFor(0.5));
+    expect(rig.EYE_SCALE).toBeCloseTo(0.85, 9);
+    expect(rig.EYE_SCALE_MAX).toBe(0.96);
+    expect(rig.UPPER_LID_DROP).toBe(0.29);
+    expect(rig.UPPER_LID_DROP_LARGE).toBe(0.21);
+    expect(rig.IRIS_SIZE_SMALL).toBe(1.1);
+    expect(rig.IRIS_SIZE_LARGE).toBe(1);
+    expect(rig.IRIS_RADIUS).toBe(0.31);
+    expect(rig.PUPIL_RADIUS).toBe(0.115);
+    expect(rig.MAX_GAZE_ANGLE).toBe(0.24);
+    // The feel pack's morph weights and ink windows are still written in.
+    expect(rig.LASH_LENGTH).toBe(0.8);
+    expect(rig.OUTER_CORNER_LIFT).toBe(0.9);
+    expect(rig.LASH_INK.density).toBeGreaterThanOrEqual(0.85);
+    // The lid covers 10-20% of the iris at the default Size (0.25 -> ~16%).
+    expect(rig.upperLidDrop(0.5)).toBeGreaterThanOrEqual(0.21);
+    expect(rig.upperLidDrop(0.5)).toBeLessThanOrEqual(0.28);
+  });
+
+  it("lights the bust soft and warm: a warm key strongest, a warm (not blue) fill bounce, a weak rim, warm hemisphere ground", () => {
+    const light = rig.LIGHT_RIG;
+    const [kr, , kb] = hexToRgb(light.key.color);
+    const [fr, , fb] = hexToRgb(light.fill.color);
+    const [rr, , rb] = hexToRgb(light.rim.color);
+    const [gr, , gb] = hexToRgb(light.hemisphere.ground);
+    // The #41 fill was 0x9eb0d4 at 0.4 - a blue-grey bounce that turned the
+    // shadow side of the face into clay - and the hemisphere ground was
+    // purple (0x2a2036). Every light in the Style C rig is warm.
+    expect(fr).toBeGreaterThanOrEqual(fb);
+    expect(kr).toBeGreaterThan(kb);
+    expect(rr).toBeGreaterThan(rb);
+    expect(gr).toBeGreaterThan(gb);
+    expect(light.key.intensity).toBeGreaterThan(light.fill.intensity);
+    expect(light.key.intensity).toBeGreaterThan(light.rim.intensity);
+    // Key soft: not the 1.25 spot of #41, still the main light.
+    expect(light.key.intensity).toBeGreaterThanOrEqual(0.9);
+    expect(light.key.intensity).toBeLessThanOrEqual(1.15);
+    // Gentle fill: 35-55% of the key.
+    expect(light.fill.intensity / light.key.intensity).toBeGreaterThanOrEqual(
+      0.35
+    );
+    expect(light.fill.intensity / light.key.intensity).toBeLessThanOrEqual(
+      0.55
+    );
+    // Weak rim (the #41 pink rim ran 0.7 and blew the hair crown out).
+    expect(light.rim.intensity).toBeLessThanOrEqual(0.4);
+    expect(light.rim.intensity).toBeGreaterThan(0);
+    // Key from above and in front (camera side), fill from the other side.
+    expect(light.key.position[1]).toBeGreaterThan(1);
+    expect(light.key.position[2]).toBeGreaterThan(0);
+    expect(Math.sign(light.fill.position[0])).toBe(
+      -Math.sign(light.key.position[0])
+    );
+    expect(light.rim.position[2]).toBeLessThan(0);
+    // The env sky is no longer lavender (0xcbbdd8 tinted the sclera and skin).
+    const [er, , eb] = hexToRgb(light.env.sky);
+    expect(er).toBeGreaterThanOrEqual(eb);
+    expect(light.exposure).toBeGreaterThanOrEqual(1);
+    expect(light.exposure).toBeLessThanOrEqual(1.15);
+    // And the scene is built from this table, not from literals.
+    const boot = sliceBetween(
+      viewerHtml(),
+      "renderer.setClearColor(0x000000, 0);",
+      "addGroundContact();"
+    );
+    expect(boot).toMatch(
+      /new THREE\.HemisphereLight\(LIGHT_RIG\.hemisphere\.sky, LIGHT_RIG\.hemisphere\.ground, LIGHT_RIG\.hemisphere\.intensity\)/
+    );
+    expect(boot).toMatch(/directional\(LIGHT_RIG\.key\)/);
+    expect(boot).toMatch(/directional\(LIGHT_RIG\.fill\)/);
+    expect(boot).toMatch(/directional\(LIGHT_RIG\.rim\)/);
+    expect(boot).toMatch(/renderer\.toneMappingExposure = LIGHT_RIG\.exposure;/);
+    expect(boot).not.toMatch(/0x9eb0d4/);
+    const env = sliceBetween(viewerHtml(), "function makeEnvMap(", "// Head_0 carries");
+    expect(env).toMatch(/color: LIGHT_RIG\.env\.sky, side: THREE\.BackSide/);
+    expect(env).toMatch(/color: LIGHT_RIG\.env\.floor/);
+    expect(env).not.toMatch(/0xcbbdd8/);
+  });
+
+  it("shades skin as skin: subsurface-warm terminator and warm shadow lift on the key light, a soft specular, pores in the roughness", () => {
+    const skin = rig.SKIN_LOOK;
+    // Matte-but-not-plastic dielectric with a thin oily clearcoat.
+    expect(skin.roughness).toBeGreaterThanOrEqual(0.48);
+    expect(skin.roughness).toBeLessThanOrEqual(0.58);
+    expect(skin.clearcoat).toBeGreaterThanOrEqual(0.1);
+    expect(skin.clearcoat).toBeLessThanOrEqual(0.25);
+    expect(skin.clearcoatRoughness).toBeGreaterThanOrEqual(0.4);
+    expect(skin.clearcoatRoughness).toBeLessThanOrEqual(0.65);
+    // The SSS approximation is red-dominant and lands on head and body.
+    expect(skin.sssTint[0]).toBeGreaterThan(skin.sssTint[1]);
+    expect(skin.sssTint[1]).toBeGreaterThanOrEqual(skin.sssTint[2]);
+    expect(skin.sssHead).toBeGreaterThan(0.15);
+    expect(skin.sssHead).toBeLessThanOrEqual(0.6);
+    expect(skin.sssBody).toBeGreaterThan(0.1);
+    expect(skin.shadowWarm[0]).toBeGreaterThan(skin.shadowWarm[2]);
+    expect(skin.shadowLift).toBeGreaterThan(0.05);
+    expect(skin.shadowLift).toBeLessThanOrEqual(0.3);
+    // Subtle: pores modulate roughness by <= 0.12 and albedo by <= 4%.
+    expect(skin.poreRoughness).toBeGreaterThan(0);
+    expect(skin.poreRoughness).toBeLessThanOrEqual(0.12);
+    expect(skin.poreAlbedo).toBeGreaterThan(0);
+    expect(skin.poreAlbedo).toBeLessThanOrEqual(0.04);
+    const chunk = rig.skinDetailChunk();
+    // Wrap lighting against the key direction fed per frame (view space).
+    expect(chunk).toContain("keyDirView");
+    expect(chunk).toMatch(/float ndl = dot\(normal, keyDirView\);/);
+    expect(chunk).toContain(
+      `vec3(${skin.sssTint.map((v) => v.toFixed(2)).join(", ")})`
+    );
+    expect(chunk).toContain(
+      `vec3(${skin.shadowWarm.map((v) => v.toFixed(2)).join(", ")})`
+    );
+    expect(chunk).toContain("outgoingLight +=");
+    const html = viewerHtml();
+    const inject = sliceBetween(
+      html,
+      "function injectSkinWrap(",
+      "function upgradeSkinMat("
+    );
+    expect(inject).toMatch(/shader\.uniforms\.keyDirView = /);
+    expect(inject).toMatch(/uniform vec3 keyDirView;/);
+    expect(inject).toMatch(/#include <roughnessmap_fragment>\\n/);
+    expect(inject).toContain("skinDetailChunk(");
+    // Old fixed-direction wrap is gone.
+    expect(inject).not.toContain("vec3(0.15, 0.35, 0.92)");
+    const upgrade = sliceBetween(
+      html,
+      "function upgradeSkinMat(",
+      "// Eye shape and gaze"
+    );
+    expect(upgrade).toMatch(/mat\.roughness = SKIN_LOOK\.roughness;/);
+    expect(upgrade).toMatch(/mat\.clearcoat = SKIN_LOOK\.clearcoat;/);
+    expect(upgrade).toMatch(
+      /mat\.clearcoatRoughness = SKIN_LOOK\.clearcoatRoughness;/
+    );
+    // tintLook ages the roughness from the same table.
+    const tint = sliceBetween(html, "function tintLook(", "function canvasTexture(");
+    expect(tint).toMatch(
+      /mat\.roughness = SKIN_LOOK\.roughness \+ age \* SKIN_LOOK\.ageRoughness;/
+    );
+    // The frame loop feeds the key direction to every skin material.
+    const animateBody = sliceBetween(html, "function animate(", "function fail(");
+    expect(animateBody).toMatch(/updateKeyDirection\(\);/);
+  });
+
+  it("paints natural lips and a faint flush instead of the #41 mauve lipstick, and a thinner, deeper brow", () => {
+    const lip = rig.LIP_PAINT;
+    // Rose-nude: red-dominant, green and blue close (no purple), mixed at
+    // half or less so the skin shows through; a soft sheen via roughness.
+    expect(lip.color[0]).toBeGreaterThan(lip.color[1]);
+    expect(lip.color[1]).toBeGreaterThanOrEqual(lip.color[2] - 0.02);
+    expect(lip.color[0] - lip.color[1]).toBeLessThanOrEqual(0.42);
+    expect(lip.mix).toBeGreaterThanOrEqual(0.4);
+    expect(lip.mix).toBeLessThanOrEqual(0.58);
+    expect(lip.lineMix).toBeLessThan(0.48);
+    expect(lip.gloss).toBeGreaterThan(0);
+    expect(lip.gloss).toBeLessThanOrEqual(0.3);
+    const cheek = rig.CHEEK_PAINT;
+    expect(cheek.mix).toBeGreaterThanOrEqual(0.12);
+    expect(cheek.mix).toBeLessThanOrEqual(0.22);
+    expect(cheek.color[0]).toBeGreaterThan(cheek.color[1]);
+    const chunk = rig.headPaintChunk();
+    expect(chunk).toContain(
+      `vec3(${lip.color.map((v) => v.toFixed(2)).join(", ")}), lip * ${lip.mix.toFixed(2)}`
+    );
+    expect(chunk).toContain(
+      `vec3(${lip.line.map((v) => v.toFixed(2)).join(", ")}), lipLine * ${lip.lineMix.toFixed(2)}`
+    );
+    expect(chunk).toContain(
+      `vec3(${cheek.color.map((v) => v.toFixed(2)).join(", ")}), max(cL, cR) * ${cheek.mix.toFixed(2)}`
+    );
+    expect(chunk).not.toContain("vec3(0.70, 0.26, 0.30), lip * 0.62");
+    // The lip mask is kept for the roughness pass (soft sheen on the lips).
+    expect(chunk).toContain("float phLip = lip;");
+    expect(rig.skinDetailChunk()).toContain(
+      `phLip * ${lip.gloss.toFixed(2)}`
+    );
+    // The painted skin brow under the slab is softer than the 0.92 slab of
+    // #41 (the card ink carries the brow), and the slab is thinner.
+    expect(rig.BROW_SKIN_INK).toBeLessThanOrEqual(0.75);
+    expect(chunk).toContain(`max(bL, bR) * ${rig.BROW_SKIN_INK.toFixed(2)}`);
+    expect(rig.BROW_THICKNESS).toBeGreaterThanOrEqual(0.1);
+    expect(rig.BROW_THICKNESS).toBeLessThanOrEqual(0.24);
+    const meshLook = sliceBetween(
+      viewerHtml(),
+      "function applyMeshLook(",
+      "function prefixIndex("
+    );
+    expect(meshLook).toMatch(/"Shape_BrowsThickness", BROW_THICKNESS\)/);
+    expect(meshLook).not.toMatch(/"Shape_BrowsThickness", 0\.32\)/);
+    // Brow colour: darker than the hair and pulled toward a neutral dark so a
+    // chestnut head does not get orange slabs.
+    const brow = rig.browColorFor(new THREE.Color(0x55392a));
+    expect(brow.r).toBeLessThan(0.2);
+    expect(brow.r - brow.b).toBeLessThan(0.08);
+  });
+
+  it("clusters the lashes toward their tips and keeps the liner solid at the root", () => {
+    const cluster = rig.LASH_CLUSTER;
+    // Measured on the GLB: the upper lash card's root is at u ~0.146 and the
+    // Shape_LashLength tips move most at u ~0.143, so the card's u axis runs
+    // tip -> root; v runs along the lid (0.214-0.243). Clusters are a sine
+    // along v; the ink thins between them only toward the tip.
+    expect(cluster.count).toBeGreaterThanOrEqual(6);
+    expect(cluster.count).toBeLessThanOrEqual(16);
+    expect(cluster.tipThin).toBeGreaterThan(0.2);
+    expect(cluster.tipThin).toBeLessThanOrEqual(0.7);
+    const chunk = rig.headPaintChunk();
+    expect(chunk).toMatch(/float lashTip = 1\.0 - smoothstep\(/);
+    expect(chunk).toMatch(/float lashCluster = 0\.5 \+ 0\.5 \* sin\(fu\.y \* /);
+    expect(chunk).toContain(
+      `lashCard * ${rig.LASH_INK.density.toFixed(2)} * lashInk);`
+    );
+    expect(chunk).toMatch(
+      /float lashInk = mix\(1\.0, lashCluster, lashTip \* [0-9.]+\);/
+    );
+  });
+
+  it("adds a wet line along the lower lid on the eyeball, under the iris and never over the pupil", () => {
+    const wet = rig.WETLINE;
+    // p.y is up in the eyeball shader; the lower lid rests near -0.35, so the
+    // meniscus sits between -0.42 and -0.24 and peaks just above the lid.
+    expect(wet.from).toBeLessThan(wet.peak);
+    expect(wet.peak).toBeLessThan(wet.to);
+    expect(wet.from).toBeGreaterThanOrEqual(-0.48);
+    expect(wet.to).toBeLessThanOrEqual(-0.2);
+    // Subtle: never a second catchlight.
+    expect(wet.strength).toBeGreaterThan(0.1);
+    expect(wet.strength).toBeLessThanOrEqual(0.4);
+    const chunk = rig.irisFragmentChunk();
+    expect(chunk).toContain(
+      `float wet = smoothstep(${wet.from.toFixed(2)}, ${wet.peak.toFixed(
+        2
+      )}, p.y) * (1.0 - smoothstep(${wet.peak.toFixed(2)}, ${wet.to.toFixed(
+        2
+      )}, p.y));`
+    );
+    expect(chunk).toContain(`wet * ${wet.strength.toFixed(2)}`);
+    // The wet line is applied after the pupil so the pupil stays dark, and
+    // before the catchlights.
+    expect(chunk.indexOf("float wet = ")).toBeGreaterThan(
+      chunk.indexOf("col = mix(col, pupilCol, pupilM);")
+    );
+    expect(chunk.indexOf("float wet = ")).toBeLessThan(
+      chunk.indexOf("float spec = smoothstep(")
+    );
+  });
+
+  it("draws hair as strand cards: mirrored strip for the back mesh, strand streaks, a grazing-angle fade at the card edges, rough enough for no white fringe", () => {
+    const hair = rig.HAIR_LOOK;
+    // Roughness stays in the no-blow-out band from #41.
+    expect(rig.HAIR_ROUGHNESS).toBeGreaterThanOrEqual(0.58);
+    expect(rig.HAIR_ROUGHNESS).toBeLessThanOrEqual(0.62);
+    expect(hair.metalness).toBeLessThanOrEqual(0.05);
+    expect(hair.envMapIntensity).toBeLessThanOrEqual(0.1);
+    // Edge fade: cards seen within ~20deg of edge-on fade out.
+    expect(hair.edgeFade[0]).toBeGreaterThanOrEqual(0);
+    expect(hair.edgeFade[0]).toBeLessThan(hair.edgeFade[1]);
+    expect(hair.edgeFade[1]).toBeLessThanOrEqual(0.45);
+    // Strands: roughly 0.5-1.5 mm apart across a card (the strip spans u
+    // 0.5-0.75 for ~10-30 cm of card width), 10-35% deep.
+    expect(hair.strandFrequency).toBeGreaterThanOrEqual(400);
+    expect(hair.strandFrequency).toBeLessThanOrEqual(2000);
+    expect(hair.strandDepth).toBeGreaterThanOrEqual(0.1);
+    expect(hair.strandDepth).toBeLessThanOrEqual(0.35);
+    const chunk = rig.hairShaderChunk();
+    // Every hair style's back mesh (Hair_<i>_1_0) maps to u 0.75-1.0, where
+    // the baked strip has alpha 0 - so it was discarded by the alphaTest and
+    // the long back hair never drew. Mirror it onto the front strip.
+    expect(chunk).toMatch(/if \(hUv\.x > 0\.75\) hUv\.x = 1\.5 - hUv\.x;/);
+    expect(chunk).toContain("texture2D(map, hUv)");
+    expect(chunk).toMatch(/float strand = /);
+    // Streaks both lighten and darken about the mean by strandDepth.
+    expect(chunk).toContain(
+      `diffuseColor.rgb *= 1.0 + (strand - 0.5) * ${(hair.strandDepth * 2).toFixed(2)};`
+    );
+    // The baked strip's contrast is flattened so its light edge columns do
+    // not draw as seams between cards.
+    expect(hair.stripContrast).toBeGreaterThan(0.3);
+    expect(hair.stripContrast).toBeLessThan(0.7);
+    expect(chunk).toContain(
+      `texelColor.rgb = mix(vec3(${hair.stripMean.toFixed(2)}), texelColor.rgb, ${hair.stripContrast.toFixed(2)});`
+    );
+    expect(chunk).toContain(
+      `smoothstep(${hair.edgeFade[0].toFixed(2)}, ${hair.edgeFade[1].toFixed(
+        2
+      )}, abs(dot(normalize(vNormal), normalize(vViewPosition))))`
+    );
+    expect(chunk).toContain("diffuseColor.a *=");
+    const html = viewerHtml();
+    const load = sliceBetween(
+      html,
+      "new THREE.GLTFLoader().load(",
+      "function boxOf("
+    );
+    expect(load).toMatch(/upgradeHairMat\(mat, envMap\)/);
+    const upgrade = sliceBetween(
+      html,
+      "function upgradeHairMat(",
+      "function upgradeIrisMat("
+    );
+    expect(upgrade).toMatch(/mat\.roughness = HAIR_ROUGHNESS;/);
+    expect(upgrade).toMatch(/mat\.metalness = HAIR_LOOK\.metalness;/);
+    expect(upgrade).toMatch(/mat\.alphaTest = /);
+    expect(upgrade).toMatch(/mat\.side = THREE\.DoubleSide;/);
+    expect(upgrade).toContain("hairShaderChunk()");
+  });
+
+  it("keeps the viewer's colour tables identical to the app's swatches, and the default preset softer than #41", () => {
+    expect(rig.HAIR_COLORS).toEqual([...HAIR_COLORS]);
+    expect(rig.SKIN_COLORS).toEqual([...SKIN_COLORS]);
+    expect(rig.EYE_COLORS).toEqual([...EYE_COLORS]);
+    // The default hair is a soft dark brown, not the #5c3310 orange chestnut.
+    const hair = new THREE.Color(HAIR_COLORS[1]);
+    expect(hair.r).toBeLessThan(0.36);
+    expect(hair.r - hair.b).toBeLessThan(0.2);
+    // The default skin tone is a peach with pink under it, less orange.
+    const skin = new THREE.Color(SKIN_COLORS[1]);
+    expect(skin.r).toBeGreaterThan(0.85);
+    expect(skin.g - skin.b).toBeLessThan(0.16);
+    // Face proportions: a softer oval than the #41 default (0.48 / 0.46),
+    // still on the same mild axes (caps untouched), chin as signed off.
+    expect(DEFAULT_LOOK.faceWidth).toBeLessThan(0.48);
+    expect(DEFAULT_LOOK.faceWidth).toBeGreaterThanOrEqual(0.34);
+    expect(DEFAULT_LOOK.jaw).toBeLessThan(0.46);
+    expect(DEFAULT_LOOK.jaw).toBeGreaterThanOrEqual(0.3);
+    expect(DEFAULT_LOOK.chin).toBe(0.5);
+    expect(DEFAULT_LOOK.eyeSize).toBe(0.5);
+    expect(DEFAULT_LOOK.hairColor).toBe(1);
+    expect(DEFAULT_LOOK.skinTone).toBe(1);
+    expect(rig.SCULPT_CAPS).toEqual({
+      squareness: 0.45,
+      stern: 0.45,
+      sharpness: 0.5,
+    });
+    // The viewer's boot look is the same preset.
+    const html = viewerHtml();
+    const bootLook = html.slice(
+      html.indexOf("var look = {"),
+      html.indexOf("viewMode:")
+    );
+    expect(bootLook).toContain(
+      `faceWidth: ${DEFAULT_LOOK.faceWidth}, jaw: ${DEFAULT_LOOK.jaw}, chin: ${DEFAULT_LOOK.chin}, eyeSize: ${DEFAULT_LOOK.eyeSize}, age: ${DEFAULT_LOOK.age}`
+    );
+  });
+
+  it("keeps the headless check's PRESETS table equal to CHARACTER_PRESETS", () => {
+    const script = fs.readFileSync(
+      path.join(ROOT, "scripts", "check-avatar-viewer.js"),
+      "utf8"
+    );
+    const table = script.slice(
+      script.indexOf("const PRESETS = ["),
+      script.indexOf("];", script.indexOf("const PRESETS = [")) + 2
+    );
+    const presets = vm.runInNewContext(
+      table.replace("const PRESETS = ", "")
+    ) as unknown[];
+    expect(presets).toEqual(CHARACTER_PRESETS);
   });
 });

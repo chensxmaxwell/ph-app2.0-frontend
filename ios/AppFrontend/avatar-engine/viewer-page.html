@@ -26,13 +26,18 @@
 <script src="GLTFLoader.js?v=3"></script>
 <script>
 (function () {
-  var HAIR_COLORS = ["#1a1410","#5c3310","#d4b483","#8b2a1a","#e891b0","#d0d0d0"];
-  var SKIN_COLORS = ["#f3d0bc","#e2b089","#c17a45","#8a4f28"];
+  // Same tables as src/screens/avatar/engine/viewer-html.ts (the Customize
+  // swatches and the 2D LookFace fallback); __tests__/avatar-viewer-rig.test.ts
+  // fails if they drift. Style C (soft semi-real intimate, 2026-09-06): the
+  // default hair is a soft dark brown instead of the #5c3310 orange chestnut,
+  // the default skin a peach with pink under it instead of the #e2b089 tan.
+  var HAIR_COLORS = ["#1a1410","#55392a","#d4b483","#8b2a1a","#e891b0","#d0d0d0"];
+  var SKIN_COLORS = ["#f3d0bc","#e4b696","#c17a45","#8a4f28"];
   var EYE_COLORS = ["#3a2418","#3f6b3a","#2e4d7a","#5a3a1e","#111111"];
   var look = {
     appearanceIndex: 2, hairStyle: 2, hairColor: 1, skinTone: 1, eyeColor: 0,
     upperArms: 0.45, chest: 0.5, forearms: 0.45, backAndHips: 0.48,
-    faceWidth: 0.48, jaw: 0.46, chin: 0.5, eyeSize: 0.5, age: 0.28,
+    faceWidth: 0.4, jaw: 0.38, chin: 0.5, eyeSize: 0.5, age: 0.28,
     viewMode: "full", revealBody: false
   };
 
@@ -189,7 +194,7 @@
     setMorph(mesh, "Shape_LashLength", LASH_LENGTH);
     setMorph(mesh, "Shape_EyesOuterCornersHigh", OUTER_CORNER_LIFT);
     setMorph(mesh, "Shape_EyesOuterCornersLow", 0);
-    setMorph(mesh, "Shape_BrowsThickness", 0.32);
+    setMorph(mesh, "Shape_BrowsThickness", BROW_THICKNESS);
     setMorph(mesh, "Shape_Chest", clamp01(next.chest));
     setMorph(mesh, "Shape_Muscle", arms);
     setMorph(mesh, "Shape_ButtSize", hips);
@@ -412,7 +417,7 @@
     skin.lerp(white, 0.08);
     skinMats.forEach(function (mat) {
       mat.color.copy(skin);
-      mat.roughness = 0.46 + age * 0.08;
+      mat.roughness = SKIN_LOOK.roughness + age * SKIN_LOOK.ageRoughness;
       mat.needsUpdate = true;
     });
     var hair = hexColor(HAIR_COLORS[next.hairColor] || HAIR_COLORS[0]);
@@ -420,7 +425,7 @@
     var head = skin.clone();
     headMats.forEach(function (mat) {
       mat.color.copy(head);
-      mat.roughness = 0.42 + age * 0.06;
+      mat.roughness = SKIN_LOOK.roughness - 0.04 + age * SKIN_LOOK.ageRoughness;
       if (mat.userData.browColor) mat.userData.browColor.copy(brow);
       mat.needsUpdate = true;
     });
@@ -461,18 +466,18 @@
     var envScene = new THREE.Scene();
     var sky = new THREE.Mesh(
       new THREE.SphereGeometry(12, 16, 12),
-      new THREE.MeshBasicMaterial({ color: 0xcbbdd8, side: THREE.BackSide })
+      new THREE.MeshBasicMaterial({ color: LIGHT_RIG.env.sky, side: THREE.BackSide })
     );
     envScene.add(sky);
     var floor = new THREE.Mesh(
       new THREE.CylinderGeometry(12, 12, 0.2, 24),
-      new THREE.MeshBasicMaterial({ color: 0x2a2038 })
+      new THREE.MeshBasicMaterial({ color: LIGHT_RIG.env.floor })
     );
     floor.position.y = -4;
     envScene.add(floor);
     var warm = new THREE.Mesh(
       new THREE.SphereGeometry(2.2, 12, 8),
-      new THREE.MeshBasicMaterial({ color: 0xffd8b8 })
+      new THREE.MeshBasicMaterial({ color: LIGHT_RIG.env.warm })
     );
     warm.position.set(4, 6, 3);
     envScene.add(warm);
@@ -500,7 +505,7 @@
   // Liner ink: near-black warm, mixed at `density` over the card.
   var LASH_INK = { color: [0.05, 0.035, 0.035], density: 0.92 };
   // Brow / lower-lash cards: mix toward browColorFor(hair) by this much.
-  var BROW_INK = 0.72;
+  var BROW_INK = 0.86;
   // Shape_LashLength on Head_0: 1.0 moves the upper lash tips 4.5 mm mean
   // (up and forward, a curl; 8 mm max). 1.2 (11)-(14) and #36 ran 0.42.
   var LASH_LENGTH = 0.8;
@@ -515,13 +520,36 @@
   // (TF 1.2.21 bust; measured with the lights toggled one at a time: 5,300
   // near-white pixels in a 4x crop, 0 with the rim off, 0 at roughness 0.6).
   // The hair map's lighter strands carry the sheen; the material only needs
-  // enough gloss to read as hair, not glass.
-  var HAIR_ROUGHNESS = 0.58;
+  // enough gloss to read as hair, not glass. Style C: 0.60 (softer still,
+  // the strand streaks in hairShaderChunk carry the sheen variation).
+  var HAIR_ROUGHNESS = 0.6;
 
-  // Brow colour from the hair colour: darker than the hair, never lighter
-  // than a mid brown, so blonde hair gets defined brows instead of tan slabs.
+  // Style C lips: the #41 paint was (0.70, 0.26, 0.30) mixed 0.62 with a
+  // near-black line at 0.48 - under the cool fill it read as mauve lipstick
+  // on a clay face. A rose-nude at half strength lets the skin through, the
+  // line is a soft shadow, and `gloss` takes that much off the roughness on
+  // the lip mask (skinDetailChunk) for the board's "soft sheen".
+  var LIP_PAINT = { color: [0.78, 0.42, 0.40], mix: 0.5, line: [0.46, 0.20, 0.20], lineMix: 0.36, gloss: 0.22 };
+  // A faint flush on the cheeks, a touch stronger than #41's 0.12 and less
+  // pink.
+  var CHEEK_PAINT = { color: [0.88, 0.50, 0.46], mix: 0.16 };
+  // The skin under the brow slab: #41 inked it 0.92 near-black, which showed
+  // as a hard dark edge under the slab; the card ink carries the brow now.
+  var BROW_SKIN_INK = 0.6;
+  // Shape_BrowsThickness on Head_0: 0.32 in #41 made the slab a ridge.
+  var BROW_THICKNESS = 0.12;
+  // Lash clusters on the upper lash card: `count` bundles along the lid (v
+  // runs along the card, 0.214-0.243), the ink thinning by `tipThin` between
+  // them toward the tips (u ~0.143; the root at u ~0.146 stays a solid line,
+  // the "wet line" of the lid margin).
+  var LASH_CLUSTER = { count: 11, tipThin: 0.55 };
+
+  // Brow colour from the hair colour: darker than the hair and pulled toward
+  // a neutral dark, so a chestnut head does not get orange slabs and blonde
+  // hair still gets defined brows instead of tan ridges.
   function browColorFor(hair) {
-    var c = hair.clone().multiplyScalar(0.5);
+    var c = hair.clone().multiplyScalar(0.42);
+    c.lerp(new THREE.Color(0.09, 0.075, 0.07), 0.3);
     return c;
   }
 
@@ -529,41 +557,139 @@
     return "float " + name + " = step(" + uRange[0].toFixed(4) + ", fu.x) * step(fu.x, " + uRange[1].toFixed(4) + ") * step(" + CARD_V[0].toFixed(3) + ", fu.y) * step(fu.y, " + CARD_V[1].toFixed(3) + ");";
   }
 
+  function vec3Of(rgb) {
+    return "vec3(" + rgb.map(function (v) { return v.toFixed(2); }).join(", ") + ")";
+  }
+
   // GLSL appended after map_fragment on the head material: lips, the skin
   // under the brows, cheeks, then the ink on the lash and brow cards.
   function headPaintChunk() {
+    var lashClusterFreq = (LASH_CLUSTER.count * 2 * Math.PI) / (CARD_V[1] - CARD_V[0]);
     return [
       "vec2 fu = vUv;",
       "float lip = 1.0 - smoothstep(0.12, 1.0, length((fu - vec2(0.126, 0.162)) / vec2(0.028, 0.0085)));",
       "float lipLine = 1.0 - smoothstep(0.18, 1.0, length((fu - vec2(0.126, 0.160)) / vec2(0.022, 0.0028)));",
-      "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.70, 0.26, 0.30), lip * 0.62);",
-      "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.38, 0.12, 0.14), lipLine * 0.48);",
+      "diffuseColor.rgb = mix(diffuseColor.rgb, " + vec3Of(LIP_PAINT.color) + ", lip * " + LIP_PAINT.mix.toFixed(2) + ");",
+      "diffuseColor.rgb = mix(diffuseColor.rgb, " + vec3Of(LIP_PAINT.line) + ", lipLine * " + LIP_PAINT.lineMix.toFixed(2) + ");",
+      "float phLip = lip;",
       "float bL = 1.0 - smoothstep(0.36, 1.0, length((fu - vec2(0.095, 0.090)) / vec2(0.024, 0.0065)));",
       "float bR = 1.0 - smoothstep(0.36, 1.0, length((fu - vec2(0.157, 0.090)) / vec2(0.024, 0.0065)));",
-      "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.09, 0.05, 0.04), max(bL, bR) * 0.92);",
+      "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.09, 0.05, 0.04), max(bL, bR) * " + BROW_SKIN_INK.toFixed(2) + ");",
       "float cL = 1.0 - smoothstep(0.35, 1.0, length((fu - vec2(0.080, 0.155)) / vec2(0.018, 0.014)));",
       "float cR = 1.0 - smoothstep(0.35, 1.0, length((fu - vec2(0.172, 0.155)) / vec2(0.018, 0.014)));",
-      "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.50, 0.48), max(cL, cR) * 0.12);",
+      "diffuseColor.rgb = mix(diffuseColor.rgb, " + vec3Of(CHEEK_PAINT.color) + ", max(cL, cR) * " + CHEEK_PAINT.mix.toFixed(2) + ");",
       cardMask("lashCard", LASH_CARD_U),
       cardMask("browCard", BROW_CARD_U),
       "diffuseColor.rgb = mix(diffuseColor.rgb, browColor, browCard * " + BROW_INK.toFixed(2) + ");",
-      "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(" + LASH_INK.color.map(function (v) { return v.toFixed(3); }).join(", ") + "), lashCard * " + LASH_INK.density.toFixed(2) + ");"
+      // Tip (u toward the low edge of the window) -> root (high edge).
+      "float lashTip = 1.0 - smoothstep(" + LASH_CARD_U[0].toFixed(4) + ", " + LASH_CARD_U[1].toFixed(4) + ", fu.x);",
+      "float lashCluster = 0.5 + 0.5 * sin(fu.y * " + lashClusterFreq.toFixed(1) + ");",
+      "float lashInk = mix(1.0, lashCluster, lashTip * " + LASH_CLUSTER.tipThin.toFixed(2) + ");",
+      "diffuseColor.rgb = mix(diffuseColor.rgb, vec3(" + LASH_INK.color.map(function (v) { return v.toFixed(3); }).join(", ") + "), lashCard * " + LASH_INK.density.toFixed(2) + " * lashInk);",
+      // Brow and lash cards are hair, not skin: matte (see skinDetailChunk).
+      "float phCard = max(browCard, lashCard);"
     ].join("\n") + "\n";
+  }
+
+  // Style C lighting: soft warm key, gentle warm bounce, weak warm rim,
+  // warm hemisphere ground. The #41 rig (hemi 0xffefe4 / 0x2a2036 at 0.62,
+  // key 0xffe6d2 1.25, fill 0x9eb0d4 0.4, rim 0xffc4d8 0.7, exposure 1.12,
+  // lavender env sky 0xcbbdd8) lit the shadow side of the face blue-grey and
+  // the crown pink-white - the "clay placeholder" read. Positions are world
+  // metres round a 1.8 m figure; the key sits high on the camera's right.
+  var LIGHT_RIG = {
+    exposure: 1.1,
+    hemisphere: { sky: 0xfff0e6, ground: 0x5a4038, intensity: 0.6 },
+    key: { color: 0xffe4cf, intensity: 1.15, position: [0.6, 1.85, 1.6] },
+    fill: { color: 0xf4dfd4, intensity: 0.5, position: [-1.4, 0.7, 0.6] },
+    rim: { color: 0xffd6c2, intensity: 0.34, position: [0.1, 1.2, -1.7] },
+    env: { sky: 0xd9cfc8, floor: 0x3a2e2a, warm: 0xffd8b8 }
+  };
+
+  // Style C skin: a dielectric with a thin oily clearcoat (the soft specular
+  // on nose, forehead and lips), an SSS approximation on the key light -
+  // `sssTint` added where the surface turns from lit to unlit (the red
+  // terminator of skin), `shadowWarm` lifting the unlit side by `shadowLift`
+  // of the albedo (instead of the fill's blue) - and a fine roughness /
+  // albedo noise (pores) so the flat ph_tex_SkinAlbedo does not read as
+  // clay. Head and body take the same table; the head gets a touch more SSS.
+  var SKIN_LOOK = {
+    roughness: 0.52,
+    ageRoughness: 0.08,
+    clearcoat: 0.16,
+    clearcoatRoughness: 0.52,
+    envMapIntensity: 0.22,
+    sssTint: [0.62, 0.14, 0.06],
+    sssHead: 0.42,
+    sssBody: 0.3,
+    shadowWarm: [0.55, 0.22, 0.16],
+    shadowLift: 0.16,
+    poreRoughness: 0.08,
+    poreAlbedo: 0.025,
+    cardRoughness: 0.4
+  };
+
+  // GLSL for the skin materials. `roughness` goes after roughnessmap_fragment
+  // (pores, lip sheen); `light` goes before output_fragment (the SSS-style
+  // terminator warmth and shadow lift against the key direction, which
+  // updateKeyDirection feeds in view space every frame). `phLip` is 0 on the
+  // body material (declared by its own chunk) and the lip mask on the head.
+  function skinDetailChunk(part, sss) {
+    var strength = typeof sss === "number" ? sss : SKIN_LOOK.sssHead;
+    var roughness = [
+      "float phN1 = fract(sin(dot(floor(vUv * 1400.0), vec2(12.9898, 78.233))) * 43758.5453);",
+      "float phN2 = fract(sin(dot(floor(vUv * 520.0), vec2(39.3468, 11.135))) * 24634.6345);",
+      "float phPore = phN1 * 0.6 + phN2 * 0.4;",
+      "roughnessFactor = clamp(roughnessFactor + (phPore - 0.5) * " + SKIN_LOOK.poreRoughness.toFixed(2) + " - phLip * " + LIP_PAINT.gloss.toFixed(2) + " + phCard * " + SKIN_LOOK.cardRoughness.toFixed(2) + ", 0.2, 1.0);",
+      "diffuseColor.rgb *= 1.0 + (phPore - 0.5) * " + (SKIN_LOOK.poreAlbedo * 2).toFixed(3) + ";"
+    ].join("\n") + "\n";
+    var light = [
+      "float ndl = dot(normal, keyDirView);",
+      // Terminator band: peaks where the key light grazes the skin.
+      "float phTerm = smoothstep(-0.45, 0.05, ndl) * (1.0 - smoothstep(0.05, 0.55, ndl));",
+      "outgoingLight += diffuseColor.rgb * " + vec3Of(SKIN_LOOK.sssTint) + " * phTerm * " + strength.toFixed(2) + ";",
+      // Unlit side: warm lift instead of a grey fill.
+      "outgoingLight += diffuseColor.rgb * " + vec3Of(SKIN_LOOK.shadowWarm) + " * (1.0 - smoothstep(-0.3, 0.45, ndl)) * " + SKIN_LOOK.shadowLift.toFixed(2) + ";"
+    ].join("\n") + "\n";
+    if (part === "roughness") return roughness;
+    if (part === "light") return light;
+    return roughness + light;
+  }
+
+  var _keyDirView = new THREE.Vector3();
+  var _keyDirWorld = new THREE.Vector3();
+
+  // The key light's direction in the camera's view space, for every skin
+  // material's SSS term (skin, head).
+  function updateKeyDirection() {
+    if (!camera) return;
+    camera.updateMatrixWorld(true);
+    camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+    _keyDirWorld.set(LIGHT_RIG.key.position[0], LIGHT_RIG.key.position[1], LIGHT_RIG.key.position[2]).normalize();
+    _keyDirView.copy(_keyDirWorld).transformDirection(camera.matrixWorldInverse);
+    var mats = skinMats.concat(headMats);
+    var i;
+    for (i = 0; i < mats.length; i++) {
+      var shader = mats[i].userData.shader;
+      if (shader && shader.uniforms.keyDirView) shader.uniforms.keyDirView.value.copy(_keyDirView);
+    }
   }
 
   function injectSkinWrap(mat, amount) {
     var wrap = amount == null ? 0.22 : amount;
     var isHead = wrap < 0.1;
+    var sss = isHead ? SKIN_LOOK.sssHead : SKIN_LOOK.sssBody;
     if (isHead) mat.userData.browColor = new THREE.Color(0x2b1d14);
     mat.customProgramCacheKey = function () { return "skinwrap-" + String(wrap); };
     mat.onBeforeCompile = function (shader) {
-      var extra = "";
+      var extra = "float phLip = 0.0;\nfloat phCard = 0.0;\n";
+      shader.uniforms.keyDirView = { value: new THREE.Vector3(0, 0.5, 0.86) };
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <common>",
+        "#include <common>\nuniform vec3 keyDirView;" + (isHead ? "\nuniform vec3 browColor;" : "")
+      );
       if (isHead) {
         shader.uniforms.browColor = { value: mat.userData.browColor };
-        shader.fragmentShader = shader.fragmentShader.replace(
-          "#include <common>",
-          "#include <common>\nuniform vec3 browColor;"
-        );
         extra = headPaintChunk();
       }
       shader.fragmentShader = shader.fragmentShader.replace(
@@ -571,12 +697,14 @@
         "#include <map_fragment>\n" + extra
       );
       shader.fragmentShader = shader.fragmentShader.replace(
-        "#include <output_fragment>",
-        [
-          "outgoingLight += vec3(0.26, 0.08, 0.05) * (1.0 - pow(max(dot(normal, vec3(0.15, 0.35, 0.92)), 0.0), 1.35)) * " + wrap.toFixed(3) + ";",
-          "#include <output_fragment>"
-        ].join("\n")
+        "#include <roughnessmap_fragment>",
+        "#include <roughnessmap_fragment>\n" + skinDetailChunk("roughness", sss)
       );
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <output_fragment>",
+        skinDetailChunk("light", sss) + "#include <output_fragment>"
+      );
+      mat.userData.shader = shader;
     };
   }
 
@@ -588,16 +716,75 @@
       mat.normalScale = new THREE.Vector2(0.9, 0.9);
     }
     if (oldMat && oldMat.color) mat.color.copy(oldMat.color);
-    mat.roughness = 0.46;
+    mat.roughness = SKIN_LOOK.roughness;
     mat.metalness = 0;
-    mat.clearcoat = 0.12;
-    mat.clearcoatRoughness = 0.62;
-    mat.envMapIntensity = 0.2;
+    mat.clearcoat = SKIN_LOOK.clearcoat;
+    mat.clearcoatRoughness = SKIN_LOOK.clearcoatRoughness;
+    mat.envMapIntensity = SKIN_LOOK.envMapIntensity;
     // Morphs are baked into the positions (bakeMorphs); the shader path stays off.
     mat.skinning = true;
     if (envMap) mat.envMap = envMap;
-    if (mat.sheen && mat.sheen.isColor) mat.sheen.setRGB(0.32, 0.12, 0.08);
     injectSkinWrap(mat, wrapAmount);
+    return mat;
+  }
+
+  // Style C hair: strand cards. The baked hair strip (u 0.5-0.75, v 0-0.25
+  // of each ph_tex_HairAlbedo_<i>) is a soft shading blob with a binary
+  // alpha and no strand detail, and every style's back mesh (Hair_<i>_1_0)
+  // maps to u 0.75-1.0 where that alpha is 0 - so the long back hair was
+  // discarded by the alphaTest since the export. hairShaderChunk mirrors the
+  // back mesh onto the strip, streaks the cards along their length (fine
+  // value noise across u), and fades a card out where it turns edge-on to
+  // the camera (`edgeFade` on |N.V|) so the block silhouette of the cards
+  // breaks into strands instead of ending in a hard wall.
+  var HAIR_LOOK = {
+    edgeFade: [0.06, 0.34],
+    strandFrequency: 420,
+    strandDepth: 0.26,
+    stripMean: 0.55,
+    stripContrast: 0.45,
+    metalness: 0.03,
+    envMapIntensity: 0.06,
+    alphaTest: 0.3
+  };
+
+  function hairShaderChunk() {
+    return [
+      "vec2 hUv = vUv;",
+      "if (hUv.x > 0.75) hUv.x = 1.5 - hUv.x;",
+      "vec4 texelColor = texture2D(map, hUv);",
+      "texelColor = mapTexelToLinear(texelColor);",
+      // The baked strip's light edge columns draw as seams between cards;
+      // flatten its contrast and let the strands below carry the detail.
+      "texelColor.rgb = mix(vec3(" + HAIR_LOOK.stripMean.toFixed(2) + "), texelColor.rgb, " + HAIR_LOOK.stripContrast.toFixed(2) + ");",
+      "diffuseColor *= texelColor;",
+      // Strands: two value-noise octaves across the card, drifting slowly
+      // along it, darkening the grooves between strands.
+      "float hs1 = fract(sin(dot(floor(vec2(hUv.x * " + HAIR_LOOK.strandFrequency.toFixed(1) + " + hUv.y * 6.0, 0.0)), vec2(12.9898, 78.233))) * 43758.5453);",
+      "float hs2 = fract(sin(dot(floor(vec2(hUv.x * " + (HAIR_LOOK.strandFrequency * 0.37).toFixed(1) + " - hUv.y * 3.0, 1.0)), vec2(12.9898, 78.233))) * 43758.5453);",
+      "float strand = hs1 * 0.6 + hs2 * 0.4;",
+      "diffuseColor.rgb *= 1.0 + (strand - 0.5) * " + (HAIR_LOOK.strandDepth * 2).toFixed(2) + ";",
+      // Edge-on cards fade out: the card's outline becomes a soft strand end.
+      "float hFacing = smoothstep(" + HAIR_LOOK.edgeFade[0].toFixed(2) + ", " + HAIR_LOOK.edgeFade[1].toFixed(2) + ", abs(dot(normalize(vNormal), normalize(vViewPosition))));",
+      "diffuseColor.a *= hFacing * (0.82 + 0.18 * strand);"
+    ].join("\n") + "\n";
+  }
+
+  function upgradeHairMat(mat, envMap) {
+    mat.roughness = HAIR_ROUGHNESS;
+    mat.metalness = HAIR_LOOK.metalness;
+    mat.transparent = true;
+    mat.alphaTest = HAIR_LOOK.alphaTest;
+    mat.side = THREE.DoubleSide;
+    if (envMap) mat.envMap = envMap;
+    mat.envMapIntensity = HAIR_LOOK.envMapIntensity;
+    mat.customProgramCacheKey = function () { return "hair-strands"; };
+    mat.onBeforeCompile = function (shader) {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <map_fragment>",
+        hairShaderChunk()
+      );
+    };
     return mat;
   }
 
@@ -674,7 +861,18 @@
   // the pupil's upper-left was the fill light's clearcoat reflection. Level
   // with the axis it lands on the upper-right pupil edge, as in the
   // reference.
-  var CATCHLIGHT = { lo: 0.987, hi: 0.992, mix: 0.9, mix2: 0.26, emit: 0.6, dir: [0.22, -0.02, 1.0] };
+  // Style C (soft semi-real intimate): the reference pass's hard 2deg-edged
+  // 90% glint read as a cartoon white dot on the #41 bust. The highlight is
+  // now a *wet* one: a white core under 6deg (cos 0.9945) with a 3.5deg soft
+  // edge, 84% white, a little less unlit lift - measured 1.0-1.5% of the
+  // iris disc at 255 in the bust against the reference pass's 2.9%.
+  var CATCHLIGHT = { lo: 0.986, hi: 0.9945, mix: 0.84, mix2: 0.22, emit: 0.5, dir: [0.22, -0.02, 1.0] };
+  // Wet line: the tear meniscus along the lower lid margin, a soft bright
+  // band on the eyeball just above where the lower lid rests (p.y ~ -0.35 in
+  // the shader's units, lids skinned 1.0 to the eye bone so the proportion
+  // holds at every Size). Applied after the pupil (so the pupil stays dark)
+  // and before the catchlights; `strength` keeps it under the glint.
+  var WETLINE = { from: -0.44, peak: -0.33, to: -0.24, strength: 0.28 };
   // The eyeball's shade under the upper lid (share of the sclera / iris
   // darkened at the top of the ball, p.y up). #36 ran 0.26; the reference
   // eye sits deep under a heavy lid, so 0.34.
@@ -809,6 +1007,10 @@
       "vec3 pupilCol = vec3(0.04, 0.03, 0.03);",
       "vec3 col = mix(scleraCol, irisCol, irisM);",
       "col = mix(col, pupilCol, pupilM);",
+      // Wet line along the lower lid (see WETLINE): a soft meniscus
+      // highlight, warm-white, kept off the pupil.
+      "float wet = smoothstep(" + WETLINE.from.toFixed(2) + ", " + WETLINE.peak.toFixed(2) + ", p.y) * (1.0 - smoothstep(" + WETLINE.peak.toFixed(2) + ", " + WETLINE.to.toFixed(2) + ", p.y));",
+      "col = mix(col, vec3(0.98, 0.96, 0.94), wet * " + WETLINE.strength.toFixed(2) + " * (1.0 - pupilM));",
       // Catchlights from a fixed view-space direction (upper right on
       // screen), identical on both eyes. The normal is the exact sphere
       // normal (fragment minus the nearer eye centre, both in view space):
@@ -1298,6 +1500,7 @@
     }
     if (camera) aimEyes(camera.position);
     updateEyeCentres();
+    updateKeyDirection();
     renderer.render(scene, camera);
   }
 
@@ -1330,21 +1533,21 @@
     renderer.setClearColor(0x000000, 0);
     renderer.outputEncoding = THREE.sRGBEncoding;
     renderer.toneMapping = THREE.LinearToneMapping;
-    renderer.toneMappingExposure = 1.12;
+    renderer.toneMappingExposure = LIGHT_RIG.exposure;
     if ("physicallyCorrectLights" in renderer) renderer.physicallyCorrectLights = true;
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(24, 1, 0.05, 40);
     var envMap = makeEnvMap();
-    scene.add(new THREE.HemisphereLight(0xffefe4, 0x2a2036, 0.62));
-    var key = new THREE.DirectionalLight(0xffe6d2, 1.25);
-    key.position.set(0.7, 1.9, 1.5);
-    scene.add(key);
-    var fill = new THREE.DirectionalLight(0x9eb0d4, 0.4);
-    fill.position.set(-1.4, 0.6, 0.5);
-    scene.add(fill);
-    var rim = new THREE.DirectionalLight(0xffc4d8, 0.7);
-    rim.position.set(0.1, 1.2, -1.7);
-    scene.add(rim);
+    scene.add(new THREE.HemisphereLight(LIGHT_RIG.hemisphere.sky, LIGHT_RIG.hemisphere.ground, LIGHT_RIG.hemisphere.intensity));
+    var directional = function (spec) {
+      var light = new THREE.DirectionalLight(spec.color, spec.intensity);
+      light.position.set(spec.position[0], spec.position[1], spec.position[2]);
+      scene.add(light);
+      return light;
+    };
+    directional(LIGHT_RIG.key);
+    directional(LIGHT_RIG.fill);
+    directional(LIGHT_RIG.rim);
     addGroundContact();
     resize();
     window.addEventListener("resize", resize);
@@ -1396,13 +1599,7 @@
                 skinMats.push(swapped);
               } else if (matLabel.indexOf("MAT_Hair") === 0) {
                 mat.skinning = skinned;
-                mat.roughness = HAIR_ROUGHNESS;
-                mat.metalness = 0.04;
-                mat.transparent = true;
-                mat.alphaTest = 0.35;
-                mat.side = THREE.DoubleSide;
-                if (envMap) mat.envMap = envMap;
-                mat.envMapIntensity = 0.08;
+                upgradeHairMat(mat, envMap);
                 hairMats.push(mat);
               } else if (matLabel.indexOf("MAT_Iris") === 0) {
                 swapped = upgradeIrisMat(mat, envMap);
@@ -1695,6 +1892,20 @@
     LASH_LENGTH: LASH_LENGTH,
     OUTER_CORNER_LIFT: OUTER_CORNER_LIFT,
     HAIR_ROUGHNESS: HAIR_ROUGHNESS,
+    HAIR_COLORS: HAIR_COLORS,
+    SKIN_COLORS: SKIN_COLORS,
+    EYE_COLORS: EYE_COLORS,
+    LIGHT_RIG: LIGHT_RIG,
+    SKIN_LOOK: SKIN_LOOK,
+    LIP_PAINT: LIP_PAINT,
+    CHEEK_PAINT: CHEEK_PAINT,
+    BROW_SKIN_INK: BROW_SKIN_INK,
+    BROW_THICKNESS: BROW_THICKNESS,
+    LASH_CLUSTER: LASH_CLUSTER,
+    WETLINE: WETLINE,
+    HAIR_LOOK: HAIR_LOOK,
+    hairShaderChunk: hairShaderChunk,
+    skinDetailChunk: skinDetailChunk,
     SCULPT_CAPS: SCULPT_CAPS,
     SCULPT_MORPHS: SCULPT_MORPHS,
     sculptMorphs: sculptMorphs,
