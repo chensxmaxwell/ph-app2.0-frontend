@@ -115,16 +115,20 @@
   // measured on the GLB the sculpts move the face 9.7 / 14.2 / 8.4 mm at
   // weight 1, so that was a 2-3 mm silhouette change end to end, which at
   // the bust camera (about 1 px per mm) the design review's headless renders
-  // read as not obvious, chin weakest. The caps asked for are 0.45 / 0.45 /
-  // 0.40 (SCULPT_WIDTH_FACTOR carries the same raise onto the Face slider's
-  // NoseWidth / MouthWide companions; EyesSquare reshapes the eye and stays
-  // at 0.1). Their reach over the eyes is masked out at load
+  // read as not obvious, chin weakest. The caps signed off are 0.45 / 0.45
+  // and, for the chin, 0.50: at the 0.40 first asked for the chin still
+  // measured half the travel of the other two (Sharpness is the kit's only
+  // chin sculpt and most of its 8.4 mm lives in the eye region the mask
+  // removes), so it took the extra raise design allowed. SCULPT_WIDTH_FACTOR
+  // carries the Squareness raise onto the Face slider's NoseWidth /
+  // MouthWide companions; EyesSquare reshapes the eye and stays at 0.1.
+  // Their reach over the eyes is masked out at load
   // (maskEyeRegion): Stern moves the lid margin 10.8 mm at weight 1, so at
   // these caps the lids would otherwise hood by ~2 mm already at the
   // default look. Design re-signs Face / Jaw / Chin 0 / 0.5 / 1 after this
   // bump - the default preset (0.48 / 0.46 / 0.5) now sits about halfway up.
   var SCULPT_MORPHS = ["Shape_Squareness", "Shape_Stern", "Shape_Sharpness"];
-  var SCULPT_CAPS = { squareness: 0.45, stern: 0.45, sharpness: 0.4 };
+  var SCULPT_CAPS = { squareness: 0.45, stern: 0.45, sharpness: 0.5 };
   var SCULPT_WIDTH_FACTOR = SCULPT_CAPS.squareness / 0.22;
 
   function sculptMorphs(faceWidth, jaw, chin) {
@@ -1186,7 +1190,7 @@
 
   // Measured on the GLB, Shape_Stern moves the lid margin up to 10.8 mm and
   // Shape_Sharpness 6.5 mm at weight 1, while Eyes_0 carries neither: with
-  // the Jaw / Chin caps at 0.45 / 0.40 the lids would hood over the eyeball
+  // the Jaw / Chin caps at 0.45 / 0.50 the lids would hood over the eyeball
   // as the sliders rise (~2 mm already at the default look) - the eye the
   // Size slider was tuned for.
   // So the sculpt deltas are faded out over each vertex's weight on the eye

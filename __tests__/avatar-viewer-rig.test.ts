@@ -1820,12 +1820,14 @@ describe("face sculpt", () => {
   // Shape_Sharpness through mild(v, cap) from the base mesh. The caps were
   // 0.22 / 0.22 / 0.18: at the bust camera (about 1 px per mm) that is a
   // 2-3 mm silhouette change end to end, which the design review's headless
-  // renders read as not obvious, chin weakest. The caps asked for: 0.45 /
-  // 0.45 / 0.40, with the Face slider's width companions (NoseWidth,
-  // MouthWide) scaled by the same factor and EyesSquare left alone because
-  // it reshapes the eye. The eye itself is untouched: maskEyeRegion keeps
-  // the raised Stern / Sharpness reach off the lids.
-  const CAPS = { squareness: 0.45, stern: 0.45, sharpness: 0.4 };
+  // renders read as not obvious, chin weakest. The caps signed off: 0.45 /
+  // 0.45, and 0.50 for the chin (at the 0.40 first asked for it still
+  // measured half the travel of the other two, and design allowed ~0.50),
+  // with the Face slider's width companions (NoseWidth, MouthWide) scaled by
+  // the Squareness factor and EyesSquare left alone because it reshapes the
+  // eye. The eye itself is untouched: maskEyeRegion keeps the raised Stern /
+  // Sharpness reach off the lids.
+  const CAPS = { squareness: 0.45, stern: 0.45, sharpness: 0.5 };
   const OLD_CAPS = { squareness: 0.22, stern: 0.22, sharpness: 0.18 };
 
   it("runs each sculpt from the base mesh at 0 to its raised cap at 1", () => {
@@ -1842,9 +1844,10 @@ describe("face sculpt", () => {
       expect(full[key]).toBeGreaterThanOrEqual(OLD_CAPS[key] * 2);
       expect(full[key]).toBeLessThanOrEqual(0.5);
     });
-    // Chin read weakest on the review renders, so its cap is the smallest
-    // raise but still more than twice the old 0.18.
-    expect(CAPS.sharpness).toBeLessThan(CAPS.stern);
+    // Chin read weakest on the review renders, so its cap took the extra
+    // raise design allowed (~0.50) - the largest of the three, never past it.
+    expect(CAPS.sharpness).toBeGreaterThan(CAPS.stern);
+    expect(CAPS.sharpness).toBeLessThanOrEqual(0.5);
   });
 
   it("is linear, so every slider step reads the same, and clamps out-of-range input", () => {
