@@ -89,11 +89,7 @@ type ViewerRig = {
   LASH_LENGTH: number;
   OUTER_CORNER_LIFT: number;
   HAIR_ROUGHNESS: number;
-  SCULPT_GAIN: {
-    squareness: { low: number; high: number };
-    stern: { low: number; high: number };
-    sharpness: { low: number; high: number };
-  };
+  SCULPT_CAPS: { squareness: number; stern: number; sharpness: number };
   SCULPT_MORPHS: string[];
   sculptMorphs: (
     faceWidth: number,
@@ -1682,6 +1678,12 @@ describe("morph targets", () => {
     expect(atHard.indexOf("Shape_Weight")).toBeGreaterThanOrEqual(
       GPU_MORPH_SLOTS
     );
+    // And with the sculpt caps raised, even the upper lid (Shape_EyeLidHeight,
+    // the Eyes tab's stare guard) would have fallen past the eighth slot on
+    // the shader path - the bake is what keeps the eye lock under the sculpts.
+    expect(atHard.indexOf("Shape_EyeLidHeight")).toBeGreaterThanOrEqual(
+      GPU_MORPH_SLOTS
+    );
   });
 
   it("bakeMorphs sums every non-zero influence into the positions, not just the eight strongest", () => {
@@ -1701,7 +1703,7 @@ describe("morph targets", () => {
     got.forEach((value, i) => expect(value).toBeCloseTo(want[i], 7));
     // The upload is flagged for the renderer.
     expect(geometry.attributes.position.version).toBeGreaterThan(versionBefore);
-    // Negative weights (the sculpt sliders' soft side) are summed as-is.
+    // Negative weights are summed as-is (nothing clamps inside the bake).
     mesh.morphTargetInfluences[0] = -0.5;
     expect(rig.bakeMorphs(mesh)).toBe(true);
     const wantNeg = expectedBake(geometry, [-0.5, ...influences.slice(1)]);
@@ -1814,69 +1816,52 @@ describe("morph targets", () => {
 });
 
 describe("face sculpt", () => {
-  // The Face / Jaw / Chin sliders ran Shape_Squareness / Shape_Stern /
-  // Shape_Sharpness at 0.22 / 0.22 / 0.18 from the base mesh: at the bust
-  // camera (about 1 px per mm) that is a 2-3 mm silhouette change end to
-  // end, which the design review read as no change. Measured on the GLB the
-  // three sculpts move the face 9.7 / 14.2 / 8.4 mm at weight 1, so the
-  // sliders now run through the whole shape with the reviewed default kept:
-  // 0.5 is the base mesh (the 0.85 bust Maxwell approved), 1 is the sculpt
-  // at `high`, 0 its inverse at `low`. Rendered, the inverted sculpts fold
-  // the lower lip and chin when all three go past about -0.4 together, so
-  // the soft side is shorter than the hard side.
-  const LOW = { squareness: 0.35, stern: 0.35, sharpness: 0.25 };
-  const HIGH = 0.7;
+  // The Face / Jaw / Chin sliders drive Shape_Squareness / Shape_Stern /
+  // Shape_Sharpness through mild(v, cap) from the base mesh. The caps were
+  // 0.22 / 0.22 / 0.18: at the bust camera (about 1 px per mm) that is a
+  // 2-3 mm silhouette change end to end, which the design review's headless
+  // renders read as not obvious, chin weakest. The caps asked for: 0.45 /
+  // 0.45 / 0.40, with the Face slider's width companions (NoseWidth,
+  // MouthWide) scaled by the same factor and EyesSquare left alone because
+  // it reshapes the eye. The eye itself is untouched: maskEyeRegion keeps
+  // the raised Stern / Sharpness reach off the lids.
+  const CAPS = { squareness: 0.45, stern: 0.45, sharpness: 0.4 };
+  const OLD_CAPS = { squareness: 0.22, stern: 0.22, sharpness: 0.18 };
 
-  it("the neutral slider position is the base mesh, so the reviewed default face does not move", () => {
-    expect(rig.sculptMorphs(0.5, 0.5, 0.5)).toEqual({
+  it("runs each sculpt from the base mesh at 0 to its raised cap at 1", () => {
+    expect(rig.sculptMorphs(0, 0, 0)).toEqual({
       squareness: 0,
       stern: 0,
       sharpness: 0,
     });
-    // The presets sit within a few hundredths of neutral.
-    const preset = rig.sculptMorphs(
-      CHARACTER_PRESETS[2].faceWidth,
-      CHARACTER_PRESETS[2].jaw,
-      CHARACTER_PRESETS[2].chin
-    );
-    expect(Math.abs(preset.squareness)).toBeLessThan(0.03);
-    expect(Math.abs(preset.stern)).toBeLessThan(0.03);
-    expect(Math.abs(preset.sharpness)).toBeLessThan(0.03);
-  });
-
-  it("runs each sculpt to a clearly readable extreme at 1 and its softer inverse at 0", () => {
-    const hard = rig.sculptMorphs(1, 1, 1);
-    const soft = rig.sculptMorphs(0, 0, 0);
+    const full = rig.sculptMorphs(1, 1, 1);
     (["squareness", "stern", "sharpness"] as const).forEach((key) => {
-      expect(hard[key]).toBeCloseTo(HIGH, 9);
-      expect(soft[key]).toBeCloseTo(-LOW[key], 9);
-      expect(rig.SCULPT_GAIN[key]).toEqual({ low: LOW[key], high: HIGH });
-      // End to end the travel is at least 0.9 of the sculpt - four times the
-      // old 0.22 caps - and never past the sculpt's own weight 1.
-      expect(hard[key] - soft[key]).toBeGreaterThanOrEqual(0.9);
-      expect(Math.abs(hard[key])).toBeLessThanOrEqual(1);
-      expect(Math.abs(soft[key])).toBeLessThanOrEqual(1);
+      expect(full[key]).toBeCloseTo(CAPS[key], 9);
+      expect(rig.SCULPT_CAPS[key]).toBeCloseTo(CAPS[key], 9);
+      // About twice the old caps and never past the sculpt's own weight 1.
+      expect(full[key]).toBeGreaterThanOrEqual(OLD_CAPS[key] * 2);
+      expect(full[key]).toBeLessThanOrEqual(0.5);
     });
-    // The fold guard: the inverse of Sharpness is the tightest.
-    expect(LOW.sharpness).toBeLessThan(LOW.stern);
+    // Chin read weakest on the review renders, so its cap is the smallest
+    // raise but still more than twice the old 0.18.
+    expect(CAPS.sharpness).toBeLessThan(CAPS.stern);
   });
 
-  it("is linear on each side of neutral, so every slider step reads the same, and clamps out-of-range input", () => {
+  it("is linear, so every slider step reads the same, and clamps out-of-range input", () => {
     const at = (v: number) => rig.sculptMorphs(v, v, v);
     const steps = [0, 0.25, 0.5, 0.75, 1].map(at);
     (["squareness", "stern", "sharpness"] as const).forEach((key) => {
       for (let i = 1; i < steps.length; i += 1) {
         expect(steps[i][key]).toBeGreaterThan(steps[i - 1][key]);
+        expect(steps[i][key] - steps[i - 1][key]).toBeCloseTo(CAPS[key] / 4, 9);
       }
-      expect(steps[1][key]).toBeCloseTo(-LOW[key] / 2, 9);
-      expect(steps[3][key]).toBeCloseTo(HIGH / 2, 9);
     });
     expect(at(-3)).toEqual(at(0));
     expect(at(9)).toEqual(at(1));
     expect(at(NaN)).toEqual(at(0));
   });
 
-  it("applyMeshLook writes the signed sculpt weights and leaves the companion morphs on their mild caps", () => {
+  it("applyMeshLook writes the raised caps, scales the Face width companions with them and leaves the eye-shape companion alone", () => {
     const names = Object.keys(readGlbHead().targets);
     const head = morphDictionaryMesh(names);
     const at = (name: string) =>
@@ -1887,30 +1872,43 @@ describe("face sculpt", () => {
       jaw: 0,
       chin: 0,
     });
-    expect(at("Shape_Squareness")).toBeCloseTo(-LOW.squareness, 9);
-    expect(at("Shape_Stern")).toBeCloseTo(-LOW.stern, 9);
-    expect(at("Shape_Sharpness")).toBeCloseTo(-LOW.sharpness, 9);
+    expect(at("Shape_Squareness")).toBe(0);
+    expect(at("Shape_Stern")).toBe(0);
+    expect(at("Shape_Sharpness")).toBe(0);
     rig.applyMeshLook(head, {
       ...DEFAULT_LOOK_VALUES,
       faceWidth: 1,
       jaw: 1,
       chin: 1,
     });
-    expect(at("Shape_Squareness")).toBeCloseTo(HIGH, 9);
-    expect(at("Shape_Stern")).toBeCloseTo(HIGH, 9);
-    expect(at("Shape_Sharpness")).toBeCloseTo(HIGH, 9);
-    // The small companions keep their original unipolar mapping.
+    expect(at("Shape_Squareness")).toBeCloseTo(CAPS.squareness, 9);
+    expect(at("Shape_Stern")).toBeCloseTo(CAPS.stern, 9);
+    expect(at("Shape_Sharpness")).toBeCloseTo(CAPS.sharpness, 9);
+    // The width companions follow Squareness' raise (0.22 -> 0.45)...
+    const widthFactor = CAPS.squareness / OLD_CAPS.squareness;
+    expect(at("Shape_NoseWidth")).toBeCloseTo(0.16 * widthFactor, 2);
+    expect(at("Shape_MouthWide")).toBeCloseTo(0.14 * widthFactor, 2);
+    // ...but EyesSquare reshapes the eye, which is locked, so it stays put,
+    // as do the jaw / chin companions.
     expect(at("Shape_EyesSquare")).toBeCloseTo(0.1, 9);
-    expect(at("Shape_NoseWidth")).toBeCloseTo(0.16, 9);
-    expect(at("Shape_MouthWide")).toBeCloseTo(0.14, 9);
     expect(at("Shape_NeckThickness")).toBeCloseTo(0.22, 9);
     expect(at("Shape_NoseTiltDown")).toBeCloseTo(0.08, 9);
     expect(at("Shape_MouthThin")).toBe(0);
-    // No 0.22 / 0.18 cap left on the sculpts themselves.
+    // The default preset lands about halfway up the new caps.
+    rig.applyMeshLook(head, DEFAULT_LOOK_VALUES);
+    expect(at("Shape_Squareness")).toBeCloseTo(
+      CHARACTER_PRESETS[2].faceWidth * CAPS.squareness,
+      9
+    );
+    expect(at("Shape_Stern")).toBeCloseTo(
+      CHARACTER_PRESETS[2].jaw * CAPS.stern,
+      9
+    );
+    // No old cap left in the viewer.
     const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
-    expect(html).not.toMatch(/"Shape_Squareness", mild\(/);
-    expect(html).not.toMatch(/"Shape_Stern", mild\(/);
-    expect(html).not.toMatch(/"Shape_Sharpness", mild\(/);
+    expect(html).not.toMatch(/"Shape_Squareness", mild\([^)]*0\.22\)/);
+    expect(html).not.toMatch(/"Shape_Stern", mild\([^)]*0\.22\)/);
+    expect(html).not.toMatch(/"Shape_Sharpness", mild\([^)]*0\.18\)/);
   });
 
   // A skinned mesh with three vertices: an eye-cap vertex (weight 1.0 on

@@ -1065,15 +1065,16 @@ const isNearWhite = (R, G, B) =>
 // Face / Jaw / Chin at 0 vs 1, read from phViewerState().face (Head_0's
 // skinned, morph-baked vertices against the eye line) and reported in CSS px
 // at the bust camera (about 1 px per mm), read in the rest pose so the parked
-// sway phase does not enter. Measured on this viewer the lower face
-// silhouette (jaw / chin bands) moves 14 px for Face, 15 px for Jaw and 11
-// px for Chin (whose tip also drops 3 px); the old
-// 0.22 / 0.22 / 0.18 caps moved it 2-3 px end to end, which the design
-// review read as no change. The thresholds sit at about half the measured
-// travel, so a slide back toward the old caps fails here.
-const MIN_FACE_WIDTH_TRAVEL_PX = 7;
-const MIN_JAW_WIDTH_TRAVEL_PX = 7;
-const MIN_CHIN_TRAVEL_PX = 6;
+// sway phase does not enter. Measured on this viewer with the sculpt caps at
+// 0.45 / 0.45 / 0.40 the lower face silhouette (jaw / chin bands) moves 7.0
+// px for Face, 6.9 px for Jaw and 4.5 px for Chin (whose tip also drops 1
+// px) - chin still the weakest; the old 0.22 / 0.22 / 0.18 caps moved it
+// 3 / 4 / 2 px on the same probe, which the design review's renders read as
+// not obvious. The thresholds sit at 60-70% of the measured travel and above
+// every old-cap figure, so a slide back toward the old caps fails here.
+const MIN_FACE_WIDTH_TRAVEL_PX = 4;
+const MIN_JAW_WIDTH_TRAVEL_PX = 5;
+const MIN_CHIN_TRAVEL_PX = 3;
 // While the face moves, the eye must not: iris exposure (liner excluded) at
 // either end of every sculpt slider stays within this much of neutral, and
 // inside the Size 0.5 band. Without maskEyeRegion Stern 0 opened the lids

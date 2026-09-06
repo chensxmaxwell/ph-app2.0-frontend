@@ -110,46 +110,29 @@
     return clamp01(v) * (amount == null ? 0.28 : amount);
   }
 
-  // The Face / Jaw / Chin sliders drive Head_0's three sculpt morphs. They
-  // used to run 0 -> 0.22 / 0.22 / 0.18 from the base mesh: measured on the
-  // GLB the sculpts move the face 9.7 / 14.2 / 8.4 mm at weight 1, so those
-  // caps were a 2-3 mm silhouette change end to end, which at the bust camera
-  // (about 1 px per mm) the design review read as no change. The sliders now
-  // run through the whole shape with the reviewed default kept: 0.5 is the
-  // base mesh (the 0.85 bust that was approved), 1 is the sculpt at `high`,
-  // 0 is its inverse at `low`. Linear on each side so every step reads the
-  // same. The soft side is shorter because the inverted sculpts fold the
-  // lower lip and chin into each other once all three pass about -0.4
-  // together (rendered: a creased, pursed mouth), while +0.7 of all three
-  // is still a clean, if heavy, face. Their reach over the eyes is masked
-  // out at load (maskEyeRegion), so the lids stay where the Eyes tab put them.
+  // The Face / Jaw / Chin sliders drive Head_0's three sculpt morphs through
+  // mild(v, cap) from the base mesh. The caps were 0.22 / 0.22 / 0.18:
+  // measured on the GLB the sculpts move the face 9.7 / 14.2 / 8.4 mm at
+  // weight 1, so that was a 2-3 mm silhouette change end to end, which at
+  // the bust camera (about 1 px per mm) the design review's headless renders
+  // read as not obvious, chin weakest. The caps asked for are 0.45 / 0.45 /
+  // 0.40 (SCULPT_WIDTH_FACTOR carries the same raise onto the Face slider's
+  // NoseWidth / MouthWide companions; EyesSquare reshapes the eye and stays
+  // at 0.1). Their reach over the eyes is masked out at load
+  // (maskEyeRegion): Stern moves the lid margin 10.8 mm at weight 1, so at
+  // these caps the lids would otherwise hood by ~2 mm already at the
+  // default look. Design re-signs Face / Jaw / Chin 0 / 0.5 / 1 after this
+  // bump - the default preset (0.48 / 0.46 / 0.5) now sits about halfway up.
   var SCULPT_MORPHS = ["Shape_Squareness", "Shape_Stern", "Shape_Sharpness"];
-  var SCULPT_GAIN = {
-    squareness: { low: 0.35, high: 0.7 },
-    stern: { low: 0.35, high: 0.7 },
-    sharpness: { low: 0.25, high: 0.7 }
-  };
-
-  function sculptWeight(v, gain) {
-    var t = clamp01(v) - 0.5;
-    return t < 0 ? t * 2 * gain.low : t * 2 * gain.high;
-  }
+  var SCULPT_CAPS = { squareness: 0.45, stern: 0.45, sharpness: 0.4 };
+  var SCULPT_WIDTH_FACTOR = SCULPT_CAPS.squareness / 0.22;
 
   function sculptMorphs(faceWidth, jaw, chin) {
     return {
-      squareness: sculptWeight(faceWidth, SCULPT_GAIN.squareness),
-      stern: sculptWeight(jaw, SCULPT_GAIN.stern),
-      sharpness: sculptWeight(chin, SCULPT_GAIN.sharpness)
+      squareness: mild(faceWidth, SCULPT_CAPS.squareness),
+      stern: mild(jaw, SCULPT_CAPS.stern),
+      sharpness: mild(chin, SCULPT_CAPS.sharpness)
     };
-  }
-
-  // Like setMorph, but keeps the sign: a negative influence is the inverse
-  // of the sculpt (bakeMorphs sums it as-is).
-  function setMorphSigned(mesh, name, value) {
-    if (!mesh.morphTargetDictionary) return;
-    var idx = mesh.morphTargetDictionary[name];
-    if (idx === undefined) return;
-    mesh.morphTargetInfluences[idx] = Math.max(-1, Math.min(1, Number(value) || 0));
   }
 
   // Head_0's Shape_EyeLidHeight drops the upper lid (the margin moves ~28mm
@@ -188,13 +171,13 @@
     var eye = clamp01(next.eyeSize);
     var brows = browMorphs(eye, next.jaw);
     var sculpt = sculptMorphs(next.faceWidth, next.jaw, next.chin);
-    setMorphSigned(mesh, "Shape_Squareness", sculpt.squareness);
-    setMorphSigned(mesh, "Shape_Stern", sculpt.stern);
-    setMorphSigned(mesh, "Shape_Sharpness", sculpt.sharpness);
+    setMorph(mesh, "Shape_Squareness", sculpt.squareness);
+    setMorph(mesh, "Shape_Stern", sculpt.stern);
+    setMorph(mesh, "Shape_Sharpness", sculpt.sharpness);
     setMorph(mesh, "Shape_EyesSquare", mild(next.faceWidth, 0.1));
     setMorph(mesh, "Shape_EyeLidHeight", upperLidDrop(eye));
-    setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16));
-    setMorph(mesh, "Shape_MouthWide", mild(next.faceWidth, 0.14));
+    setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16 * SCULPT_WIDTH_FACTOR));
+    setMorph(mesh, "Shape_MouthWide", mild(next.faceWidth, 0.14 * SCULPT_WIDTH_FACTOR));
     setMorph(mesh, "Shape_MouthThin", (1 - clamp01(next.chin)) * 0.1);
     setMorph(mesh, "Shape_RaiseBrows", brows.raise);
     setMorph(mesh, "Shape_LowerBrows", brows.lower);
@@ -1202,9 +1185,10 @@
   }
 
   // Measured on the GLB, Shape_Stern moves the lid margin up to 10.8 mm and
-  // Shape_Sharpness 6.5 mm at weight 1, while Eyes_0 carries neither: at
-  // either end of the Jaw / Chin sliders the lids would leave the eyeball (a
-  // round stare at 0, a hood at 1) - the eye the Size slider was tuned for.
+  // Shape_Sharpness 6.5 mm at weight 1, while Eyes_0 carries neither: with
+  // the Jaw / Chin caps at 0.45 / 0.40 the lids would hood over the eyeball
+  // as the sliders rise (~2 mm already at the default look) - the eye the
+  // Size slider was tuned for.
   // So the sculpt deltas are faded out over each vertex's weight on the eye
   // bones (1.0 on the lid margin and the Head_0 eye cap, fading to 0 by the
   // brow), the same falloff applyEyeScale relies on. Once, at load, after
@@ -1707,7 +1691,7 @@
     LASH_LENGTH: LASH_LENGTH,
     OUTER_CORNER_LIFT: OUTER_CORNER_LIFT,
     HAIR_ROUGHNESS: HAIR_ROUGHNESS,
-    SCULPT_GAIN: SCULPT_GAIN,
+    SCULPT_CAPS: SCULPT_CAPS,
     SCULPT_MORPHS: SCULPT_MORPHS,
     sculptMorphs: sculptMorphs,
     applyMeshLook: applyMeshLook,
