@@ -1500,6 +1500,30 @@ const main = async () => {
       messages.includes("ready"),
       JSON.stringify(messages)
     );
+    // A material whose shader fails to compile draws nothing and three only
+    // logs it (the Style C card layer shipped invisible for one commit that
+    // way): every console error is a failure.
+    const consoleErrors = () =>
+      cdp.events
+        .filter(
+          (event) =>
+            (event.method === "Runtime.consoleAPICalled" &&
+              event.params.type === "error") ||
+            event.method === "Runtime.exceptionThrown"
+        )
+        .map((event) =>
+          JSON.stringify(
+            event.params.args
+              ? event.params.args.map((arg) => arg.value || arg.description)
+              : event.params.exceptionDetails
+          ).slice(0, 300)
+        );
+    const earlyErrors = consoleErrors();
+    check(
+      "viewer logged no console errors while loading (shader compile, uncaught exceptions)",
+      earlyErrors.length === 0,
+      earlyErrors.join(" | ")
+    );
     if (!messages.includes("ready")) {
       throw new Error("viewer never became ready");
     }
@@ -1616,6 +1640,12 @@ const main = async () => {
     );
     await pixelPass(cdp, sessionId);
     await craftPass(cdp, sessionId);
+    const lateErrors = consoleErrors();
+    check(
+      "viewer logged no console errors across every look (shader compile, uncaught exceptions)",
+      lateErrors.length === 0,
+      lateErrors.slice(0, 3).join(" | ")
+    );
   } finally {
     await cdp.close();
     server.close();

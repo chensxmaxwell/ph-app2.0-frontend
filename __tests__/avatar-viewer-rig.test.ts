@@ -132,17 +132,37 @@ type ViewerRig = {
   LASH_CLUSTER: { count: number; tipThin: number };
   WETLINE: { from: number; peak: number; to: number; strength: number };
   HAIR_LOOK: {
-    edgeFade: [number, number];
     strandFrequency: number;
     strandDepth: number;
     stripMean: number;
     stripContrast: number;
     metalness: number;
     envMapIntensity: number;
-    alphaTest: number;
+    scalpNormal: number;
+    edgeDissolve: number;
+    coreAlpha: number;
+    fringeAlpha: number;
   };
+  HAIR_CARDS: {
+    perSquareMetre: number;
+    width: number;
+    length: number;
+    lift: number;
+    segments: number;
+    albedo: number;
+    flyawayShare: number;
+    flyawayLift: number;
+  };
+  hairBoundaryDistance: (geometry: unknown) => Float32Array;
+  buildHairCards: (shell: unknown, options?: { seed?: number }) => unknown;
+  hairNormalChunk: () => string;
+  makeHairMaterials: (
+    base: unknown,
+    envMap: unknown,
+    kind: "shell" | "card"
+  ) => { core: Three; fringe: Three };
   SOCKET_SHADE: number;
-  hairShaderChunk: () => string;
+  hairShaderChunk: (kind: "shell" | "card") => string;
   skinDetailChunk: () => string;
   eyeBoneSlots: (mesh: unknown) => [number, number];
   eyeWeightVertexChunk: () => string;
@@ -2287,6 +2307,14 @@ describe("soft semi-real default look", () => {
     // The frame loop feeds the key direction to every skin material.
     const animateBody = sliceBetween(html, "function animate(", "function fail(");
     expect(animateBody).toMatch(/updateKeyDirection\(\);/);
+    // three r128 has no <output_fragment> include - #41's wrap term targeted
+    // it and never reached the shader. The light chunk is spliced in front of
+    // the shader's real last line, which the bundled three.min.js must carry.
+    expect(html).not.toContain("<output_fragment>");
+    expect(inject).toMatch(/OUTPUT_LINE,\s*skinDetailChunk\("light", sss\) \+ OUTPUT_LINE/);
+    const three = fs.readFileSync(path.join(ENGINE_DIR, "three.min.js"), "utf8");
+    expect(three).toContain("gl_FragColor = vec4( outgoingLight, diffuseColor.a );");
+    expect(three).not.toContain("output_fragment");
   });
 
   it("shades the lid skin into a soft socket by its own eye-bone weight, on the head material only", () => {
@@ -2455,64 +2483,288 @@ describe("soft semi-real default look", () => {
     );
   });
 
-  it("draws hair as strand cards: mirrored strip for the back mesh, strand streaks, a grazing-angle fade at the card edges, rough enough for no white fringe", () => {
-    const hair = rig.HAIR_LOOK;
-    // Roughness stays in the no-blow-out band from #41.
-    expect(rig.HAIR_ROUGHNESS).toBeGreaterThanOrEqual(0.58);
-    expect(rig.HAIR_ROUGHNESS).toBeLessThanOrEqual(0.62);
-    expect(hair.metalness).toBeLessThanOrEqual(0.05);
-    expect(hair.envMapIntensity).toBeLessThanOrEqual(0.1);
-    // Edge fade: cards seen within ~20deg of edge-on fade out.
-    expect(hair.edgeFade[0]).toBeGreaterThanOrEqual(0);
-    expect(hair.edgeFade[0]).toBeLessThan(hair.edgeFade[1]);
-    expect(hair.edgeFade[1]).toBeLessThanOrEqual(0.45);
-    // Strands: roughly 0.5-1.5 mm apart across a card (the strip spans u
-    // 0.5-0.75 for ~10-30 cm of card width), 10-35% deep.
-    expect(hair.strandFrequency).toBeGreaterThanOrEqual(400);
-    expect(hair.strandFrequency).toBeLessThanOrEqual(2000);
-    expect(hair.strandDepth).toBeGreaterThanOrEqual(0.1);
-    expect(hair.strandDepth).toBeLessThanOrEqual(0.35);
-    const chunk = rig.hairShaderChunk();
-    // Every hair style's back mesh (Hair_<i>_1_0) maps to u 0.75-1.0, where
-    // the baked strip has alpha 0 - so it was discarded by the alphaTest and
-    // the long back hair never drew. Mirror it onto the front strip.
-    expect(chunk).toMatch(/if \(hUv\.x > 0\.75\) hUv\.x = 1\.5 - hUv\.x;/);
-    expect(chunk).toContain("texture2D(map, hUv)");
-    expect(chunk).toMatch(/float strand = /);
-    // Streaks both lighten and darken about the mean by strandDepth.
-    expect(chunk).toContain(
-      `diffuseColor.rgb *= 1.0 + (strand - 0.5) * ${(hair.strandDepth * 2).toFixed(2)};`
-    );
-    // The baked strip's contrast is flattened so its light edge columns do
-    // not draw as seams between cards.
-    expect(hair.stripContrast).toBeGreaterThan(0.3);
-    expect(hair.stripContrast).toBeLessThan(0.7);
-    expect(chunk).toContain(
-      `texelColor.rgb = mix(vec3(${hair.stripMean.toFixed(2)}), texelColor.rgb, ${hair.stripContrast.toFixed(2)});`
-    );
-    expect(chunk).toContain(
-      `smoothstep(${hair.edgeFade[0].toFixed(2)}, ${hair.edgeFade[1].toFixed(
-        2
-      )}, abs(dot(normalize(vNormal), normalize(vViewPosition))))`
-    );
-    expect(chunk).toContain("diffuseColor.a *=");
-    const html = viewerHtml();
-    const load = sliceBetween(
-      html,
-      "new THREE.GLTFLoader().load(",
-      "function boxOf("
-    );
-    expect(load).toMatch(/upgradeHairMat\(mat, envMap\)/);
-    const upgrade = sliceBetween(
-      html,
-      "function upgradeHairMat(",
-      "function upgradeIrisMat("
-    );
-    expect(upgrade).toMatch(/mat\.roughness = HAIR_ROUGHNESS;/);
-    expect(upgrade).toMatch(/mat\.metalness = HAIR_LOOK\.metalness;/);
-    expect(upgrade).toMatch(/mat\.alphaTest = /);
-    expect(upgrade).toMatch(/mat\.side = THREE\.DoubleSide;/);
-    expect(upgrade).toContain("hairShaderChunk()");
+  // Style C hair, second cut (design rejected #42's tip on "block hair").
+  // Measured on the GLB: every hair style is four sculpted clump shells
+  // (0.12 x 0.30 m each, one connected surface per mesh), not cards - so the
+  // brick / step read is the shell's own facets and open edges, and no
+  // texture can fix it. The viewer now builds the geometry at load: a layer
+  // of thin strand cards grown on the shell surface along the hair flow,
+  // skinned to the shell's bones; the shell itself dissolves into strands at
+  // its open edges (hairline, tips) by a baked distance-to-boundary; hair
+  // normals blend toward a scalp sphere so facet shading steps vanish; and
+  // hair renders in two passes (opaque core + soft fringe) so the fringes do
+  // not punch holes.
+  describe("strand-card hair", () => {
+    // A 5 x 5 vertex skinned plane facing +z, 2 cm spacing (8 cm square),
+    // hanging in the x/y plane with y up, bound to two bones.
+    const shellFixture = () => {
+      const N = 5;
+      const step = 0.02;
+      const positions: number[] = [];
+      const normals: number[] = [];
+      const uvs: number[] = [];
+      const skinIndex: number[] = [];
+      const skinWeight: number[] = [];
+      for (let j = 0; j < N; j += 1) {
+        for (let i = 0; i < N; i += 1) {
+          positions.push(i * step - 0.04, 1.7 - j * step, 0);
+          normals.push(0, 0, 1);
+          uvs.push(0.5 + i / (N - 1) / 4, j / (N - 1) / 4);
+          // Left half on bone 1, right half on bone 0 - so a card copies
+          // whichever its shell vertex carries.
+          skinIndex.push(i < 2 ? 1 : 0, 0, 0, 0);
+          skinWeight.push(1, 0, 0, 0);
+        }
+      }
+      const index: number[] = [];
+      for (let j = 0; j < N - 1; j += 1) {
+        for (let i = 0; i < N - 1; i += 1) {
+          const a = j * N + i;
+          index.push(a, a + 1, a + N, a + 1, a + N + 1, a + N);
+        }
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute(
+        "position",
+        new THREE.Float32BufferAttribute(positions, 3)
+      );
+      geometry.setAttribute(
+        "normal",
+        new THREE.Float32BufferAttribute(normals, 3)
+      );
+      geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setAttribute(
+        "skinIndex",
+        new THREE.Uint16BufferAttribute(skinIndex, 4)
+      );
+      geometry.setAttribute(
+        "skinWeight",
+        new THREE.Float32BufferAttribute(skinWeight, 4)
+      );
+      geometry.setIndex(index);
+      const mesh = new THREE.SkinnedMesh(
+        geometry,
+        new THREE.MeshStandardMaterial()
+      );
+      const head = new THREE.Bone();
+      head.name = "head";
+      const hairBone = new THREE.Bone();
+      hairBone.name = "HairFront";
+      head.add(hairBone);
+      const bones = [head, hairBone];
+      mesh.bind(
+        new THREE.Skeleton(
+          bones,
+          bones.map(() => new THREE.Matrix4())
+        ),
+        new THREE.Matrix4()
+      );
+      mesh.name = "Hair_2_0_0";
+      return { mesh, geometry, N, step };
+    };
+
+    it("bakes each shell vertex's distance to the nearest open edge, in metres", () => {
+      const { geometry, N, step } = shellFixture();
+      const dist = rig.hairBoundaryDistance(geometry);
+      expect(dist).toHaveLength(N * N);
+      // Every rim vertex is on the boundary.
+      for (let i = 0; i < N; i += 1) {
+        expect(dist[i]).toBe(0);
+        expect(dist[(N - 1) * N + i]).toBe(0);
+        expect(dist[i * N]).toBe(0);
+        expect(dist[i * N + N - 1]).toBe(0);
+      }
+      // The centre vertex is two edges (4 cm) in; its neighbours one.
+      const centre = Math.floor(N / 2) * N + Math.floor(N / 2);
+      expect(dist[centre]).toBeCloseTo(2 * step, 6);
+      expect(dist[centre - 1]).toBeCloseTo(step, 6);
+      expect(dist[centre - N]).toBeCloseTo(step, 6);
+      // A closed surface (no open edge) is far from any edge everywhere.
+      const sphere = new THREE.SphereGeometry(0.1, 8, 6);
+      const closed = rig.hairBoundaryDistance(sphere);
+      expect(Math.min(...Array.from(closed))).toBeGreaterThan(0.05);
+    });
+
+    it("grows strand cards on the shell along the hair flow, skinned like the surface under them", () => {
+      const { mesh, step } = shellFixture();
+      const spec = rig.HAIR_CARDS;
+      expect(spec.perSquareMetre).toBeGreaterThanOrEqual(1500);
+      expect(spec.perSquareMetre).toBeLessThanOrEqual(8000);
+      expect(spec.width).toBeGreaterThanOrEqual(0.008);
+      expect(spec.width).toBeLessThanOrEqual(0.03);
+      expect(spec.length).toBeGreaterThanOrEqual(0.04);
+      expect(spec.length).toBeLessThanOrEqual(0.14);
+      expect(spec.lift).toBeGreaterThan(0);
+      expect(spec.lift).toBeLessThanOrEqual(0.01);
+      expect(spec.segments).toBeGreaterThanOrEqual(3);
+      // A share of the cards are flyaways: they lift off the surface toward
+      // the tip (up to flyawayLift) so the silhouette breaks into wisps.
+      expect(spec.flyawayShare).toBeGreaterThanOrEqual(0.15);
+      expect(spec.flyawayShare).toBeLessThanOrEqual(0.5);
+      expect(spec.flyawayLift).toBeGreaterThan(spec.lift * 2);
+      expect(spec.flyawayLift).toBeLessThanOrEqual(0.03);
+      const cards = rig.buildHairCards(mesh, { seed: 3 });
+      expect(cards).not.toBeNull();
+      const geo = (cards as { geometry: Three }).geometry;
+      const pos = geo.attributes.position;
+      const uv = geo.attributes.uv;
+      const card = geo.attributes.phCard;
+      const skinIndex = geo.attributes.skinIndex;
+      const skinWeight = geo.attributes.skinWeight;
+      const vertsPerCard = (spec.segments + 1) * 2;
+      let flyaways = 0;
+      // Card count follows the surface area (8 cm square = 0.0064 m^2).
+      const count = pos.count / vertsPerCard;
+      expect(Number.isInteger(count)).toBe(true);
+      expect(count).toBeGreaterThanOrEqual(
+        Math.floor(0.0064 * spec.perSquareMetre * 0.8)
+      );
+      expect(count).toBeLessThanOrEqual(
+        Math.ceil(0.0064 * spec.perSquareMetre * 1.2) + 1
+      );
+      expect(geo.index.count).toBe(count * spec.segments * 6);
+      const v = (attr: Three, i: number) =>
+        Array.from({ length: attr.itemSize }, (_, k) =>
+          attr.array[i * attr.itemSize + k]
+        );
+      for (let c = 0; c < count; c += 1) {
+        const base = c * vertsPerCard;
+        const id = v(card, base)[0];
+        const flyaway = v(card, base)[2];
+        expect([0, 1]).toContain(flyaway);
+        if (flyaway) flyaways += 1;
+        let rootY = -Infinity;
+        let tipY = Infinity;
+        for (let k = 0; k < vertsPerCard; k += 1) {
+          const p = v(pos, base + k);
+          // Lifted off the surface, never behind it; flyaways may float up
+          // to flyawayLift + lift above it.
+          // (a twisted flyaway's side vertex may dip toward the surface)
+          expect(p[2]).toBeGreaterThan(flyaway ? -spec.width : spec.lift * 0.5);
+          expect(p[2]).toBeLessThan(
+            flyaway ? spec.flyawayLift + spec.lift * 2 + spec.width : spec.lift * 3
+          );
+          // Same card id on every vertex of the card.
+          expect(v(card, base + k)[0]).toBe(id);
+          // Skinning copied from the nearest shell vertex: the grid columns
+          // at x = -0.04 / -0.02 carry bone 1, the rest bone 0, weight 1.
+          const idx = v(skinIndex, base + k)[0];
+          if (Math.abs(p[0] + 0.01) > 1e-4) {
+            expect(idx).toBe(p[0] < -0.01 ? 1 : 0);
+          }
+          expect(v(skinWeight, base + k)[0]).toBe(1);
+          const along = v(uv, base + k)[1];
+          if (along === 0) rootY = Math.max(rootY, p[1]);
+          if (along === 1) tipY = Math.min(tipY, p[1]);
+        }
+        // Flow is gravity on the surface: the root (along 0) is above the
+        // tip (along 1) and the card is at least half its nominal length.
+        expect(rootY - tipY).toBeGreaterThan(spec.length * 0.5);
+        // Width across the card at the root (the two along-0 vertices).
+        const a = v(pos, base);
+        const b = v(pos, base + 1);
+        const width = Math.hypot(a[0] - b[0], a[1] - b[1]);
+        // (flyaways are 0.6x as wide; the twist keeps the x/y span within
+        // the card width)
+        expect(width).toBeGreaterThan(spec.width * (flyaway ? 0.2 : 0.5));
+        expect(width).toBeLessThan(spec.width * 1.6);
+        // Across runs 0 -> 1 on each pair.
+        expect(v(uv, base)[0]).toBe(0);
+        expect(v(uv, base + 1)[0]).toBe(1);
+        // The card's normal is the surface normal (+z), not the ribbon's.
+        const n = v(geo.attributes.normal, base);
+        expect(n[2]).toBeGreaterThan(0.9);
+      }
+      // Roughly the flyaway share of the cards lift off.
+      expect(flyaways / count).toBeGreaterThan(spec.flyawayShare * 0.4);
+      expect(flyaways / count).toBeLessThan(spec.flyawayShare * 1.8 + 0.1);
+      expect(card.itemSize).toBe(3);
+      // Deterministic for a seed, different for another.
+      const again = rig.buildHairCards(mesh, { seed: 3 }) as { geometry: Three };
+      expect(Array.from(again.geometry.attributes.position.array)).toEqual(
+        Array.from(pos.array)
+      );
+      const other = rig.buildHairCards(mesh, { seed: 4 }) as { geometry: Three };
+      expect(Array.from(other.geometry.attributes.position.array)).not.toEqual(
+        Array.from(pos.array)
+      );
+      // The card mesh is a SkinnedMesh on the shell's skeleton and is named
+      // so figureMeshVisible follows the hair style.
+      const cardMesh = cards as Three;
+      expect(cardMesh.isSkinnedMesh).toBe(true);
+      expect(cardMesh.skeleton).toBe(mesh.skeleton);
+      expect(cardMesh.name).toBe("Hair_2_0_0_cards");
+      expect(rig.figureMeshVisible("Hair_2_0_0_cards", { appearanceIndex: 2, hairStyle: 2 })).toBe(true);
+      expect(rig.figureMeshVisible("Hair_2_0_0_cards", { appearanceIndex: 2, hairStyle: 1 })).toBe(false);
+      expect(rig.figureMeshVisible("Hair_2_0_0_fringe", { appearanceIndex: 2, hairStyle: 2 })).toBe(true);
+      expect(step).toBeGreaterThan(0);
+    });
+
+    it("shades the shell as strands: mirrored strip, edge dissolve by the baked boundary distance, scalp-sphere normals, two render passes", () => {
+      const look = rig.HAIR_LOOK;
+      expect(rig.HAIR_ROUGHNESS).toBeGreaterThanOrEqual(0.58);
+      expect(rig.HAIR_ROUGHNESS).toBeLessThanOrEqual(0.66);
+      expect(look.scalpNormal).toBeGreaterThanOrEqual(0.4);
+      expect(look.scalpNormal).toBeLessThanOrEqual(0.85);
+      expect(look.edgeDissolve).toBeGreaterThanOrEqual(0.02);
+      expect(look.edgeDissolve).toBeLessThanOrEqual(0.06);
+      const shell = rig.hairShaderChunk("shell");
+      expect(shell).toMatch(/if \(hUv\.x > 0\.75\) hUv\.x = 1\.5 - hUv\.x;/);
+      expect(shell).toContain("texture2D(map, hUv)");
+      expect(shell).toContain("vPhEdge");
+      expect(shell).toContain(`/ ${look.edgeDissolve.toFixed(3)}`);
+      expect(shell).toMatch(/float strand = /);
+      expect(shell).toContain("diffuseColor.a *=");
+      const card = rig.hairShaderChunk("card");
+      expect(card).not.toContain("texture2D(map");
+      expect(card).toContain("vPhCard");
+      // Flyaway cards (vPhCard.z) carry sparser strands.
+      expect(card).toMatch(/vPhCard\.z/);
+      // Tapered, strand-broken tips and fringed sides.
+      expect(card).toMatch(/float tip = /);
+      expect(card).toMatch(/float strand = /);
+      expect(card).toContain("diffuseColor.a *=");
+      // Root darker than tip.
+      expect(card).toMatch(/mix\([0-9.]+, [0-9.]+, along\)/);
+      const normals = rig.hairNormalChunk();
+      expect(normals).toContain("skullWorld");
+      expect(normals).toContain(`${look.scalpNormal.toFixed(2)}`);
+      expect(normals).toMatch(/normal = normalize\(mix\(normal, /);
+      // Two materials per hair mesh: an opaque core that writes depth and a
+      // blended fringe that does not.
+      const base = new THREE.MeshStandardMaterial();
+      const mats = rig.makeHairMaterials(base, null, "shell");
+      expect(mats.core.transparent).toBe(false);
+      expect(mats.core.depthWrite).toBe(true);
+      expect(mats.core.alphaTest).toBeGreaterThanOrEqual(0.4);
+      expect(mats.fringe.transparent).toBe(true);
+      expect(mats.fringe.depthWrite).toBe(false);
+      expect(mats.fringe.alphaTest).toBeLessThanOrEqual(0.1);
+      expect(mats.fringe.alphaTest).toBeGreaterThan(0);
+      expect(mats.core.side).toBe(THREE.DoubleSide);
+      // The card layer has no map: it must declare USE_UV itself or vUv is
+      // undeclared and the shader never compiles (the layer drew nothing).
+      const cardMats = rig.makeHairMaterials(null, null, "card");
+      expect(cardMats.core.defines).toEqual({ USE_UV: "" });
+      expect(cardMats.fringe.defines).toEqual({ USE_UV: "" });
+      expect(mats.core.defines || {}).not.toHaveProperty("USE_UV");
+      // The core pass writes alpha 1 (the canvas is transparent; a fractional
+      // alpha from an opaque pass lets the page show through the hair).
+      const make = sliceBetween(viewerHtml(), "function makeHairMaterials(", "function dressHair(");
+      expect(make).toMatch(/if \(!mat\.transparent\) \{[\s\S]*OUTPUT_LINE,\s*"gl_FragColor = vec4\( outgoingLight, 1\.0 \);"/);
+      expect(mats.core.roughness).toBe(rig.HAIR_ROUGHNESS);
+      const html = viewerHtml();
+      const load = sliceBetween(html, "new THREE.GLTFLoader().load(", "function boxOf(");
+      // The load path: shell -> core material, fringe clone, card layer.
+      expect(load).toMatch(/dressHair\(obj, envMap\)/);
+      const dress = sliceBetween(html, "function dressHair(", "function upgradeIrisMat(");
+      expect(dress).toMatch(/hairBoundaryDistance\(/);
+      expect(dress).toMatch(/buildHairCards\(/);
+      expect(dress).toMatch(/_fringe/);
+      // The frame loop feeds the skull centre.
+      const animateBody = sliceBetween(html, "function animate(", "function fail(");
+      expect(animateBody).toMatch(/updateHairUniforms\(\);/);
+    });
   });
 
   it("keeps the viewer's colour tables identical to the app's swatches, and the default preset softer than #41", () => {
