@@ -92,6 +92,9 @@ const PRESETS = [
     faceWidth: 0.28,
     jaw: 0.3,
     chin: 0.42,
+    lipFullness: 0.55,
+    noseBridge: 0.5,
+    browHeight: 0.5,
     eyeSize: 0.58,
     age: 0.18,
   },
@@ -108,6 +111,9 @@ const PRESETS = [
     faceWidth: 0.58,
     jaw: 0.55,
     chin: 0.5,
+    lipFullness: 0.55,
+    noseBridge: 0.5,
+    browHeight: 0.5,
     eyeSize: 0.52,
     age: 0.32,
   },
@@ -124,6 +130,9 @@ const PRESETS = [
     faceWidth: 0.4,
     jaw: 0.38,
     chin: 0.5,
+    lipFullness: 0.55,
+    noseBridge: 0.5,
+    browHeight: 0.5,
     eyeSize: 0.5,
     age: 0.28,
   },
@@ -140,6 +149,9 @@ const PRESETS = [
     faceWidth: 0.66,
     jaw: 0.64,
     chin: 0.58,
+    lipFullness: 0.55,
+    noseBridge: 0.5,
+    browHeight: 0.5,
     eyeSize: 0.44,
     age: 0.22,
   },
@@ -1331,6 +1343,22 @@ const isNearWhite = (R, G, B) =>
 const MIN_FACE_WIDTH_TRAVEL_PX = 4;
 const MIN_JAW_WIDTH_TRAVEL_PX = 5;
 const MIN_CHIN_TRAVEL_PX = 4;
+// Face axes pack (Lip / Bridge / Brow, 2026-09-07), read from the same probe:
+// lipHeight = the vertical span of the lip rows Shape_MouthThin owns (Lip 0 ->
+// 1 runs MouthThin 1 -> 0, so the lips grow), bridgeForward = how far the
+// Shape_NoseBridgeCurve ridge stands in front of the eye line (Bridge 0 -> 1
+// runs the curve 0 -> 1), browLine = the brow body's height over the eye line
+// (Brow 0 -> 1 runs LowerBrows 1 -> RaiseBrows 1). Measured on this viewer at
+// the bust camera: Lip 0 -> 1 grows the lip span 18.2 -> 24.8 px (6.6 px),
+// Brow 0 -> 1 lifts the brow line 20.5 -> 33.9 px (13.4 px), Bridge 0 -> 1
+// moves the ridge 58.5 -> 60.1 px forward (1.6 px: the GLB's curve is a 3.3
+// mm hump along the up-forward diagonal of the dorsum, which the frontal
+// camera sees mostly as shading, little as silhouette - a subtle slider by
+// the morph's own reach, not by the mapping, which runs it to weight 1).
+// Thresholds at 60-70% of the measured travel.
+const MIN_LIP_TRAVEL_PX = 4;
+const MIN_BRIDGE_TRAVEL_PX = 1;
+const MIN_BROW_TRAVEL_PX = 8;
 // Style C hair gates on the crown crop (magenta background). Design rejected
 // the #42 tip on "block hair": the sculpted shells read as flat plates with
 // stepped edges. Measured on the crown crop at 3x: the share of hair pixels
@@ -1607,9 +1635,12 @@ const craftPass = async (cdp, session) => {
       chinWidth: toPx(face.chinWidth),
       chinDepth: toPx(face.chinDepth),
       chinForward: toPx(face.chinForward),
+      lipHeight: toPx(face.lipHeight),
+      bridgeForward: toPx(face.bridgeForward),
+      browLine: toPx(face.browLine),
     };
     check(
-      `${tag}: face silhouette probe reports the cheek, jaw and chin`,
+      `${tag}: face silhouette probe reports the cheek, jaw, chin, lip, bridge and brow`,
       Object.values(profile).every((v) => Number.isFinite(v)),
       JSON.stringify(face)
     );
@@ -1631,7 +1662,13 @@ const craftPass = async (cdp, session) => {
         1
       )} px wide, chin tip ${profile.chinDepth.toFixed(
         1
-      )} px under / ${profile.chinForward.toFixed(1)} px in front of the eyes${
+      )} px under / ${profile.chinForward.toFixed(
+        1
+      )} px in front of the eyes, lip span ${profile.lipHeight.toFixed(
+        1
+      )} px, bridge ${profile.bridgeForward.toFixed(
+        1
+      )} px forward, brow ${profile.browLine.toFixed(1)} px over the eyes${
         avg
           ? `, iris exposure ${avg.irisExposureNoInk.toFixed(
               3
@@ -1642,11 +1679,27 @@ const craftPass = async (cdp, session) => {
     return { ...profile, avg };
   };
   const travelReport = (low, high) =>
-    ["cheekWidth", "jawWidth", "chinWidth", "chinDepth", "chinForward"]
+    [
+      "cheekWidth",
+      "jawWidth",
+      "chinWidth",
+      "chinDepth",
+      "chinForward",
+      "lipHeight",
+      "bridgeForward",
+      "browLine",
+    ]
       .map((key) => `${key} ${low[key].toFixed(1)} -> ${high[key].toFixed(1)}`)
       .join(", ") + " px";
   const band = EYE_BANDS[PIXEL_PRESET.eyeSize];
-  for (const key of ["faceWidth", "jaw", "chin"]) {
+  for (const key of [
+    "faceWidth",
+    "jaw",
+    "chin",
+    "lipFullness",
+    "noseBridge",
+    "browHeight",
+  ]) {
     const low = await faceProfile(key, 0);
     const high = await faceProfile(key, 1);
     // The lower face silhouette: whichever band the sculpt moves most.
@@ -1677,6 +1730,50 @@ const craftPass = async (cdp, session) => {
             high.chinDepth - low.chinDepth,
             high.chinForward - low.chinForward
           ) >= MIN_CHIN_TRAVEL_PX,
+          travelReport(low, high)
+        );
+        break;
+      case "lipFullness":
+        // Lip 0 is the thin end (MouthThin 1), Lip 1 the base mesh's full lip.
+        check(
+          `craft: Lip 0 -> 1 grows the lip span by >= ${MIN_LIP_TRAVEL_PX} CSS px at the bust camera (Shape_MouthThin reversed)`,
+          high.lipHeight - low.lipHeight >= MIN_LIP_TRAVEL_PX,
+          travelReport(low, high)
+        );
+        // The lip is the Lip axis' alone: the lower face silhouette and the
+        // brow stay put (the chin no longer thins the mouth, and vice versa).
+        check(
+          `craft: Lip 0 -> 1 leaves the jaw / chin silhouette and the brow line where they were (within 1 px)`,
+          Math.abs(high.jawWidth - low.jawWidth) < 1 &&
+            Math.abs(high.chinWidth - low.chinWidth) < 1 &&
+            Math.abs(high.browLine - low.browLine) < 1,
+          travelReport(low, high)
+        );
+        break;
+      case "noseBridge":
+        check(
+          `craft: Bridge 0 -> 1 pushes the nose ridge forward by >= ${MIN_BRIDGE_TRAVEL_PX} CSS px at the bust camera (Shape_NoseBridgeCurve only)`,
+          high.bridgeForward - low.bridgeForward >= MIN_BRIDGE_TRAVEL_PX,
+          travelReport(low, high)
+        );
+        check(
+          `craft: Bridge 0 -> 1 leaves the lip span, chin and brow line where they were (within 1 px)`,
+          Math.abs(high.lipHeight - low.lipHeight) < 1 &&
+            Math.abs(high.chinDepth - low.chinDepth) < 1 &&
+            Math.abs(high.browLine - low.browLine) < 1,
+          travelReport(low, high)
+        );
+        break;
+      case "browHeight":
+        check(
+          `craft: Brow 0 -> 1 lifts the brow line by >= ${MIN_BROW_TRAVEL_PX} CSS px at the bust camera (LowerBrows 1 -> RaiseBrows 1)`,
+          high.browLine - low.browLine >= MIN_BROW_TRAVEL_PX,
+          travelReport(low, high)
+        );
+        check(
+          `craft: Brow 0 -> 1 leaves the lip span and the nose ridge where they were (within 1 px)`,
+          Math.abs(high.lipHeight - low.lipHeight) < 1 &&
+            Math.abs(high.bridgeForward - low.bridgeForward) < 1,
           travelReport(low, high)
         );
         break;

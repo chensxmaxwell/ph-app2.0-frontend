@@ -247,10 +247,37 @@ type ViewerRig = {
   irisDetailFor: (radiusPx: number) => number;
   eyeScaleFor: (eyeSize: number) => number;
   irisSizeFor: (eyeSize: number) => number;
-  browMorphs: (
-    eyeSize: number,
-    jaw: number
-  ) => { raise: number; lower: number };
+  FACE_AXES: {
+    lipThin: number;
+    bridge: number;
+    brow: number;
+    browNeutral: number;
+  };
+  FACE_REGION_PROBES: Record<
+    "lip" | "bridge" | "brow",
+    { morph: string; minDelta: number }
+  >;
+  faceAxisMorphs: (
+    lipFullness: number,
+    noseBridge: number,
+    browHeight: number
+  ) => {
+    mouthThin: number;
+    noseBridgeCurve: number;
+    raiseBrows: number;
+    lowerBrows: number;
+  };
+  morphRegion: (
+    mesh: unknown,
+    name: string,
+    minDelta: number
+  ) => {
+    count: number;
+    minY: number;
+    maxY: number;
+    maxZ: number;
+    meanY: number;
+  } | null;
   viewSpaceEyeCentres: (
     bones: unknown[],
     camera: unknown,
@@ -1170,35 +1197,39 @@ describe("eyes", () => {
     });
   });
 
-  it("keeps the brows nearly level: no arch lift for a default eye, a slight settle for small eyes", () => {
-    // The two screenshots read "arched brows" as part of the stare: the old
-    // Shape_RaiseBrows 0.02 + 0.04 * Size lifted every look. Now the lift is
-    // 0 at Size 0 and stays under 0.03; small eyes settle the brow a touch
-    // (Shape_LowerBrows moves 6.7 mm at 1.0, so 0.12 is under 1 mm).
-    const jaw = 0.46;
-    const small = rig.browMorphs(0, jaw);
-    const mid = rig.browMorphs(0.5, jaw);
-    const large = rig.browMorphs(1, jaw);
-    expect(small.raise).toBe(0);
-    expect(mid.raise).toBeLessThanOrEqual(0.02);
-    expect(large.raise).toBeLessThanOrEqual(0.03);
-    expect(large.raise).toBeGreaterThanOrEqual(mid.raise);
-    // The jaw share of LowerBrows (mild(jaw, 0.08)) is still there...
-    const jawShare = Math.max(0, Math.min(1, jaw)) * 0.08;
-    expect(large.lower).toBeCloseTo(jawShare, 9);
-    // ...and small eyes add a settle that fades out by Size 1.
-    expect(small.lower).toBeGreaterThan(jawShare + 0.08);
-    expect(small.lower).toBeLessThanOrEqual(jawShare + 0.15);
-    expect(mid.lower).toBeGreaterThan(large.lower);
-    expect(mid.lower).toBeLessThan(small.lower);
+  it("Eyes Size no longer moves the brows: the brow is the Face tab's Brow axis", () => {
+    // #40 tied the brows to Size (Shape_RaiseBrows 0.03 * Size, a
+    // Shape_LowerBrows settle 0.12 * (1 - Size)) so the two tabs fought over
+    // one feature. The face axes pack gives the brow its own key (browHeight,
+    // see the "face axes pack" block); Size keeps the eye scale, lid and
+    // iris share only.
+    const names = Object.keys(readGlbHead().targets);
+    const head = morphDictionaryMesh(names);
+    const at = (name: string) =>
+      head.morphTargetInfluences[head.morphTargetDictionary[name]];
+    const browsAt = (eyeSize: number) => {
+      rig.applyMeshLook(head, { ...DEFAULT_LOOK_VALUES, eyeSize });
+      return { raise: at("Shape_RaiseBrows"), lower: at("Shape_LowerBrows") };
+    };
+    const small = browsAt(0);
+    const mid = browsAt(0.5);
+    const large = browsAt(1);
+    expect(small).toEqual(mid);
+    expect(large).toEqual(mid);
+    // At the default brow (0.5) that is the base brow: neither morph on.
+    expect(mid).toEqual({ raise: 0, lower: 0 });
     const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
     const meshLook = html.slice(
       html.indexOf("function applyMeshLook("),
       html.indexOf("function prefixIndex(")
     );
-    expect(meshLook).toMatch(/var brows = browMorphs\(eye, next\.jaw\);/);
-    expect(meshLook).toMatch(/"Shape_RaiseBrows", brows\.raise/);
-    expect(meshLook).toMatch(/"Shape_LowerBrows", brows\.lower/);
+    expect(meshLook).not.toMatch(/browMorphs\(/);
+    expect(meshLook).toMatch(
+      /var axes = faceAxisMorphs\(next\.lipFullness, next\.noseBridge, next\.browHeight\);/
+    );
+    expect(meshLook).toMatch(/"Shape_RaiseBrows", axes\.raiseBrows/);
+    expect(meshLook).toMatch(/"Shape_LowerBrows", axes\.lowerBrows/);
+    expect(html).not.toMatch(/function browMorphs\(/);
   });
 
   // A head bone with one eye bone under it and a three-vertex SkinnedMesh.
@@ -2564,7 +2595,12 @@ describe("face sculpt", () => {
     expect(at("Shape_EyesSquare")).toBeCloseTo(0.1, 9);
     expect(at("Shape_NeckThickness")).toBeCloseTo(0.22, 9);
     expect(at("Shape_NoseTiltDown")).toBeCloseTo(0.08, 9);
-    expect(at("Shape_MouthThin")).toBe(0);
+    // The chin used to thin the mouth ((1 - chin) * 0.1); the lip is the Lip
+    // axis' alone now (face axes pack), so chin 1 leaves it at the look's lip.
+    expect(at("Shape_MouthThin")).toBeCloseTo(
+      1 - DEFAULT_LOOK_VALUES.lipFullness,
+      9
+    );
     // The default preset lands about halfway up the new caps.
     rig.applyMeshLook(head, DEFAULT_LOOK_VALUES);
     expect(at("Shape_Squareness")).toBeCloseTo(
@@ -2712,6 +2748,258 @@ describe("face sculpt", () => {
     expect(load).toMatch(
       /pruneToShapes\(obj\);\s*if \(obj\.morphTargetInfluences\.length\) \{\s*maskEyeRegion\(obj\);\s*morphMeshes\.push\(obj\);\s*\}/
     );
+  });
+});
+
+describe("face axes pack", () => {
+  // Design brief 2026-09-07, PM hard rules: three Face sliders after Face /
+  // Jaw / Chin, each one honest Head_0 morph and nothing else.
+  //   Lip    lipFullness 0.55  Shape_MouthThin reversed: (1 - lip) * 1.0
+  //   Bridge noseBridge  0.50  Shape_NoseBridgeCurve: bridge * 1.0 (鼻梁 only -
+  //                            the GLB has no nose-length morph and the tilt
+  //                            morphs may not fake one)
+  //   Brow   browHeight  0.50  Shape_LowerBrows (0.5 - b) * 2 below the
+  //                            neutral 0.5, Shape_RaiseBrows (b - 0.5) * 2
+  //                            above it; neither on at 0.5
+  // The chin no longer feeds MouthThin and Eyes Size / Jaw no longer feed the
+  // brows, so every one of these morphs has exactly one owner.
+  const headNames = () => Object.keys(readGlbHead().targets);
+  const influencesFor = (look: Record<string, unknown>) => {
+    const names = headNames();
+    const head = morphDictionaryMesh(names);
+    rig.applyMeshLook(head, look);
+    return (name: string) =>
+      head.morphTargetInfluences[head.morphTargetDictionary[name]];
+  };
+
+  it("maps the three sliders onto their morphs at full, linear weight", () => {
+    expect(rig.FACE_AXES).toEqual({
+      lipThin: 1,
+      bridge: 1,
+      brow: 1,
+      browNeutral: 0.5,
+    });
+    // Lip: reversed MouthThin. 0 = thin (MouthThin 1), 1 = the base mesh's
+    // full lip (MouthThin 0); the 0.55 default sits at 0.45.
+    expect(rig.faceAxisMorphs(0, 0.5, 0.5).mouthThin).toBe(1);
+    expect(rig.faceAxisMorphs(1, 0.5, 0.5).mouthThin).toBe(0);
+    expect(rig.faceAxisMorphs(0.55, 0.5, 0.5).mouthThin).toBeCloseTo(0.45, 9);
+    expect(rig.faceAxisMorphs(0.25, 0.5, 0.5).mouthThin).toBeCloseTo(0.75, 9);
+    // Bridge: NoseBridgeCurve at the slider's own weight.
+    expect(rig.faceAxisMorphs(0.5, 0, 0.5).noseBridgeCurve).toBe(0);
+    expect(rig.faceAxisMorphs(0.5, 1, 0.5).noseBridgeCurve).toBe(1);
+    expect(rig.faceAxisMorphs(0.5, 0.5, 0.5).noseBridgeCurve).toBe(0.5);
+    expect(rig.faceAxisMorphs(0.5, 0.75, 0.5).noseBridgeCurve).toBe(0.75);
+    // Brow: split at 0.5, lower heavy at 0, raise heavy at 1, never both.
+    const brow = (b: number) => {
+      const { raiseBrows, lowerBrows } = rig.faceAxisMorphs(0.55, 0.5, b);
+      return [raiseBrows, lowerBrows];
+    };
+    expect(brow(0)).toEqual([0, 1]);
+    expect(brow(0.25)).toEqual([0, 0.5]);
+    expect(brow(0.5)).toEqual([0, 0]);
+    expect(brow(0.75)).toEqual([0.5, 0]);
+    expect(brow(1)).toEqual([1, 0]);
+    for (let b = 0; b <= 1.0001; b += 0.1) {
+      const [raise, lower] = brow(b);
+      expect(Math.min(raise, lower)).toBe(0);
+    }
+    // Out-of-range and NaN input clamps like every other slider.
+    expect(rig.faceAxisMorphs(-2, 7, NaN)).toEqual(
+      rig.faceAxisMorphs(0, 1, 0)
+    );
+  });
+
+  it("applyMeshLook writes the four morphs from the look and nothing else drives them", () => {
+    const at = influencesFor(DEFAULT_LOOK_VALUES);
+    expect(at("Shape_MouthThin")).toBeCloseTo(0.45, 9);
+    expect(at("Shape_NoseBridgeCurve")).toBeCloseTo(0.5, 9);
+    expect(at("Shape_RaiseBrows")).toBe(0);
+    expect(at("Shape_LowerBrows")).toBe(0);
+    const ends = influencesFor({
+      ...DEFAULT_LOOK_VALUES,
+      lipFullness: 0,
+      noseBridge: 1,
+      browHeight: 1,
+    });
+    expect(ends("Shape_MouthThin")).toBe(1);
+    expect(ends("Shape_NoseBridgeCurve")).toBe(1);
+    expect(ends("Shape_RaiseBrows")).toBe(1);
+    expect(ends("Shape_LowerBrows")).toBe(0);
+    const low = influencesFor({
+      ...DEFAULT_LOOK_VALUES,
+      lipFullness: 1,
+      noseBridge: 0,
+      browHeight: 0,
+    });
+    expect(low("Shape_MouthThin")).toBe(0);
+    expect(low("Shape_NoseBridgeCurve")).toBe(0);
+    expect(low("Shape_RaiseBrows")).toBe(0);
+    expect(low("Shape_LowerBrows")).toBe(1);
+    // Chin used to thin the mouth: chin 0 and chin 1 now leave it alone.
+    const OWNED = [
+      "Shape_MouthThin",
+      "Shape_NoseBridgeCurve",
+      "Shape_RaiseBrows",
+      "Shape_LowerBrows",
+    ];
+    const sameOwned = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+      const atA = influencesFor(a);
+      const atB = influencesFor(b);
+      OWNED.forEach((name) => expect(atA(name)).toBe(atB(name)));
+    };
+    sameOwned({ ...DEFAULT_LOOK_VALUES, chin: 0 }, { ...DEFAULT_LOOK_VALUES, chin: 1 });
+    // Eyes Size and Jaw used to move the brows: they no longer do.
+    sameOwned(
+      { ...DEFAULT_LOOK_VALUES, eyeSize: 0, jaw: 0 },
+      { ...DEFAULT_LOOK_VALUES, eyeSize: 1, jaw: 1 }
+    );
+    sameOwned(
+      { ...DEFAULT_LOOK_VALUES, faceWidth: 0, age: 0 },
+      { ...DEFAULT_LOOK_VALUES, faceWidth: 1, age: 1 }
+    );
+  });
+
+  it("the nose axis is the bridge only: no tilt morph moves with it, and no nose-length axis exists anywhere", () => {
+    // Bridge 0 -> 1 leaves NoseTiltUp / NoseTiltDown / NoseWidth exactly where
+    // the other sliders put them - the tilt morphs never stand in for length.
+    const straight = influencesFor({ ...DEFAULT_LOOK_VALUES, noseBridge: 0 });
+    const curved = influencesFor({ ...DEFAULT_LOOK_VALUES, noseBridge: 1 });
+    ["Shape_NoseTiltUp", "Shape_NoseTiltDown", "Shape_NoseWidth"].forEach(
+      (name) => expect(curved(name)).toBe(straight(name))
+    );
+    expect(curved("Shape_NoseTiltUp")).toBe(0);
+    // The morph gap, on the asset: NoseWidth / NoseTiltUp / NoseTiltDown /
+    // NoseBridgeCurve and no length target.
+    const names = headNames();
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "Shape_NoseBridgeCurve",
+        "Shape_NoseWidth",
+        "Shape_NoseTiltUp",
+        "Shape_NoseTiltDown",
+        "Shape_MouthThin",
+        "Shape_RaiseBrows",
+        "Shape_LowerBrows",
+      ])
+    );
+    expect(names.filter((name) => /length/i.test(name))).toEqual([
+      "Shape_LashLength",
+    ]);
+    // ...and in the code: no noseLength key, no "Length" label on the nose.
+    const sources = [
+      VIEWER_SOURCE,
+      path.join(ROOT, "src", "screens", "avatar", "engine", "viewer-html.ts"),
+      path.join(ROOT, "src", "screens", "avatar", "customize.tsx"),
+      path.join(ROOT, "src", "screens", "avatar", "context.tsx"),
+      path.join(ROOT, "scripts", "check-avatar-viewer.js"),
+    ].map((file) => fs.readFileSync(file, "utf8"));
+    sources.forEach((source) => {
+      expect(source).not.toMatch(/noseLength\s*[:=,]/);
+      // The comments may name the gap; no code may address the morph.
+      expect(source).not.toMatch(/["']Shape_NoseLength["']/);
+    });
+    const customize = sources[2];
+    expect(customize).toMatch(/key: "noseBridge", label: "Bridge"/);
+    expect(customize).not.toMatch(/label: "(Nose )?Length"/);
+    expect(customize).not.toMatch(/label: "鼻长"/);
+  });
+
+  it("the morphs behind the table do what the mapping says, measured on the GLB", () => {
+    const head = readGlbHead();
+    const move = (name: string) =>
+      head.targets[name].map(([x, y, z]) => Math.hypot(x, y, z));
+    // MouthThin is purely vertical and thins toward the mouth line: the upper
+    // lip's rows move down, the lower lip's up, 3-5 mm at most.
+    const thin = head.targets.Shape_MouthThin;
+    const thinMax = Math.max(...move("Shape_MouthThin"));
+    expect(thinMax).toBeGreaterThan(0.003);
+    expect(thinMax).toBeLessThan(0.006);
+    const upRows: number[] = [];
+    const downRows: number[] = [];
+    thin.forEach(([x, y, z], v) => {
+      expect(Math.abs(x)).toBeLessThan(0.0002);
+      expect(Math.abs(z)).toBeLessThan(0.0002);
+      if (Math.abs(y) < 0.001) return;
+      (y < 0 ? downRows : upRows).push(head.position[v][1]);
+    });
+    expect(downRows.length).toBeGreaterThan(10);
+    expect(upRows.length).toBeGreaterThan(10);
+    const mean = (rows: number[]) =>
+      rows.reduce((sum, y) => sum + y, 0) / rows.length;
+    // The rows that move down (the upper lip) sit above the rows that move up
+    // (the lower lip): the lips close on the mouth line, they do not shift.
+    expect(mean(downRows)).toBeGreaterThan(mean(upRows) + 0.005);
+    // RaiseBrows and LowerBrows are exact mirrors on the same vertices, 6-7
+    // mm at weight 1, so browHeight's split at 0.5 is symmetric.
+    const raise = head.targets.Shape_RaiseBrows;
+    const lower = head.targets.Shape_LowerBrows;
+    const raiseMax = Math.max(...move("Shape_RaiseBrows"));
+    expect(raiseMax).toBeGreaterThan(0.006);
+    expect(raiseMax).toBeLessThan(0.0075);
+    raise.forEach(([x, y, z], v) => {
+      expect(Math.hypot(x + lower[v][0], y + lower[v][1], z + lower[v][2])).toBeLessThan(
+        0.00002
+      );
+      if (Math.abs(y) > 0.001) expect(y).toBeGreaterThan(0);
+    });
+    // NoseBridgeCurve lifts the ridge up and forward, 3-5 mm on a few dozen
+    // vertices - a bridge, not a length.
+    const bridgeMove = move("Shape_NoseBridgeCurve");
+    const bridgeMax = Math.max(...bridgeMove);
+    expect(bridgeMax).toBeGreaterThan(0.003);
+    expect(bridgeMax).toBeLessThan(0.006);
+    const moved = bridgeMove.filter((d) => d > 0.000001).length;
+    expect(moved).toBeGreaterThan(10);
+    expect(moved).toBeLessThan(80);
+    head.targets.Shape_NoseBridgeCurve.forEach(([x, y, z]) => {
+      expect(Math.abs(x)).toBeLessThan(0.0002);
+      expect(y).toBeGreaterThanOrEqual(-0.00001);
+      expect(z).toBeGreaterThanOrEqual(-0.00001);
+    });
+  });
+
+  it("morphRegion reads the region a morph owns off the baked mesh, in world space", () => {
+    const { mesh } = morphFixture(3);
+    // Target 1 moves vertex 1 (at x = 2) by 2 mm on y, target 2 vertex 2 (x =
+    // 3) by 3 mm on z; the fixture's positions are the base mesh.
+    const one = rig.morphRegion(mesh, "Shape_T1", 0.0015)!;
+    expect(one.count).toBe(1);
+    expect(one.minY).toBe(0);
+    expect(one.maxY).toBe(0);
+    expect(one.maxZ).toBe(0);
+    // A threshold above the delta selects nothing.
+    expect(rig.morphRegion(mesh, "Shape_T1", 0.0025)).toBeNull();
+    expect(rig.morphRegion(mesh, "Shape_Missing", 0.001)).toBeNull();
+    // The region follows the baked positions (the look), not the base mesh.
+    mesh.morphTargetInfluences[1] = 1;
+    mesh.morphTargetInfluences[2] = 1;
+    rig.bakeMorphs(mesh);
+    const baked = rig.morphRegion(mesh, "Shape_T1", 0.0015)!;
+    expect(baked.meanY).toBeCloseTo(0.002, 9);
+    expect(baked.maxY).toBeCloseTo(0.002, 9);
+    const two = rig.morphRegion(mesh, "Shape_T2", 0.001)!;
+    expect(two.maxZ).toBeCloseTo(0.003, 9);
+    // World space: a translated mesh reports translated numbers.
+    mesh.position.set(0, 1.5, 0.2);
+    mesh.updateMatrixWorld(true);
+    expect(rig.morphRegion(mesh, "Shape_T2", 0.001)!.maxZ).toBeCloseTo(0.203, 9);
+    expect(rig.morphRegion(mesh, "Shape_T1", 0.0015)!.meanY).toBeCloseTo(1.502, 9);
+    // The probes the face profile reports on: MouthThin rows moving >= 2 mm
+    // (the vermilion), the NoseBridgeCurve ridge, the RaiseBrows brow body.
+    expect(rig.FACE_REGION_PROBES).toEqual({
+      lip: { morph: "Shape_MouthThin", minDelta: 0.002 },
+      bridge: { morph: "Shape_NoseBridgeCurve", minDelta: 0.001 },
+      brow: { morph: "Shape_RaiseBrows", minDelta: 0.003 },
+    });
+    const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+    const profile = html.slice(
+      html.indexOf("function faceProfile("),
+      html.indexOf("function eyeState(")
+    );
+    expect(profile).toMatch(/lipHeight: lip \? lip\.maxY - lip\.minY : null/);
+    expect(profile).toMatch(/bridgeForward: bridge \? bridge\.maxZ - eye\.z : null/);
+    expect(profile).toMatch(/browLine: brow \? brow\.meanY - eye\.y : null/);
   });
 });
 
@@ -3435,7 +3723,7 @@ describe("soft semi-real default look", () => {
       html.indexOf("viewMode:")
     );
     expect(bootLook).toContain(
-      `faceWidth: ${DEFAULT_LOOK.faceWidth}, jaw: ${DEFAULT_LOOK.jaw}, chin: ${DEFAULT_LOOK.chin}, eyeSize: ${DEFAULT_LOOK.eyeSize}, age: ${DEFAULT_LOOK.age}`
+      `faceWidth: ${DEFAULT_LOOK.faceWidth}, jaw: ${DEFAULT_LOOK.jaw}, chin: ${DEFAULT_LOOK.chin}, lipFullness: ${DEFAULT_LOOK.lipFullness}, noseBridge: ${DEFAULT_LOOK.noseBridge}, browHeight: ${DEFAULT_LOOK.browHeight}, eyeSize: ${DEFAULT_LOOK.eyeSize}, age: ${DEFAULT_LOOK.age}`
     );
   });
 

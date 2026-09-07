@@ -37,7 +37,7 @@
   var look = {
     appearanceIndex: 2, hairStyle: 2, hairColor: 1, skinTone: 1, eyeColor: 0,
     upperArms: 0.58, chest: 0.55, forearms: 0.55, backAndHips: 0.56,
-    faceWidth: 0.4, jaw: 0.38, chin: 0.5, eyeSize: 0.5, age: 0.28,
+    faceWidth: 0.4, jaw: 0.38, chin: 0.5, lipFullness: 0.55, noseBridge: 0.5, browHeight: 0.5, eyeSize: 0.5, age: 0.28,
     viewMode: "full", revealBody: false
   };
 
@@ -167,15 +167,40 @@
     return UPPER_LID_DROP - clamp01(eyeSize) * (UPPER_LID_DROP - UPPER_LID_DROP_LARGE);
   }
 
-  // Brows follow Size the same way: no arch lift on a small or default eye
-  // (the TestFlight screenshots read the old 0.02 + 0.04 * Size lift as part
-  // of the stare), a slight settle toward the eye for small eyes
-  // (Shape_LowerBrows moves 6.7mm at 1.0, so 0.12 is under 1mm).
-  function browMorphs(eyeSize, jaw) {
-    var eye = clamp01(eyeSize);
+  // Face axes pack (design brief 2026-09-07: lipFullness -> noseBridge ->
+  // browHeight, defaults 0.55 / 0.50 / 0.50). Each slider is one honest
+  // Head_0 morph at its own weight - no companions, no cross-coupling:
+  //   Lip    lipFullness  Shape_MouthThin = (1 - lip) * lipThin. MouthThin is
+  //          the kit's only lip morph and it thins: at 1.0 the upper lip's
+  //          inner row drops 4.5 mm and the lower lip's rises 3 mm toward the
+  //          mouth line (purely vertical, measured on the GLB). Reversed, so
+  //          0 = thin (MouthThin 1), 1 = the base mesh's full lip (MouthThin
+  //          0). The chin used to feed MouthThin ((1 - chin) * 0.1); it no
+  //          longer does.
+  //   Bridge noseBridge   Shape_NoseBridgeCurve = bridge * bridge cap: 0 = the
+  //          base bridge, 1 = the full curve (the ridge between the eyes
+  //          moves up to 3.3 mm up and forward on 33 vertices). This is the
+  //          bridge (鼻梁), NOT nose length (鼻长): bozo-male.glb carries no
+  //          Shape_NoseLength, and Shape_NoseTiltUp / Shape_NoseTiltDown are
+  //          not used to fake one - a real length axis waits for a future
+  //          morph.
+  //   Brow   browHeight   split at browNeutral: below it Shape_LowerBrows =
+  //          (0.5 - b) * 2 * brow, above it Shape_RaiseBrows = (b - 0.5) * 2
+  //          * brow, so 0 = lower heavy, 0.5 = the base brow (both 0), 1 =
+  //          raise heavy. The two morphs are exact mirrors (6.7 mm at 1.0 on
+  //          the same 459 vertices). Eyes Size no longer moves the brow
+  //          (#40's 0.03 * Size lift and 0.12 * (1 - Size) settle are gone),
+  //          and neither does Jaw (its 0.08 LowerBrows share is gone), so the
+  //          Eyes and Face tabs each own their value.
+  var FACE_AXES = { lipThin: 1, bridge: 1, brow: 1, browNeutral: 0.5 };
+
+  function faceAxisMorphs(lipFullness, noseBridge, browHeight) {
+    var brow = clamp01(browHeight);
     return {
-      raise: eye * 0.03,
-      lower: mild(jaw, 0.08) + (1 - eye) * 0.12
+      mouthThin: (1 - clamp01(lipFullness)) * FACE_AXES.lipThin,
+      noseBridgeCurve: clamp01(noseBridge) * FACE_AXES.bridge,
+      raiseBrows: Math.max(0, brow - FACE_AXES.browNeutral) / (1 - FACE_AXES.browNeutral) * FACE_AXES.brow,
+      lowerBrows: Math.max(0, FACE_AXES.browNeutral - brow) / FACE_AXES.browNeutral * FACE_AXES.brow
     };
   }
 
@@ -212,7 +237,7 @@
     var arms = (clamp01(next.upperArms) + clamp01(next.forearms)) * 0.5;
     var hips = hipsMorphs(next.backAndHips);
     var eye = clamp01(next.eyeSize);
-    var brows = browMorphs(eye, next.jaw);
+    var axes = faceAxisMorphs(next.lipFullness, next.noseBridge, next.browHeight);
     var sculpt = sculptMorphs(next.faceWidth, next.jaw, next.chin);
     setMorph(mesh, "Shape_Squareness", sculpt.squareness);
     setMorph(mesh, "Shape_Stern", sculpt.stern);
@@ -221,9 +246,10 @@
     setMorph(mesh, "Shape_EyeLidHeight", upperLidDrop(eye));
     setMorph(mesh, "Shape_NoseWidth", mild(next.faceWidth, 0.16 * SCULPT_WIDTH_FACTOR));
     setMorph(mesh, "Shape_MouthWide", mild(next.faceWidth, 0.14 * SCULPT_WIDTH_FACTOR));
-    setMorph(mesh, "Shape_MouthThin", (1 - clamp01(next.chin)) * 0.1);
-    setMorph(mesh, "Shape_RaiseBrows", brows.raise);
-    setMorph(mesh, "Shape_LowerBrows", brows.lower);
+    setMorph(mesh, "Shape_MouthThin", axes.mouthThin);
+    setMorph(mesh, "Shape_NoseBridgeCurve", axes.noseBridgeCurve);
+    setMorph(mesh, "Shape_RaiseBrows", axes.raiseBrows);
+    setMorph(mesh, "Shape_LowerBrows", axes.lowerBrows);
     setMorph(mesh, "Shape_NoseTiltDown", mild(next.chin, 0.08));
     setMorph(mesh, "Shape_LashLength", LASH_LENGTH);
     setMorph(mesh, "Shape_EyesOuterCornersHigh", OUTER_CORNER_LIFT);
@@ -2761,6 +2787,46 @@
   // head nod) is undone for the measurement and restored, so the numbers do
   // not depend on which frame the caller parked. Hair-independent, so the
   // Face / Jaw / Chin travel can be read without a pixel classifier.
+  // The face axes pack adds three probes on the regions their morphs own
+  // (morphRegion): lipHeight = the vertical span of the lip rows
+  // Shape_MouthThin moves by 2 mm or more at weight 1 (the vermilion, which
+  // thins as Lip falls), bridgeForward = how far the ridge Shape_NoseBridgeCurve
+  // moves stands in front of the eye line (grows with Bridge), browLine = the
+  // mean height above the eye line of the brow body Shape_RaiseBrows moves
+  // (rises with Brow, falls under Shape_LowerBrows).
+  var FACE_REGION_PROBES = {
+    lip: { morph: "Shape_MouthThin", minDelta: 0.002 },
+    bridge: { morph: "Shape_NoseBridgeCurve", minDelta: 0.001 },
+    brow: { morph: "Shape_RaiseBrows", minDelta: 0.003 }
+  };
+
+  // World-space extent of the Head_0 vertices a morph displaces by at least
+  // minDelta (metres, mesh space) at weight 1, read off the baked, skinned
+  // mesh so it follows the current look. Null when the morph is missing.
+  function morphRegion(mesh, name, minDelta) {
+    var geo = mesh.geometry;
+    var dict = mesh.morphTargetDictionary || {};
+    var idx = dict[name];
+    var targets = geo && geo.morphAttributes && geo.morphAttributes.position;
+    var delta = typeof idx === "number" && targets ? targets[idx] : null;
+    if (!delta) return null;
+    var v = new THREE.Vector3();
+    var out = { count: 0, minY: Infinity, maxY: -Infinity, maxZ: -Infinity, meanY: 0 };
+    var i;
+    for (i = 0; i < delta.count; i++) {
+      if (Math.hypot(delta.getX(i), delta.getY(i), delta.getZ(i)) < minDelta) continue;
+      sampleMeshPoint(mesh, i, v);
+      out.count++;
+      out.minY = Math.min(out.minY, v.y);
+      out.maxY = Math.max(out.maxY, v.y);
+      out.maxZ = Math.max(out.maxZ, v.z);
+      out.meanY += v.y;
+    }
+    if (!out.count) return null;
+    out.meanY /= out.count;
+    return out;
+  }
+
   function faceProfile() {
     var head = null;
     morphMeshes.forEach(function (mesh) {
@@ -2806,6 +2872,9 @@
         chin = v.clone();
       }
     }
+    var lip = morphRegion(head, FACE_REGION_PROBES.lip.morph, FACE_REGION_PROBES.lip.minDelta);
+    var bridge = morphRegion(head, FACE_REGION_PROBES.bridge.morph, FACE_REGION_PROBES.bridge.minDelta);
+    var brow = morphRegion(head, FACE_REGION_PROBES.brow.morph, FACE_REGION_PROBES.brow.minDelta);
     modelRoot.rotation.copy(savedRoot.rotation);
     modelRoot.scale.copy(savedRoot.scale);
     modelRoot.position.y = savedRoot.y;
@@ -2813,7 +2882,10 @@
     modelRoot.updateMatrixWorld(true);
     var out = {
       chinDepth: chin ? eye.y - chin.y : null,
-      chinForward: chin ? chin.z - eye.z : null
+      chinForward: chin ? chin.z - eye.z : null,
+      lipHeight: lip ? lip.maxY - lip.minY : null,
+      bridgeForward: bridge ? bridge.maxZ - eye.z : null,
+      browLine: brow ? brow.meanY - eye.y : null
     };
     Object.keys(bands).forEach(function (key) {
       var band = bands[key];
@@ -2952,7 +3024,10 @@
     irisDetailFor: irisDetailFor,
     eyeScaleFor: eyeScaleFor,
     irisSizeFor: irisSizeFor,
-    browMorphs: browMorphs,
+    FACE_AXES: FACE_AXES,
+    FACE_REGION_PROBES: FACE_REGION_PROBES,
+    faceAxisMorphs: faceAxisMorphs,
+    morphRegion: morphRegion,
     viewSpaceEyeCentres: viewSpaceEyeCentres,
     applyEyeScale: applyEyeScale,
     upperLidDrop: upperLidDrop,
