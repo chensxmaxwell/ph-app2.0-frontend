@@ -86,17 +86,20 @@ export const CHARACTER_PRESETS: AvatarLook[] = [
   // same mild sculpt axes (caps 0.45 / 0.45 / 0.50 unchanged) for a softer
   // oval than the #41 default's 0.48 / 0.46, which the raised caps had made
   // squarer and sterner than the reviewed bust; chin as signed off; Eyes
-  // Size 0.5 = the locked 0.85 eye.
+  // Size 0.5 = the locked 0.85 eye. Body mids (design-signed, body posture
+  // pass 2026-09-07): arms 0.58 / 0.55, chest 0.55, back & hips 0.56 - the
+  // #42 0.45 / 0.45 / 0.50 / 0.48 read as a flat, sexless torso next to the
+  // Style C body sheet; the viewer's hips mapping was widened with them.
   {
     appearanceIndex: 2,
     hairStyle: 2,
     hairColor: 1,
     skinTone: 1,
     eyeColor: 0,
-    upperArms: 0.45,
-    chest: 0.5,
-    forearms: 0.45,
-    backAndHips: 0.48,
+    upperArms: 0.58,
+    chest: 0.55,
+    forearms: 0.55,
+    backAndHips: 0.56,
     faceWidth: 0.4,
     jaw: 0.38,
     chin: 0.5,

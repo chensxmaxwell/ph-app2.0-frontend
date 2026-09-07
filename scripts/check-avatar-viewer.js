@@ -37,6 +37,15 @@
  * eye's iris exposure stays where the Eyes tab put it (maskEyeRegion). The
  * crops (craft-*.png) are the review collage for those sliders.
  *
+ * Body Style C stance (2026-09-07): every full-body look must stand in the
+ * soft contrapposto phViewerState().stance reports - pelvic yaw 3-6 deg,
+ * hip line up on the weight side, shoulders counter-tilted 2-4 deg, head
+ * near level, a micro-bend on the free knee only, both feet on the ground,
+ * wrists asymmetric and never folded on the chest (the #42 soldier stand /
+ * death-hug / power pose). Each wrist must be beside or in front of the
+ * torso. A hands close-up per full look (<look>-hands.png) and a 3/4 view
+ * of the default preset (stance-threequarter.png) go to --out for review.
+ *
  *   node scripts/check-avatar-viewer.js [--out DIR] [--chrome PATH]
  *
  * Needs Google Chrome / Chromium. Talks CDP over --remote-debugging-pipe, so
@@ -108,10 +117,10 @@ const PRESETS = [
     hairColor: 1,
     skinTone: 1,
     eyeColor: 0,
-    upperArms: 0.45,
-    chest: 0.5,
-    forearms: 0.45,
-    backAndHips: 0.48,
+    upperArms: 0.58,
+    chest: 0.55,
+    forearms: 0.55,
+    backAndHips: 0.56,
     faceWidth: 0.4,
     jaw: 0.38,
     chin: 0.5,
@@ -376,6 +385,96 @@ const eyeClip = (frame) => {
 };
 const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
+// Body Style C soft stance (design sheet 2026-09-07), read off the master
+// skeleton by phViewerState().stance with the idle sway undone: a
+// contrapposto, not the #42 soldier stand. Pelvic yaw 3-6 deg and shoulder
+// counter-tilt 2-4 deg are the design brief's numbers; the hip line tilts
+// the other way from the shoulders, the free knee carries a micro-bend the
+// weight knee does not, the head stays near level, both feet stay on the
+// ground, and the hands are asymmetric and never folded on the chest.
+const STANCE_BANDS = {
+  pelvisYawDeg: [3, 6],
+  shoulderTiltDeg: [2, 4],
+  hipTiltDeg: [1.5, 4.5],
+  freeKneeExtraDeg: [6, 16],
+  headRollMaxDeg: 2,
+  footRiseMax: 0.006,
+  wristAsymmetryMin: 0.02,
+  // The shoulder joint sits 1.45 m up; a wrist within 0.3 m of it is on the
+  // chest (the death-hug fold had both at -0.16 / -0.24).
+  chestLine: 1.45 - 0.3,
+};
+
+const assertStance = (entry, state) => {
+  const tag = entry.name;
+  const stance = state.stance;
+  check(
+    `${tag}: stance probe present and the rig has a pelvic channel`,
+    !!stance && stance.pelvicChannel === true,
+    JSON.stringify(stance && stance.pelvicChannel)
+  );
+  if (!stance || !stance.pelvicChannel) return;
+  const m = stance.weightSide === "r" ? -1 : 1;
+  const yaw = m * stance.pelvisYawDeg;
+  const hip = m * stance.hipLineDeg;
+  const shoulder = -m * stance.shoulderLineDeg;
+  check(
+    `${tag}: pelvis turned ${STANCE_BANDS.pelvisYawDeg.join("-")} deg, free hip forward`,
+    within(yaw, STANCE_BANDS.pelvisYawDeg),
+    `pelvis yaw ${stance.pelvisYawDeg.toFixed(2)} deg (weight ${stance.weightSide})`
+  );
+  check(
+    `${tag}: weight hip up ${STANCE_BANDS.hipTiltDeg.join("-")} deg`,
+    within(hip, STANCE_BANDS.hipTiltDeg),
+    `hip line ${stance.hipLineDeg.toFixed(2)} deg`
+  );
+  check(
+    `${tag}: shoulders counter-tilted ${STANCE_BANDS.shoulderTiltDeg.join("-")} deg against the hips`,
+    within(shoulder, STANCE_BANDS.shoulderTiltDeg),
+    `shoulder line ${stance.shoulderLineDeg.toFixed(2)} deg vs hip ${stance.hipLineDeg.toFixed(2)}`
+  );
+  check(
+    `${tag}: head near level (|roll| <= ${STANCE_BANDS.headRollMaxDeg} deg)`,
+    Math.abs(stance.headRollDeg) <= STANCE_BANDS.headRollMaxDeg,
+    `head roll ${stance.headRollDeg.toFixed(2)} deg`
+  );
+  const free = stance.weightSide === "r" ? "l" : "r";
+  const weight = stance.weightSide === "r" ? "r" : "l";
+  const extra = stance.kneeBendDeg[free] - stance.kneeBendDeg[weight];
+  check(
+    `${tag}: free knee micro-bend ${STANCE_BANDS.freeKneeExtraDeg.join("-")} deg over the weight knee`,
+    within(extra, STANCE_BANDS.freeKneeExtraDeg),
+    `knee ${free} ${stance.kneeBendDeg[free].toFixed(1)} deg, ${weight} ${stance.kneeBendDeg[weight].toFixed(1)} deg`
+  );
+  const rise = Math.abs(stance.footY.l - stance.footY.r);
+  check(
+    `${tag}: both feet on the ground (ankle heights within ${STANCE_BANDS.footRiseMax * 1000} mm)`,
+    rise <= STANCE_BANDS.footRiseMax,
+    `ankles l ${(stance.footY.l * 1000).toFixed(1)} mm, r ${(stance.footY.r * 1000).toFixed(1)} mm`
+  );
+  check(
+    `${tag}: wrists asymmetric (>= ${STANCE_BANDS.wristAsymmetryMin * 100} cm off mirror)`,
+    stance.wristAsymmetry >= STANCE_BANDS.wristAsymmetryMin,
+    `asymmetry ${(stance.wristAsymmetry * 100).toFixed(1)} cm`
+  );
+  // Nothing folded on the chest: a hand on the chest line and across the
+  // body's centre is the death-hug fold. The wave (outfit 3) lifts a hand
+  // high on its own side, which is fine.
+  const folded = ["l", "r"].some((side) => {
+    const w = stance.hands[side];
+    if (!w) return false;
+    const across = side === "l" ? w[0] < 0.02 : w[0] > -0.02;
+    return across && w[1] > STANCE_BANDS.chestLine;
+  });
+  check(
+    `${tag}: no arm folded across the chest`,
+    !folded,
+    `wrists l (${stance.hands.l.map((v) => v.toFixed(2)).join(", ")}) r (${stance.hands.r
+      .map((v) => v.toFixed(2))
+      .join(", ")})`
+  );
+};
+
 const assertLook = (entry, state, wantScale) => {
   const tag = entry.name;
   const full = entry.look.viewMode !== "bust";
@@ -417,25 +516,36 @@ const assertLook = (entry, state, wantScale) => {
       hand.box.max[2] > -0.05,
       `z=${hand.box.max[2].toFixed(3)}`
     );
-    if (hips && hips.box && chest && chest.box) {
-      // Hands either hang beside the hips or sit in front of the chest;
-      // the old pose table buried them between the thighs.
-      const beside =
-        hand.box.max[0] > hips.box.max[0] + 0.03 &&
-        hand.box.min[0] < hips.box.min[0] - 0.03;
-      const handZ = (hand.box.min[2] + hand.box.max[2]) / 2;
-      const inFront = handZ > chest.box.max[2] + 0.02;
-      check(
-        `${tag}: hands not inside the torso`,
-        beside || inFront,
-        `hand x ${hand.box.min[0].toFixed(2)}..${hand.box.max[0].toFixed(
-          2
-        )} centre z ${handZ.toFixed(2)} chest front ${chest.box.max[2].toFixed(
-          2
-        )}`
-      );
+    const wrists = state.stance && state.stance.hands;
+    if (hips && hips.box && chest && chest.box && wrists) {
+      // Each wrist joint either sits beside the hips (hanging, or resting on
+      // the hip rim) or in front of the torso (the belt hand, the wave); the
+      // pre-#12 pose table buried both hands between the thighs. Per wrist,
+      // because the Body_Hand mesh box spans both hands and a hand on the
+      // hip is meant to touch the torso.
+      ["l", "r"].forEach((side) => {
+        const w = wrists[side];
+        if (!w) return;
+        const beside =
+          side === "l"
+            ? w[0] > hips.box.max[0] - 0.01
+            : w[0] < hips.box.min[0] + 0.01;
+        // The torso front at the wrist's height: chest above the chest
+        // mesh's bottom, hips / belly below it.
+        const front =
+          w[1] >= chest.box.min[1] ? chest.box.max[2] : hips.box.max[2];
+        const inFront = w[2] > front - 0.03;
+        check(
+          `${tag}: ${side === "l" ? "left" : "right"} wrist clear of the torso`,
+          beside || inFront,
+          `wrist (${w.map((v) => v.toFixed(3)).join(", ")}) hips x ${hips.box.min[0].toFixed(
+            2
+          )}..${hips.box.max[0].toFixed(2)} torso front z ${front.toFixed(2)}`
+        );
+      });
     }
   }
+  if (full) assertStance(entry, state);
   check(`${tag}: eyeball mesh drawn`, !!eyes && eyes.visible);
   if (eyes && eyes.visible && head) {
     check(
@@ -972,6 +1082,35 @@ const pixelPass = async (cdp, session) => {
         ),
         Buffer.from(frame.data, "base64")
       );
+      const handFrame =
+        state.meshes && state.meshes.Body_Hand && state.meshes.Body_Hand.frame;
+      if (viewMode === "full" && eyeSize === 0.5 && handFrame) {
+        // The hands at 3x from the default full-body look, for the design
+        // review's hand close-up (the 1x crops upscale blurry).
+        const x0 = ((handFrame.minX + 1) / 2) * width;
+        const x1 = ((handFrame.maxX + 1) / 2) * width;
+        const y0 = ((1 - handFrame.maxY) / 2) * height;
+        const y1 = ((1 - handFrame.minY) / 2) * height;
+        const padX = (x1 - x0) * 0.3;
+        const padY = (y1 - y0) * 0.3;
+        const hands = await cdp.send(
+          "Page.captureScreenshot",
+          {
+            format: "png",
+            clip: {
+              x: Math.max(0, x0 - padX),
+              y: Math.max(0, y0 - padY),
+              width: Math.min(width, x1 - x0 + 2 * padX),
+              height: Math.min(height, y1 - y0 + 2 * padY),
+              scale: 1,
+            },
+          },
+          session
+        );
+        const handsFile = path.join(OUT_DIR, "pixels-outfit2-hands.png");
+        fs.writeFileSync(handsFile, Buffer.from(hands.data, "base64"));
+        console.log(`     hands 3x   ${handsFile}`);
+      }
       const { eyes, avg } = await measureBothEyes(
         cdp,
         session,
@@ -1575,6 +1714,71 @@ const craftPass = async (cdp, session) => {
   );
 };
 
+// Stance pass: the default preset from a 3/4 camera, so the review can read
+// the shoulder-hip counter-tilt and the free knee (a frontal camera flattens
+// both). The figure is turned inside a pivot so the idle sway still applies
+// to the model; the pivot is removed afterwards. Writes
+// stance-threequarter.png and the probe's numbers next to it.
+const STANCE_TURN = 0.7;
+const stancePass = async (cdp, session) => {
+  const look = { ...PRESETS[2], viewMode: "full", revealBody: false };
+  await evaluate(cdp, session, `window.applyLook(${JSON.stringify(look)}); true`);
+  await evaluate(
+    cdp,
+    session,
+    "new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(function () { setTimeout(r, 80); }); }); })"
+  );
+  // The probe undoes the model's own idle sway, not a pivot above it, so
+  // read the numbers before the turn.
+  const state = await evaluate(cdp, session, "window.phViewerState()");
+  await evaluate(
+    cdp,
+    session,
+    `(function () {
+      var m = window.phViewerRig.modelRoot();
+      var pivot = new THREE.Group();
+      pivot.name = "phStancePivot";
+      m.parent.add(pivot);
+      pivot.add(m);
+      pivot.rotation.y = ${STANCE_TURN};
+      return true;
+    })()`
+  );
+  await evaluate(
+    cdp,
+    session,
+    "new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(function () { setTimeout(r, 80); }); }); })"
+  );
+  const shot = await cdp.send(
+    "Page.captureScreenshot",
+    { format: "png" },
+    session
+  );
+  const file = path.join(OUT_DIR, "stance-threequarter.png");
+  fs.writeFileSync(file, Buffer.from(shot.data, "base64"));
+  fs.writeFileSync(
+    path.join(OUT_DIR, "stance-threequarter.json"),
+    JSON.stringify(state.stance, null, 2)
+  );
+  console.log(`     screenshot ${file}`);
+  await evaluate(
+    cdp,
+    session,
+    `(function () {
+      var m = window.phViewerRig.modelRoot();
+      var pivot = m.parent;
+      if (!pivot || pivot.name !== "phStancePivot") return false;
+      pivot.parent.add(m);
+      pivot.parent.remove(pivot);
+      return true;
+    })()`
+  );
+  check(
+    "stance pass: 3/4 view rendered with the figure turned and restored",
+    !!state.stance && state.stance.pelvicChannel === true
+  );
+};
+
 const main = async () => {
   const chrome = findChrome();
   if (!chrome) {
@@ -1749,7 +1953,24 @@ const main = async () => {
         fs.writeFileSync(eyesFile, Buffer.from(closeUp.data, "base64"));
         console.log(`     close-up   ${eyesFile}`);
       }
+      const handFrame =
+        state.meshes && state.meshes.Body_Hand && state.meshes.Body_Hand.frame;
+      if (entry.look.viewMode !== "bust" && handFrame && insideFrame(handFrame, 0)) {
+        // 4x close-up of the hands: the design review reads finger curl and
+        // palm facing here (the #42 hands were flat boards).
+        const clip = eyeClip(handFrame);
+        clip.scale = 3;
+        const closeUp = await cdp.send(
+          "Page.captureScreenshot",
+          { format: "png", clip },
+          sessionId
+        );
+        const handsFile = path.join(OUT_DIR, `${entry.name}-hands.png`);
+        fs.writeFileSync(handsFile, Buffer.from(closeUp.data, "base64"));
+        console.log(`     hands      ${handsFile}`);
+      }
     }
+    await stancePass(cdp, sessionId);
     // The complaint on 1.2 (14): Size min and max "barely differ" (Eyes_0
     // 31.2 -> 31.7 mm). The rendered eyeball at Size 1 must still be clearly
     // taller than at Size 0 (0.74 -> 0.96 is 1.30x nominal).
