@@ -36,7 +36,7 @@
   var EYE_COLORS = ["#3a2418","#3f6b3a","#2e4d7a","#5a3a1e","#111111"];
   var look = {
     appearanceIndex: 2, hairStyle: 2, hairColor: 1, skinTone: 1, eyeColor: 0,
-    upperArms: 0.45, chest: 0.5, forearms: 0.45, backAndHips: 0.48,
+    upperArms: 0.58, chest: 0.55, forearms: 0.55, backAndHips: 0.56,
     faceWidth: 0.4, jaw: 0.38, chin: 0.5, eyeSize: 0.5, age: 0.28,
     viewMode: "full", revealBody: false
   };
@@ -54,6 +54,11 @@
   var eyeRests = [];
   var armBones = [];
   var armRests = [];
+  var fingerBones = [];
+  var fingerRests = [];
+  var stanceBones = [];
+  var stanceRests = [];
+  var kneeIdle = null;
   var masterBones = {};
   var FALLBACK_HEIGHT = 1.75;
   var MIN_PLAUSIBLE_HEIGHT = 1.2;
@@ -174,9 +179,38 @@
     };
   }
 
+  // The Body tab's "Back and hips" slider (look.backAndHips, `hips` below)
+  // fans out over four body morphs. Design-signed 2026-09-07 (body posture
+  // pass): waist 0.72 -> 0.85 and curvy 0.4 -> 0.55 per unit of hips, so the
+  // mid slider (0.56 on the default look) reads as a waist-to-hip curve
+  // instead of a straight torso, and the belly starts at 0.62 instead of
+  // 0.55 so that same mid stays flat-bellied; the top end (hips 1) still
+  // carries a soft belly (0.27) and the weight term above 0.65 is unchanged.
+  // Slider 0 leaves every hips morph at 0, so 0 vs 1 stays readable:
+  // 0.85 / 0.55 / 1.0 / 0.27 of travel on waist / curvy / butt / belly.
+  var HIPS_MAPPING = {
+    waist: 0.85,
+    curvy: 0.55,
+    bellyFrom: 0.62,
+    belly: 0.7,
+    weightFrom: 0.65,
+    weight: 0.35
+  };
+
+  function hipsMorphs(hips) {
+    var h = clamp01(hips);
+    return {
+      butt: h,
+      waist: h * HIPS_MAPPING.waist,
+      curvy: h * HIPS_MAPPING.curvy,
+      belly: Math.max(0, h - HIPS_MAPPING.bellyFrom) * HIPS_MAPPING.belly,
+      weight: Math.max(0, h - HIPS_MAPPING.weightFrom) * HIPS_MAPPING.weight
+    };
+  }
+
   function applyMeshLook(mesh, next) {
     var arms = (clamp01(next.upperArms) + clamp01(next.forearms)) * 0.5;
-    var hips = clamp01(next.backAndHips);
+    var hips = hipsMorphs(next.backAndHips);
     var eye = clamp01(next.eyeSize);
     var brows = browMorphs(eye, next.jaw);
     var sculpt = sculptMorphs(next.faceWidth, next.jaw, next.chin);
@@ -197,11 +231,11 @@
     setMorph(mesh, "Shape_BrowsThickness", BROW_THICKNESS);
     setMorph(mesh, "Shape_Chest", clamp01(next.chest));
     setMorph(mesh, "Shape_Muscle", arms);
-    setMorph(mesh, "Shape_ButtSize", hips);
-    setMorph(mesh, "Shape_WaistSize", hips * 0.72);
-    setMorph(mesh, "Shape_Curvy", hips * 0.4);
-    setMorph(mesh, "Shape_Belly", Math.max(0, hips - 0.55) * 0.7);
-    setMorph(mesh, "Shape_Weight", clamp01(next.age) * 0.28 + Math.max(0, hips - 0.65) * 0.35);
+    setMorph(mesh, "Shape_ButtSize", hips.butt);
+    setMorph(mesh, "Shape_WaistSize", hips.waist);
+    setMorph(mesh, "Shape_Curvy", hips.curvy);
+    setMorph(mesh, "Shape_Belly", hips.belly);
+    setMorph(mesh, "Shape_Weight", clamp01(next.age) * 0.28 + hips.weight);
     setMorph(mesh, "Shape_NeckThickness", mild(next.jaw, 0.22));
     setMorph(mesh, "Shape_BodyType", arms * 0.35);
   }
@@ -284,6 +318,8 @@
   function placeFigure() {
     // Measure in the rest pose so grounding/centering does not drift per outfit.
     resetArmBones();
+    resetFingerBones();
+    resetStanceBones();
     var box = measureFigureBox(new THREE.Box3());
     if (box.isEmpty()) {
       box.setFromObject(modelRoot);
@@ -1895,46 +1931,318 @@
     aimBone(upper, lower, [_ikE.x - _ikS.x, _ikE.y - _ikS.y, _ikE.z - _ikS.z]);
     lower.getWorldPosition(_ikE);
     aimBone(lower, hand, [_ikW.x - _ikE.x, _ikW.y - _ikE.y, _ikW.z - _ikE.z]);
+    // Forearm twist (pronation, radians, mirrored on the right): the aims
+    // above are shortest arcs, so the palm ends up wherever the rest twist
+    // lands it - beside the thigh that is inward, but a hand carried across
+    // the body arrives palm to the camera. The twist turns the forearm about
+    // its own axis before the hand is aimed, so the wrist stays put and only
+    // the palm facing changes.
+    if (t.twist) {
+      hand.getWorldPosition(_ikW);
+      _ikD.subVectors(_ikW, _ikE).normalize();
+      rotateBoneWorld(lower, _ikD, m * t.twist);
+    }
     if (finger && t.hand) {
       aimBone(hand, finger, [m * t.hand[0], t.hand[1], t.hand[2]]);
     }
   }
 
+  // Finger phalanges (index/middle/ring/pinky/thumb _01 / _02, not the
+  // metacarpals): the soft curl the poses put on the hands.
+  function isFingerBone(name) {
+    return /^(index|middle|ring|pinky|thumb)_0[0-9]_[lr]$/.test(name || "");
+  }
+
+  function fingerSide(name) {
+    return name.slice(-1);
+  }
+
+  // The finger bones in bozo-male.glb carry local +Y along the phalanx and
+  // local +Z across the hand from the pinky to the index, so a flex toward
+  // the palm is a turn about local Z: positive on the left hand, negative on
+  // the right (the right rig is the left mirrored, which flips that axis;
+  // the first render with the signs the other way hyperextended every
+  // finger into a splayed claw).
+  // `curl` 0 leaves the rest hand (a flat board), 1 is a loose fist; the
+  // poses use 0.15-0.55, the second phalanx curling a little more than the
+  // first and the thumb half as much.
+  var FINGER_CURL_RAD = { first: 0.40, second: 0.50, thumb: 0.5 };
+  var _curlQ = new THREE.Quaternion();
+
+  function resetFingerBones() {
+    var i;
+    for (i = 0; i < fingerBones.length; i++) {
+      fingerBones[i].quaternion.copy(fingerRests[i]);
+    }
+  }
+
+  function poseFingers(side, curl) {
+    var amount = clamp01(curl);
+    if (!amount) return;
+    var m = side === "r" ? -1 : 1;
+    var i;
+    for (i = 0; i < fingerBones.length; i++) {
+      var bone = fingerBones[i];
+      var name = rigName(bone);
+      if (fingerSide(name) !== side) continue;
+      var angle = name.indexOf("_02_") > 0 ? FINGER_CURL_RAD.second : FINGER_CURL_RAD.first;
+      if (name.indexOf("thumb") === 0) angle *= FINGER_CURL_RAD.thumb;
+      _curlQ.setFromAxisAngle(_axisZ, m * angle * amount);
+      bone.quaternion.multiply(_curlQ);
+    }
+  }
+
+  // The stance bones: pelvis, spine chain, first neck bone, both legs. The
+  // head bone stays with the idle head sway (headBones / headRests).
+  var STANCE_BONE_NAMES = [
+    "pelvis", "spine_01", "spine_02", "spine_03", "spine_04", "spine_05", "neck_01",
+    "thigh_l", "calf_l", "foot_l", "thigh_r", "calf_r", "foot_r"
+  ];
+  var SPINE_BONE_NAMES = ["spine_01", "spine_02", "spine_03", "spine_04", "spine_05"];
+
+  // Collect the finger and stance bones (and their rest transforms) from the
+  // master skeleton; called once after retargetSkeletons, before the first
+  // pose. Exposed so the rig tests can run it on a synthetic skeleton.
+  function collectPoseBones() {
+    fingerBones = [];
+    fingerRests = [];
+    stanceBones = [];
+    stanceRests = [];
+    kneeIdle = null;
+    Object.keys(masterBones).forEach(function (name) {
+      if (isFingerBone(name)) {
+        fingerBones.push(masterBones[name]);
+        fingerRests.push(masterBones[name].quaternion.clone());
+      }
+    });
+    STANCE_BONE_NAMES.forEach(function (name) {
+      var bone = masterBones[name];
+      if (!bone) return;
+      stanceBones.push(bone);
+      stanceRests.push({ q: bone.quaternion.clone(), p: bone.position.clone() });
+    });
+  }
+
+  function resetStanceBones() {
+    var i;
+    for (i = 0; i < stanceBones.length; i++) {
+      stanceBones[i].quaternion.copy(stanceRests[i].q);
+      stanceBones[i].position.copy(stanceRests[i].p);
+    }
+    kneeIdle = null;
+  }
+
+  // Whether the loaded rig has the pelvis / spine / leg chain the stance
+  // writes (bozo-male.glb does: pelvis, spine_01..05, neck_01, thigh / calf /
+  // foot on both sides). Without it applyStance is a no-op and the figure
+  // falls back to arm asymmetry alone.
+  function hasPelvicChannel() {
+    return !!(masterBones.pelvis && masterBones.thigh_l && masterBones.thigh_r &&
+      masterBones.calf_l && masterBones.calf_r && masterBones.spine_03);
+  }
+
+  var _axisX = new THREE.Vector3(1, 0, 0);
+  var _axisY = new THREE.Vector3(0, 1, 0);
+  var _stanceV = new THREE.Vector3();
+  var _shiftV = new THREE.Vector3();
+  var _stanceQ = new THREE.Quaternion();
+  var _stanceS = new THREE.Vector3();
+  var _footA = new THREE.Vector3();
+  var _footB = new THREE.Vector3();
+  var DEG = Math.PI / 180;
+
+  // Body Style C "soft semi-real intimate stance" (design sheet 2026-09-07):
+  // a soft contrapposto, not the #42 soldier stand. The weight is on one leg
+  // (`weightSide`, +x = the character's left); that hip rides up and out,
+  // the pelvis turns a few degrees so the free hip comes forward, the spine
+  // unwinds part of the turn and tilts the shoulders the other way, the neck
+  // takes most of that tilt back out so the head stays near level, and the
+  // free knee carries a micro-bend with a slow idle swing. Angles in degrees,
+  // shift in metres. Design brief: pelvic yaw 3-6, shoulder counter-tilt
+  // 2-4; the knee bend is what the hip drop needs to keep the free foot on
+  // the ground (0.85 m leg: 0.09 m x sin 3 = 4.7 mm, and a 12 deg knee
+  // lifts the foot 4.7 mm; the weight foot is re-planted at its rest height
+  // afterwards). Rendered at 0.02 m / 2.5 deg / 10 deg first: read as
+  // barely a hip at the phone's full-body size, so the shift and roll went
+  // up a notch.
+  var STANCE = {
+    weightSide: "l",
+    pelvisYawDeg: 5,
+    pelvisRollDeg: 3,
+    pelvisShift: 0.03,
+    shoulderTiltDeg: 3,
+    chestYawShare: 0.5,
+    headLevelShare: 0.7,
+    freeKneeDeg: 12,
+    freeThighOutDeg: 2,
+    freeToeOutDeg: 7,
+    weightToeOutDeg: 3,
+    idleKneeDeg: 1.2,
+    idleKneeRate: 0.55,
+    legLength: 0.85
+  };
+
+  // Move `bone` by `delta` (world metres) without turning it.
+  function translateBoneWorld(bone, delta) {
+    if (!bone || !bone.parent) return;
+    bone.parent.getWorldQuaternion(_stanceQ);
+    bone.parent.getWorldScale(_stanceS);
+    _stanceV.copy(delta).applyQuaternion(_stanceQ.invert());
+    _stanceV.set(
+      _stanceV.x / (_stanceS.x || 1),
+      _stanceV.y / (_stanceS.y || 1),
+      _stanceV.z / (_stanceS.z || 1)
+    );
+    bone.position.add(_stanceV);
+    bone.updateMatrixWorld(true);
+  }
+
+  // Write `stance` onto the stance bones from their rest pose. Returns
+  // whether the pelvic channel existed and the stance was written.
+  function applyStance(stance) {
+    resetStanceBones();
+    if (!hasPelvicChannel() || !stance) return false;
+    var m = stance.weightSide === "r" ? -1 : 1;
+    var weight = stance.weightSide === "r" ? "r" : "l";
+    var free = weight === "l" ? "r" : "l";
+    var pelvis = masterBones.pelvis;
+    var weightFoot = masterBones["foot_" + weight];
+    var freeFoot = masterBones["foot_" + free];
+    pelvis.updateMatrixWorld(true);
+    if (weightFoot) weightFoot.getWorldPosition(_footA);
+
+    // Pelvis: the free hip forward, the weight hip up and out.
+    rotateBoneWorld(pelvis, _axisY, m * stance.pelvisYawDeg * DEG);
+    rotateBoneWorld(pelvis, _axisZ, m * stance.pelvisRollDeg * DEG);
+    translateBoneWorld(pelvis, _shiftV.set(m * stance.pelvisShift, 0, 0));
+
+    // Legs: undo the pelvis roll and lean them back under the feet so both
+    // feet stay where the rest pose planted them (x), toes out a little.
+    var legLean = stance.pelvisShift / stance.legLength;
+    var thighW = masterBones["thigh_" + weight];
+    var thighF = masterBones["thigh_" + free];
+    var calfF = masterBones["calf_" + free];
+    rotateBoneWorld(thighW, _axisZ, -m * stance.pelvisRollDeg * DEG - m * legLean);
+    rotateBoneWorld(thighW, _axisY, m * stance.weightToeOutDeg * DEG);
+    rotateBoneWorld(thighF, _axisZ, -m * stance.pelvisRollDeg * DEG - m * legLean - m * stance.freeThighOutDeg * DEG);
+    rotateBoneWorld(thighF, _axisY, -m * stance.freeToeOutDeg * DEG);
+    // Free knee: thigh forward by half the bend, shin back by the whole
+    // bend, foot levelled again (world +X turns a hanging leg backward).
+    var knee = stance.freeKneeDeg * DEG;
+    rotateBoneWorld(thighF, _axisX, -knee / 2);
+    rotateBoneWorld(calfF, _axisX, knee);
+    rotateBoneWorld(freeFoot, _axisX, -knee / 2);
+
+    // Spine: unwind part of the pelvic turn and tilt the shoulders against
+    // the hips, spread over the five spine bones so no single joint kinks.
+    var spineRoll = -m * (stance.pelvisRollDeg + stance.shoulderTiltDeg) * DEG / SPINE_BONE_NAMES.length;
+    var spineYaw = -m * stance.pelvisYawDeg * stance.chestYawShare * DEG / SPINE_BONE_NAMES.length;
+    SPINE_BONE_NAMES.forEach(function (name) {
+      rotateBoneWorld(masterBones[name], _axisZ, spineRoll);
+      rotateBoneWorld(masterBones[name], _axisY, spineYaw);
+    });
+    // Neck: most of the shoulder tilt back out, so the head sits near level
+    // with a hint of lean toward the weight side.
+    rotateBoneWorld(masterBones.neck_01, _axisZ, m * stance.shoulderTiltDeg * stance.headLevelShare * DEG);
+
+    // Plant the weight foot at its rest height (the hip rise lifted it).
+    if (weightFoot) {
+      weightFoot.getWorldPosition(_footB);
+      translateBoneWorld(pelvis, _shiftV.set(0, _footA.y - _footB.y, 0));
+    }
+    kneeIdle = calfF && thighF && freeFoot
+      ? {
+          thigh: thighF, calf: calfF, foot: freeFoot,
+          rests: [thighF.quaternion.clone(), calfF.quaternion.clone(), freeFoot.quaternion.clone()],
+          amplitude: stance.idleKneeDeg * DEG,
+          rate: stance.idleKneeRate
+        }
+      : null;
+    return true;
+  }
+
+  // Idle: the free knee breathes a degree or so around its posed bend, in
+  // step with nothing else (its own slow rate), so the stance is not a
+  // statue. Runs every frame from the posed quaternions.
+  function idleKnee(t) {
+    if (!kneeIdle) return;
+    var swing = Math.sin(t * kneeIdle.rate) * kneeIdle.amplitude;
+    kneeIdle.thigh.quaternion.copy(kneeIdle.rests[0]);
+    kneeIdle.calf.quaternion.copy(kneeIdle.rests[1]);
+    kneeIdle.foot.quaternion.copy(kneeIdle.rests[2]);
+    rotateBoneWorld(kneeIdle.thigh, _axisX, -swing / 2);
+    rotateBoneWorld(kneeIdle.calf, _axisX, swing);
+    rotateBoneWorld(kneeIdle.foot, _axisX, -swing / 2);
+  }
+
   // Wrist offsets are metres from the shoulder joint on a 1.8m figure:
   // +x outward, +y up, +z toward the camera. Rest is an A-pose with the
-  // wrist at about (+0.29, -0.37, +0.09).
-  var ARM_RELAXED = {
-    wrist: [0.10, -0.42, 0.09],
-    pole: [0.6, 0, -0.8],
-    hand: [0.05, -0.95, 0.3]
+  // wrist at about (+0.29, -0.37, +0.09). `hand` aims the hand bone at the
+  // middle finger, `curl` (0-1) softens the fingers (poseFingers),
+  // `clavicleLift` (radians) raises the shoulder for a lifted arm.
+  //
+  // Body Style C (2026-09-07): the #42 table read as a soldier stand (both
+  // arms identical, hands flat), a death-hug (arms folded hard across the
+  // chest) and a symmetric power pose (hands on hips, elbows out). Every
+  // pose is now asymmetric and soft: the elbow poles hang back and down
+  // instead of flaring, wrists sit a few centimetres apart between sides,
+  // hands are aimed a little forward and curled, and nothing crosses the
+  // chest. The left arm is on the weight side of STANCE (that shoulder is
+  // lower, that hip out), so its hand hangs closer and lower.
+  var ARM_HANG_L = {
+    wrist: [0.06, -0.43, 0.10],
+    pole: [0.25, -0.25, -0.93],
+    hand: [0.0, -0.93, 0.36],
+    curl: 0.35
+  };
+  var ARM_HANG_R = {
+    wrist: [0.075, -0.415, 0.125],
+    pole: [0.25, -0.25, -0.93],
+    hand: [0.06, -0.9, 0.42],
+    curl: 0.5
   };
   var OUTFIT_POSES = [
-    // 0 Shirt + jeans: relaxed, arms hanging beside the thighs.
-    { l: ARM_RELAXED, r: ARM_RELAXED },
-    // 1 Jacket: arms folded across the chest, right forearm over the left.
+    // 0 Shirt + jeans: soft asymmetric relax - both arms hang, the wrist
+    // offsets 3 cm apart between sides, hands bent a little forward and
+    // curled.
+    { l: ARM_HANG_L, r: ARM_HANG_R },
+    // 1 Jacket: loose drape, light hold - the right arm hangs soft; the left
+    // hand comes forward to rest lightly at the belt in front of the hip
+    // pocket, back of the hand to the camera (twist), fingers hanging.
+    // (A two-hand wrist hold in front of the pelvis was rendered first: in
+    // the frontal preview both hands stacked at the crotch and read as
+    // hand-wringing, so the hold is one hand at the belt.) Nothing crosses
+    // the chest; the belt-hand wrist sits 0.39 m under the shoulder.
     {
-      l: { wrist: [-0.11, -0.24, 0.23], pole: [0.55, -0.8, 0.25], hand: [-0.72, 0.22, -0.25] },
-      r: { wrist: [-0.10, -0.16, 0.29], pole: [0.55, -0.8, 0.25], hand: [-0.72, 0.18, -0.30] }
+      l: { wrist: [-0.02, -0.39, 0.15], pole: [0.7, -0.2, -0.7], hand: [-0.2, -0.85, 0.45], curl: 0.45, twist: 1.0 },
+      r: ARM_HANG_R
     },
-    // 2 Hoodie: hands on hips, elbows out.
+    // 2 Hoodie: light one-side hip touch - the left hand (weight-side hip,
+    // pushed out) rests on the hip rim, fingers forward, the elbow hanging
+    // back rather than flaring; the right arm hangs soft.
     {
-      l: { wrist: [0.085, -0.35, 0.10], pole: [1, 0.15, -0.35], hand: [-0.3, -0.6, 0.74] },
-      r: { wrist: [0.085, -0.35, 0.10], pole: [1, 0.15, -0.35], hand: [-0.3, -0.6, 0.74] }
+      l: { wrist: [0.06, -0.385, 0.085], pole: [0.5, -0.3, -0.8], hand: [-0.15, -0.45, 0.88], curl: 0.3 },
+      r: { wrist: [0.07, -0.42, 0.125], pole: [0.25, -0.25, -0.93], hand: [0.06, -0.92, 0.38], curl: 0.45 }
     },
-    // 3 Tank top: left arm relaxed, right hand raised in a wave.
+    // 3 Tank top: left arm hangs soft, right hand raised in a wave with a
+    // small shoulder lift (<= 0.06 rad).
     {
-      l: { wrist: [0.11, -0.41, 0.07], pole: [0.6, 0, -0.8], hand: [0.05, -0.95, 0.3] },
-      r: { wrist: [0.25, 0.12, 0.13], pole: [0.9, -0.45, 0], hand: [-0.1, 0.95, 0.25], clavicleLift: 0.1 }
+      l: ARM_HANG_L,
+      r: { wrist: [0.25, 0.12, 0.13], pole: [0.9, -0.45, 0], hand: [-0.1, 0.95, 0.25], clavicleLift: 0.06, curl: 0.15 }
     }
   ];
 
   function applyOutfitPose(outfitIndex) {
     if (!armBones.length) return;
     resetArmBones();
+    resetFingerBones();
     if (modelRoot) modelRoot.updateMatrixWorld(true);
     var pose = OUTFIT_POSES[outfitIndex | 0] || OUTFIT_POSES[0];
+    applyStance(pose.stance || STANCE);
     poseArm("l", pose.l);
     poseArm("r", pose.r || pose.l);
+    poseFingers("l", pose.l.curl);
+    poseFingers("r", (pose.r || pose.l).curl);
     if (modelRoot) modelRoot.updateMatrixWorld(true);
   }
 
@@ -2095,6 +2403,7 @@
       headBones[i].rotation.x = headRests[i].x + Math.sin(clock * 0.9) * 0.012;
       headBones[i].rotation.y = headRests[i].y + Math.sin(clock * 0.45) * 0.035;
     }
+    idleKnee(clock);
     if (camera) aimEyes(camera.position);
     updateEyeCentres();
     updateKeyDirection();
@@ -2156,6 +2465,7 @@
         try {
           modelRoot = gltf.scene;
           retargetSkeletons(modelRoot);
+          collectPoseBones();
           Object.keys(masterBones).forEach(function (boneName) {
             var bone = masterBones[boneName];
             if (boneName === "head") {
@@ -2336,10 +2646,106 @@
       camera: camera ? { fov: camera.fov, position: [camera.position.x, camera.position.y, camera.position.z] } : null,
       eyes: eyeState(),
       face: faceProfile(),
+      stance: stanceState(),
       visible: visible,
       meshes: meshes
     };
   };
+
+  // Posture probe for scripts/check-avatar-viewer.js and the rig tests: the
+  // hip and shoulder lines, the pelvic and chest turn, the head's roll, both
+  // knee bends and both wrists, read off the master skeleton's world
+  // positions with the idle sway (root yaw / roll / breathe, knee swing)
+  // undone and restored, so the numbers do not depend on the parked frame.
+  // Angles in degrees: line tilts are positive when the character's left
+  // (+x) end is higher, yaws positive when the left end is further back
+  // (the free right hip forward), knee bends 0 for a straight leg.
+  function stanceState(rootArg) {
+    var root = rootArg || modelRoot;
+    if (!root || !masterBones.pelvis) return null;
+    var savedRoot = {
+      rotation: root.rotation.clone(),
+      scale: root.scale.clone(),
+      y: root.position.y
+    };
+    var savedKnee = kneeIdle
+      ? [kneeIdle.thigh.quaternion.clone(), kneeIdle.calf.quaternion.clone(), kneeIdle.foot.quaternion.clone()]
+      : null;
+    root.rotation.set(0, 0, 0);
+    root.scale.set(1, 1, 1);
+    if (root === modelRoot) root.position.y = modelRestY;
+    if (kneeIdle) {
+      kneeIdle.thigh.quaternion.copy(kneeIdle.rests[0]);
+      kneeIdle.calf.quaternion.copy(kneeIdle.rests[1]);
+      kneeIdle.foot.quaternion.copy(kneeIdle.rests[2]);
+    }
+    root.updateMatrixWorld(true);
+    var at = function (name) {
+      var bone = masterBones[name];
+      return bone ? bone.getWorldPosition(new THREE.Vector3()) : null;
+    };
+    var tilt = function (l, r) {
+      return l && r ? Math.atan2(l.y - r.y, l.x - r.x) / DEG : null;
+    };
+    var yaw = function (l, r) {
+      return l && r ? Math.atan2(-(l.z - r.z), l.x - r.x) / DEG : null;
+    };
+    var bend = function (hip, knee, ankle) {
+      if (!hip || !knee || !ankle) return null;
+      var a = knee.clone().sub(hip).normalize();
+      var b = ankle.clone().sub(knee).normalize();
+      return Math.acos(Math.max(-1, Math.min(1, a.dot(b)))) / DEG;
+    };
+    var thighL = at("thigh_l");
+    var thighR = at("thigh_r");
+    // The shoulder girdle is read at the clavicle roots, which ride on the
+    // top spine bone: the upper-arm joints also move with a clavicle lift
+    // (the wave), which is arm pose, not stance. armLineDeg keeps that
+    // reading for reference.
+    var clavL = at("clavicle_l");
+    var clavR = at("clavicle_r");
+    var armL = at("upperarm_l");
+    var armR = at("upperarm_r");
+    var eyeL = at("eyeRoot_l");
+    var eyeR = at("eyeRoot_r");
+    var handL = at("hand_l");
+    var handR = at("hand_r");
+    var footL = at("foot_l");
+    var footR = at("foot_r");
+    var out = {
+      pelvicChannel: hasPelvicChannel(),
+      weightSide: STANCE.weightSide,
+      hipLineDeg: tilt(thighL, thighR),
+      shoulderLineDeg: tilt(clavL, clavR),
+      armLineDeg: tilt(armL, armR),
+      headRollDeg: tilt(eyeL, eyeR),
+      pelvisYawDeg: yaw(thighL, thighR),
+      chestYawDeg: yaw(clavL, clavR),
+      kneeBendDeg: {
+        l: bend(thighL, at("calf_l"), footL),
+        r: bend(thighR, at("calf_r"), footR)
+      },
+      footY: { l: footL ? footL.y : null, r: footR ? footR.y : null },
+      hands: {
+        l: handL ? [handL.x, handL.y, handL.z] : null,
+        r: handR ? [handR.x, handR.y, handR.z] : null
+      },
+      // How far the two wrists are from mirror images of each other.
+      wristAsymmetry: handL && handR
+        ? Math.hypot(-handL.x - handR.x, handL.y - handR.y, handL.z - handR.z)
+        : null
+    };
+    root.rotation.copy(savedRoot.rotation);
+    root.scale.copy(savedRoot.scale);
+    root.position.y = savedRoot.y;
+    if (kneeIdle && savedKnee) {
+      kneeIdle.thigh.quaternion.copy(savedKnee[0]);
+      kneeIdle.calf.quaternion.copy(savedKnee[1]);
+      kneeIdle.foot.quaternion.copy(savedKnee[2]);
+    }
+    root.updateMatrixWorld(true);
+    return out;
+  }
 
   // Face silhouette probe for scripts/check-avatar-viewer.js: Head_0's
   // skinned, morph-baked vertices measured against the eye line, in metres
@@ -2472,6 +2878,22 @@
   window.phViewerRig = {
     SKIN_BY_OUTFIT: SKIN_BY_OUTFIT,
     OUTFIT_POSES: OUTFIT_POSES,
+    ARM_HANG_L: ARM_HANG_L,
+    ARM_HANG_R: ARM_HANG_R,
+    STANCE: STANCE,
+    STANCE_BONE_NAMES: STANCE_BONE_NAMES,
+    HIPS_MAPPING: HIPS_MAPPING,
+    FINGER_CURL_RAD: FINGER_CURL_RAD,
+    hipsMorphs: hipsMorphs,
+    isFingerBone: isFingerBone,
+    collectPoseBones: collectPoseBones,
+    hasPelvicChannel: hasPelvicChannel,
+    applyStance: applyStance,
+    resetStanceBones: resetStanceBones,
+    poseFingers: poseFingers,
+    resetFingerBones: resetFingerBones,
+    idleKnee: idleKnee,
+    stanceState: stanceState,
     MIN_PLAUSIBLE_HEIGHT: MIN_PLAUSIBLE_HEIGHT,
     FALLBACK_HEIGHT: FALLBACK_HEIGHT,
     IRIS_RADIUS: IRIS_RADIUS,
