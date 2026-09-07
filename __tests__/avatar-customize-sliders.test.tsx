@@ -22,7 +22,10 @@ import type { AvatarLook } from "../src/screens/avatar/engine/viewer-html";
  * The Customize step's Face tab used to carry an "Eyes" slider bound to the
  * same `eyeSize` key as the Eyes tab's "Size" slider: two controls for one
  * value on two tabs. The design director's first cut: Face is face shape
- * only (Face / Jaw / Chin); the eye lives on the Eyes tab.
+ * only (Face / Jaw / Chin); the eye lives on the Eyes tab. The face axes pack
+ * (2026-09-07) adds Lip / Bridge / Brow after them, in the brief's order, on
+ * their own keys - and no nose-length slider: bozo-male.glb has no such
+ * morph, and "Bridge" (鼻梁) must never be labelled as length (鼻长).
  */
 
 jest.mock("@react-native-async-storage/async-storage", () =>
@@ -75,6 +78,9 @@ const SLIDER_VALUES: Record<
     | "faceWidth"
     | "jaw"
     | "chin"
+    | "lipFullness"
+    | "noseBridge"
+    | "browHeight"
     | "eyeSize"
     | "age"
   >,
@@ -87,6 +93,9 @@ const SLIDER_VALUES: Record<
   faceWidth: 0.21,
   jaw: 0.22,
   chin: 0.23,
+  lipFullness: 0.24,
+  noseBridge: 0.25,
+  browHeight: 0.26,
   eyeSize: 0.31,
   age: 0.41,
 };
@@ -198,16 +207,63 @@ afterEach(() => {
 });
 
 describe("Customize: the Face tab is face shape only", () => {
-  it("offers exactly Face, Jaw and Chin — no Eyes slider", async () => {
+  it("offers Face, Jaw, Chin, then the face axes pack Lip, Bridge, Brow — no Eyes slider", async () => {
     const tree = await mountCustomize();
     openCategory(tree, "Face");
 
-    expect(sliderKeys(tree)).toEqual(["faceWidth", "jaw", "chin"]);
+    expect(sliderKeys(tree)).toEqual([
+      "faceWidth",
+      "jaw",
+      "chin",
+      "lipFullness",
+      "noseBridge",
+      "browHeight",
+    ]);
     // The row labels read as face shape; "Eyes" appears once, as the tab pill.
     const labels = texts(tree);
-    expect(labels).toEqual(expect.arrayContaining(["Face", "Jaw", "Chin"]));
+    expect(labels).toEqual(
+      expect.arrayContaining(["Face", "Jaw", "Chin", "Lip", "Bridge", "Brow"])
+    );
     expect(labels.filter((label) => label === "Eyes")).toHaveLength(1);
     expect(labels).not.toContain("Size");
+  });
+
+  it("names the nose axis Bridge (鼻梁) and never Length (鼻长): the GLB has no nose-length morph", async () => {
+    const tree = await mountCustomize();
+    openCategory(tree, "Face");
+
+    const labels = texts(tree);
+    expect(labels).toContain("Bridge");
+    labels.forEach((label) => {
+      expect(label).not.toMatch(/length|鼻长|nose/i);
+    });
+    expect(sliderKeys(tree)).not.toContain("noseLength" as never);
+  });
+
+  it("binds Lip, Bridge and Brow to their own keys and leaves the rest of the face alone", async () => {
+    const tree = await mountCustomize();
+    openCategory(tree, "Face");
+
+    const rows = sliders(tree);
+    const byKey = Object.fromEntries(
+      rows.map((row) => [keyForValue(row.props.value as number), row])
+    );
+    act(() => {
+      byKey.lipFullness.props.onValueChange(0.9);
+    });
+    expect(wizard!.draft.lipFullness).toBe(0.9);
+    act(() => {
+      byKey.noseBridge.props.onValueChange(0.1);
+    });
+    expect(wizard!.draft.noseBridge).toBe(0.1);
+    act(() => {
+      byKey.browHeight.props.onValueChange([0.7]);
+    });
+    expect(wizard!.draft.browHeight).toBe(0.7);
+    expect(wizard!.draft.faceWidth).toBe(SLIDER_VALUES.faceWidth);
+    expect(wizard!.draft.jaw).toBe(SLIDER_VALUES.jaw);
+    expect(wizard!.draft.chin).toBe(SLIDER_VALUES.chin);
+    expect(wizard!.draft.eyeSize).toBe(SLIDER_VALUES.eyeSize);
   });
 
   it("keeps the Eyes tab's Size slider on the same eyeSize key", async () => {
@@ -222,10 +278,12 @@ describe("Customize: the Face tab is face shape only", () => {
       size.props.onValueChange(0.8);
     });
     expect(wizard!.draft.eyeSize).toBe(0.8);
-    // Face shape untouched by the eye control.
+    // Face shape untouched by the eye control - the brow included: Eyes Size
+    // used to move the brows in the viewer; browHeight is the Face tab's now.
     expect(wizard!.draft.faceWidth).toBe(SLIDER_VALUES.faceWidth);
     expect(wizard!.draft.jaw).toBe(SLIDER_VALUES.jaw);
     expect(wizard!.draft.chin).toBe(SLIDER_VALUES.chin);
+    expect(wizard!.draft.browHeight).toBe(SLIDER_VALUES.browHeight);
   });
 
   it("binds every look slider to exactly one tab", async () => {

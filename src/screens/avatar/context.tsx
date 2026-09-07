@@ -182,6 +182,9 @@ const AVATAR_LOOK_FIELDS: Record<keyof AvatarLook, true> = {
   faceWidth: true,
   jaw: true,
   chin: true,
+  lipFullness: true,
+  noseBridge: true,
+  browHeight: true,
   eyeSize: true,
   age: true,
 };

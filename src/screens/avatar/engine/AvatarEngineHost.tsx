@@ -18,7 +18,7 @@ export const avatarViewerUri = (generation = 0) => {
   const host = match[2];
   const metroPort = match[3] || "8081";
   const retry = generation > 0 ? `&r=${generation}` : "";
-  return `${protocol}://${host}:${metroPort}/ph-avatar/viewer.html?v=bozo40${retry}`;
+  return `${protocol}://${host}:${metroPort}/ph-avatar/viewer.html?v=bozo41${retry}`;
 };
 
 export type AvatarViewMode = "full" | "bust";
@@ -111,6 +111,9 @@ const sameLook = (a: AvatarLook, b: AvatarLook) =>
   a.faceWidth === b.faceWidth &&
   a.jaw === b.jaw &&
   a.chin === b.chin &&
+  a.lipFullness === b.lipFullness &&
+  a.noseBridge === b.noseBridge &&
+  a.browHeight === b.browHeight &&
   a.eyeSize === b.eyeSize &&
   a.age === b.age;
 
