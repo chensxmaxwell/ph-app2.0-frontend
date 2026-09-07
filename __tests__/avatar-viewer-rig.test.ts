@@ -44,8 +44,40 @@ type ArmTarget = {
   pole: Vec3;
   hand?: Vec3;
   clavicleLift?: number;
+  curl?: number;
+  twist?: number;
 };
-type OutfitPose = { l: ArmTarget; r?: ArmTarget };
+type Stance = {
+  weightSide: "l" | "r";
+  pelvisYawDeg: number;
+  pelvisRollDeg: number;
+  pelvisShift: number;
+  shoulderTiltDeg: number;
+  chestYawShare: number;
+  headLevelShare: number;
+  freeKneeDeg: number;
+  freeThighOutDeg: number;
+  freeToeOutDeg: number;
+  weightToeOutDeg: number;
+  idleKneeDeg: number;
+  idleKneeRate: number;
+  legLength: number;
+};
+type StanceState = {
+  pelvicChannel: boolean;
+  weightSide: string;
+  hipLineDeg: number;
+  shoulderLineDeg: number;
+  armLineDeg: number;
+  headRollDeg: number;
+  pelvisYawDeg: number;
+  chestYawDeg: number;
+  kneeBendDeg: { l: number; r: number };
+  footY: { l: number; r: number };
+  hands: { l: Vec3 | null; r: Vec3 | null };
+  wristAsymmetry: number | null;
+};
+type OutfitPose = { l: ArmTarget; r?: ArmTarget; stance?: Stance };
 type Look = {
   appearanceIndex: number;
   hairStyle: number;
@@ -55,6 +87,35 @@ type Look = {
 type ViewerRig = {
   SKIN_BY_OUTFIT: Record<number, Record<string, number>>;
   OUTFIT_POSES: OutfitPose[];
+  ARM_HANG_L: ArmTarget;
+  ARM_HANG_R: ArmTarget;
+  STANCE: Stance;
+  STANCE_BONE_NAMES: string[];
+  HIPS_MAPPING: {
+    waist: number;
+    curvy: number;
+    bellyFrom: number;
+    belly: number;
+    weightFrom: number;
+    weight: number;
+  };
+  FINGER_CURL_RAD: { first: number; second: number; thumb: number };
+  hipsMorphs: (hips: number) => {
+    butt: number;
+    waist: number;
+    curvy: number;
+    belly: number;
+    weight: number;
+  };
+  isFingerBone: (name: string) => boolean;
+  collectPoseBones: () => void;
+  hasPelvicChannel: () => boolean;
+  applyStance: (stance: Stance | null) => boolean;
+  resetStanceBones: () => void;
+  poseFingers: (side: "l" | "r", curl: number) => void;
+  resetFingerBones: () => void;
+  idleKnee: (t: number) => void;
+  stanceState: (root?: unknown) => StanceState | null;
   MIN_PLAUSIBLE_HEIGHT: number;
   FALLBACK_HEIGHT: number;
   IRIS_RADIUS: number;
@@ -1466,6 +1527,529 @@ describe("outfit poses", () => {
     expect(rig.isPoseArmBone("index_01_l")).toBe(false);
     expect(rig.isPoseArmBone("middle_metacarpal_r")).toBe(false);
     expect(rig.isPoseArmBone("thumb_02_l")).toBe(false);
+  });
+});
+
+// Body Style C "soft semi-real intimate stance" (design sheet 2026-09-07):
+// Maxwell's collage of the #42 default read outfit 0 as a soldier stand
+// (both arms identical, hands flat), outfit 1 as a death-hug (arms folded
+// hard across the chest) and outfit 2 as a symmetric power pose (hands on
+// hips, elbows out). The signed direction: soft contrapposto through the
+// pelvis / spine / legs, asymmetric hanging arms with softly curled hands, a
+// loose one-hand hold, a light one-side hip touch, the wave kept with a
+// smaller shoulder lift, and a fuller default body.
+describe("body stance", () => {
+  const length = (v: Vec3) => Math.hypot(v[0], v[1], v[2]);
+  const diff = (a: Vec3, b: Vec3): Vec3 => [
+    a[0] - b[0],
+    a[1] - b[1],
+    a[2] - b[2],
+  ];
+  const sides = (pose: OutfitPose) => [pose.l, pose.r || pose.l];
+  // A wrist within 0.3 m below the shoulder, carried across the centre line,
+  // is an arm folded on the chest (#42 outfit 1: -0.16 / -0.24 at x -0.10).
+  const onChest = (t: ArmTarget) => t.wrist[1] > -0.3 && t.wrist[0] < -0.05;
+  const DEG = Math.PI / 180;
+
+  describe("default body", () => {
+    it("fills out the default look's Body mids as design signed them: arms 0.58 / 0.55, chest 0.55, back & hips 0.56", () => {
+      expect(DEFAULT_LOOK.upperArms).toBe(0.58);
+      expect(DEFAULT_LOOK.forearms).toBe(0.55);
+      expect(DEFAULT_LOOK.chest).toBe(0.55);
+      expect(DEFAULT_LOOK.backAndHips).toBe(0.56);
+      // The other three presets keep their bodies.
+      expect(CHARACTER_PRESETS[0].backAndHips).toBe(0.34);
+      expect(CHARACTER_PRESETS[1].backAndHips).toBe(0.6);
+      expect(CHARACTER_PRESETS[3].backAndHips).toBe(0.74);
+      // The viewer boots on the same body.
+      const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+      const bootLook = html.slice(
+        html.indexOf("var look = {"),
+        html.indexOf("viewMode:")
+      );
+      expect(bootLook).toContain(
+        `upperArms: ${DEFAULT_LOOK.upperArms}, chest: ${DEFAULT_LOOK.chest}, forearms: ${DEFAULT_LOOK.forearms}, backAndHips: ${DEFAULT_LOOK.backAndHips}`
+      );
+    });
+
+    it("fans the Back & hips slider onto waist 0.85 / curvy 0.55 per unit, with the belly starting at 0.62, and keeps 0 vs 1 readable", () => {
+      expect(rig.HIPS_MAPPING.waist).toBe(0.85);
+      expect(rig.HIPS_MAPPING.curvy).toBe(0.55);
+      expect(rig.HIPS_MAPPING.bellyFrom).toBe(0.62);
+      const zero = rig.hipsMorphs(0);
+      expect(zero).toEqual({ butt: 0, waist: 0, curvy: 0, belly: 0, weight: 0 });
+      const one = rig.hipsMorphs(1);
+      expect(one.butt).toBe(1);
+      expect(one.waist).toBeCloseTo(0.85, 9);
+      expect(one.curvy).toBeCloseTo(0.55, 9);
+      expect(one.belly).toBeCloseTo((1 - 0.62) * 0.7, 9);
+      expect(one.weight).toBeCloseTo((1 - 0.65) * 0.35, 9);
+      // Slider 0 vs 1: every hips morph but the belly travels more than half
+      // its range, the belly a soft 0.27 at the top - readable, not a wall.
+      expect(one.waist - zero.waist).toBeGreaterThan(0.5);
+      expect(one.curvy - zero.curvy).toBeGreaterThan(0.5);
+      expect(one.butt - zero.butt).toBeGreaterThan(0.5);
+      expect(one.belly).toBeLessThan(0.3);
+      // The default mid (0.56) gets the waist-to-hip curve and no belly.
+      const mid = rig.hipsMorphs(DEFAULT_LOOK.backAndHips);
+      expect(mid.waist).toBeCloseTo(0.56 * 0.85, 9);
+      expect(mid.curvy).toBeCloseTo(0.56 * 0.55, 9);
+      expect(mid.belly).toBe(0);
+      expect(mid.weight).toBe(0);
+      // Monotonic in the slider, clamped outside 0..1.
+      let last = rig.hipsMorphs(0);
+      for (let h = 0.1; h <= 1.0001; h += 0.1) {
+        const next = rig.hipsMorphs(h);
+        expect(next.waist).toBeGreaterThan(last.waist);
+        expect(next.curvy).toBeGreaterThan(last.curvy);
+        expect(next.belly).toBeGreaterThanOrEqual(last.belly);
+        last = next;
+      }
+      expect(rig.hipsMorphs(1.5)).toEqual(one);
+      expect(rig.hipsMorphs(-1)).toEqual(zero);
+    });
+
+    it("applyMeshLook writes the widened hips mapping to the body morphs, and the old 0.72 / 0.4 / 0.55 constants are gone", () => {
+      const body = morphDictionaryMesh([
+        "Shape_ButtSize",
+        "Shape_WaistSize",
+        "Shape_Curvy",
+        "Shape_Belly",
+        "Shape_Weight",
+        "Shape_Chest",
+        "Shape_Muscle",
+      ]);
+      const at = (name: string) =>
+        body.morphTargetInfluences[body.morphTargetDictionary[name]];
+      rig.applyMeshLook(body, { ...DEFAULT_LOOK_VALUES, backAndHips: 1, age: 0 });
+      expect(at("Shape_WaistSize")).toBeCloseTo(0.85, 9);
+      expect(at("Shape_Curvy")).toBeCloseTo(0.55, 9);
+      expect(at("Shape_ButtSize")).toBe(1);
+      expect(at("Shape_Belly")).toBeCloseTo((1 - 0.62) * 0.7, 9);
+      expect(at("Shape_Weight")).toBeCloseTo((1 - 0.65) * 0.35, 9);
+      rig.applyMeshLook(body, { ...DEFAULT_LOOK_VALUES, backAndHips: 0.6, age: 0 });
+      // 0.6 sat 0.05 over the old belly threshold; now it is under it.
+      expect(at("Shape_Belly")).toBe(0);
+      rig.applyMeshLook(body, DEFAULT_LOOK_VALUES);
+      expect(at("Shape_Chest")).toBeCloseTo(DEFAULT_LOOK.chest, 9);
+      expect(at("Shape_Muscle")).toBeCloseTo(
+        (DEFAULT_LOOK.upperArms + DEFAULT_LOOK.forearms) / 2,
+        9
+      );
+      const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+      expect(html).not.toMatch(/hips \* 0\.72/);
+      expect(html).not.toMatch(/hips \* 0\.4\b/);
+      expect(html).not.toMatch(/hips - 0\.55\)/);
+    });
+  });
+
+  describe("outfit poses", () => {
+    it("outfit 0 is a soft asymmetric relax: both arms hang, wrist offsets 2-4 cm apart, hands bent forward and curled", () => {
+      const pose = rig.OUTFIT_POSES[0];
+      expect(pose.l).toBe(rig.ARM_HANG_L);
+      expect(pose.r).toBe(rig.ARM_HANG_R);
+      const gap = length(diff(pose.l.wrist, pose.r!.wrist));
+      expect(gap).toBeGreaterThanOrEqual(0.02);
+      expect(gap).toBeLessThanOrEqual(0.04);
+      for (const side of sides(pose)) {
+        // Hanging: wrist well under the shoulder, close to the body.
+        expect(side.wrist[1]).toBeLessThan(-0.38);
+        expect(side.wrist[0]).toBeLessThan(0.1);
+        // Elbow poles hang back and down, not out and up.
+        expect(side.pole[2]).toBeLessThan(-0.5);
+        expect(side.pole[1]).toBeLessThanOrEqual(0);
+        // Hands aimed a little forward of straight down and curled.
+        expect(side.hand![2]).toBeGreaterThan(0.25);
+        expect(side.curl).toBeGreaterThanOrEqual(0.3);
+      }
+      expect(pose.l.curl).not.toBe(pose.r!.curl);
+    });
+
+    it("outfit 1 is a loose drape with a light one-hand hold at the belt, not arms folded on the chest", () => {
+      const pose = rig.OUTFIT_POSES[1];
+      for (const side of sides(pose)) {
+        expect(onChest(side)).toBe(false);
+        expect(side.wrist[1]).toBeLessThan(-0.3);
+        expect(side.pole[1]).toBeLessThanOrEqual(0);
+      }
+      // One hand comes forward to the belt (in front of the hip, palm turned
+      // to the body), the other hangs.
+      const belt = pose.l;
+      expect(belt.wrist[2]).toBeGreaterThan(0.12);
+      expect(belt.wrist[0]).toBeLessThan(0.02);
+      expect(belt.wrist[0]).toBeGreaterThan(-0.06);
+      expect(belt.twist).toBeGreaterThan(0);
+      expect(belt.curl).toBeGreaterThan(0.3);
+      expect(pose.r).toBe(rig.ARM_HANG_R);
+    });
+
+    it("outfit 2 is a light one-side hip touch with soft elbows, not the symmetric hands-on-hips power pose", () => {
+      const pose = rig.OUTFIT_POSES[2];
+      const [hip, hang] = sides(pose);
+      expect(JSON.stringify(hip)).not.toBe(JSON.stringify(hang));
+      // The hip hand: wrist beside the hip rim, fingers forward.
+      expect(hip.wrist[1]).toBeGreaterThan(-0.42);
+      expect(hip.wrist[1]).toBeLessThan(-0.36);
+      expect(hip.wrist[0]).toBeGreaterThan(0.04);
+      expect(hip.wrist[0]).toBeLessThan(0.09);
+      expect(hip.hand![2]).toBeGreaterThan(0.7);
+      // A soft elbow: the pole leans back and down, never the old [1, 0.15,
+      // -0.35] flare.
+      expect(hip.pole[0]).toBeLessThanOrEqual(0.7);
+      expect(hip.pole[1]).toBeLessThan(0);
+      expect(hip.pole[2]).toBeLessThan(-0.5);
+      // The other arm hangs.
+      expect(hang.hand![1]).toBeLessThan(-0.8);
+      expect(hang.wrist[1]).toBeLessThan(-0.4);
+      expect(hang.pole[1]).toBeLessThan(0);
+    });
+
+    it("outfit 3 keeps the wave with a shoulder lift of at most 0.06 rad", () => {
+      const pose = rig.OUTFIT_POSES[3];
+      expect(pose.l).toBe(rig.ARM_HANG_L);
+      expect(pose.r!.wrist[1]).toBeGreaterThan(0);
+      expect(pose.r!.hand![1]).toBeGreaterThan(0.8);
+      expect(pose.r!.clavicleLift).toBeLessThanOrEqual(0.06);
+      expect(pose.r!.clavicleLift).toBeGreaterThan(0);
+    });
+
+    it("the default full preview does not open on crossed arms, and no pose folds an arm on the chest", () => {
+      const preview = rig.OUTFIT_POSES[DEFAULT_LOOK.appearanceIndex];
+      expect(sides(preview).some(onChest)).toBe(false);
+      for (const outfit of OUTFIT_INDICES) {
+        for (const side of sides(rig.OUTFIT_POSES[outfit])) {
+          expect(onChest(side)).toBe(false);
+          expect(side.curl ?? 0).toBeGreaterThanOrEqual(0);
+          expect(side.curl ?? 0).toBeLessThanOrEqual(1);
+          expect(Number.isFinite(side.twist ?? 0)).toBe(true);
+        }
+      }
+    });
+  });
+
+  // A synthetic figure with the GLB's bone names and rest lengths (metres):
+  // pelvis at 1.0, five spine bones to the neck, eyes on the head, hip
+  // joints 0.09 out, 0.425 m thigh and calf, shoulders 0.13 out on the top
+  // spine bone. Plain parent (no armature transform): world axes are the
+  // figure's axes.
+  const figure = () => {
+    const root = new THREE.Group();
+    const bone = (name: string, position: Vec3, parent: Three) => {
+      const b = new THREE.Bone();
+      b.name = name;
+      b.position.set(position[0], position[1], position[2]);
+      parent.add(b);
+      return b;
+    };
+    const pelvis = bone("pelvis", [0, 1.0, 0], root);
+    let spine: Three = pelvis;
+    for (let i = 1; i <= 5; i += 1) {
+      spine = bone(`spine_0${i}`, [0, i === 1 ? 0.03 : 0.1, 0], spine);
+    }
+    const neck = bone("neck_01", [0, 0.09, 0], spine);
+    const head = bone("head", [0, 0.09, 0], neck);
+    bone("eyeRoot_l", [0.03, 0.06, 0.08], head);
+    bone("eyeRoot_r", [-0.03, 0.06, 0.08], head);
+    for (const side of ["l", "r"]) {
+      const m = side === "l" ? 1 : -1;
+      const clavicle = bone(`clavicle_${side}`, [m * 0.01, 0.02, 0], spine);
+      const upper = bone(`upperarm_${side}`, [m * 0.12, -0.02, 0], clavicle);
+      const lower = bone(`lowerarm_${side}`, [m * 0.15, -0.21, 0], upper);
+      bone(`hand_${side}`, [m * 0.13, -0.18, 0.08], lower);
+      const thigh = bone(`thigh_${side}`, [m * 0.09, -0.025, 0.01], pelvis);
+      const calf = bone(`calf_${side}`, [0, -0.425, 0], thigh);
+      bone(`foot_${side}`, [0, -0.425, 0], calf);
+    }
+    root.updateMatrixWorld(true);
+    return root;
+  };
+
+  const worldOf = (root: Three, name: string) =>
+    root.getObjectByName(name).getWorldPosition(new THREE.Vector3());
+
+  describe("stance", () => {
+    it("names the pelvic channel the GLB has: pelvis, spine_01..05, neck_01, both thigh / calf / foot chains", () => {
+      expect(rig.STANCE_BONE_NAMES).toEqual([
+        "pelvis",
+        "spine_01",
+        "spine_02",
+        "spine_03",
+        "spine_04",
+        "spine_05",
+        "neck_01",
+        "thigh_l",
+        "calf_l",
+        "foot_l",
+        "thigh_r",
+        "calf_r",
+        "foot_r",
+      ]);
+      const { jointNames } = readGlbMesh("Body_Hips");
+      for (const name of rig.STANCE_BONE_NAMES) {
+        expect(jointNames).toContain(name);
+      }
+    });
+
+    it("carries the design brief's numbers: pelvic yaw 3-6 deg, shoulder counter-tilt 2-4 deg, a free-knee micro-bend, weight on the left leg", () => {
+      const s = rig.STANCE;
+      expect(s.weightSide).toBe("l");
+      expect(s.pelvisYawDeg).toBeGreaterThanOrEqual(3);
+      expect(s.pelvisYawDeg).toBeLessThanOrEqual(6);
+      expect(s.shoulderTiltDeg).toBeGreaterThanOrEqual(2);
+      expect(s.shoulderTiltDeg).toBeLessThanOrEqual(4);
+      expect(s.pelvisRollDeg).toBeGreaterThan(0);
+      expect(s.pelvisRollDeg).toBeLessThanOrEqual(4);
+      expect(s.pelvisShift).toBeGreaterThan(0);
+      expect(s.pelvisShift).toBeLessThanOrEqual(0.04);
+      expect(s.freeKneeDeg).toBeGreaterThanOrEqual(6);
+      expect(s.freeKneeDeg).toBeLessThanOrEqual(16);
+      expect(s.idleKneeDeg).toBeGreaterThan(0);
+      expect(s.idleKneeDeg).toBeLessThan(3);
+      expect(s.chestYawShare).toBeGreaterThan(0);
+      expect(s.chestYawShare).toBeLessThan(1);
+      expect(s.headLevelShare).toBeGreaterThan(0);
+      expect(s.headLevelShare).toBeLessThanOrEqual(1);
+    });
+
+    it("writes a soft contrapposto onto the synthetic figure: pelvis turned and tilted, shoulders counter-tilted, head near level, free knee bent, feet on the ground", () => {
+      const root = figure();
+      const restFootL = worldOf(root, "foot_l");
+      const restFootR = worldOf(root, "foot_r");
+      rig.retargetSkeletons(root);
+      rig.collectPoseBones();
+      expect(rig.hasPelvicChannel()).toBe(true);
+      expect(rig.applyStance(rig.STANCE)).toBe(true);
+      const state = rig.stanceState(root)!;
+      expect(state).not.toBeNull();
+      expect(state.pelvicChannel).toBe(true);
+      const s = rig.STANCE;
+      // Pelvis: the free (right) hip forward by the yaw, the weight (left)
+      // hip up by the roll.
+      expect(state.pelvisYawDeg).toBeCloseTo(s.pelvisYawDeg, 0);
+      expect(state.hipLineDeg).toBeCloseTo(s.pelvisRollDeg, 0);
+      // Shoulders the other way, head mostly levelled again.
+      expect(state.shoulderLineDeg).toBeCloseTo(-s.shoulderTiltDeg, 0);
+      expect(state.shoulderLineDeg * state.hipLineDeg).toBeLessThan(0);
+      expect(Math.abs(state.headRollDeg)).toBeLessThan(
+        s.shoulderTiltDeg * (1 - s.headLevelShare) + 0.5
+      );
+      // The chest unwinds part of the pelvic turn, not all of it.
+      expect(state.chestYawDeg).toBeGreaterThan(0.5);
+      expect(state.chestYawDeg).toBeLessThan(s.pelvisYawDeg);
+      // Only the free knee bends.
+      expect(state.kneeBendDeg.r).toBeCloseTo(s.freeKneeDeg, 0);
+      expect(state.kneeBendDeg.l).toBeLessThan(0.5);
+      // The weight foot is re-planted at its rest height and x; the free
+      // foot stays on the ground too (a few mm at most) and close to where
+      // it stood, a little out and forward of its rest.
+      const footL = worldOf(root, "foot_l");
+      const footR = worldOf(root, "foot_r");
+      expect(Math.abs(footL.y - restFootL.y)).toBeLessThan(0.001);
+      expect(Math.abs(footL.x - restFootL.x)).toBeLessThan(0.006);
+      expect(Math.abs(footR.y - restFootR.y)).toBeLessThan(0.006);
+      expect(footR.x).toBeLessThan(restFootR.x);
+      expect(footR.x - restFootR.x).toBeGreaterThan(-0.04);
+      // The pelvis shifted onto the weight leg.
+      expect(worldOf(root, "pelvis").x).toBeGreaterThan(s.pelvisShift - 0.002);
+      // Wrists (no arm pose here) still differ off mirror because the whole
+      // torso shifted and tilted.
+      expect(state.wristAsymmetry).toBeGreaterThan(0.02);
+    });
+
+    it("mirrors the whole stance for a right weight leg", () => {
+      const root = figure();
+      rig.retargetSkeletons(root);
+      rig.collectPoseBones();
+      rig.applyStance({ ...rig.STANCE, weightSide: "r" });
+      const state = rig.stanceState(root)!;
+      const s = rig.STANCE;
+      expect(state.pelvisYawDeg).toBeCloseTo(-s.pelvisYawDeg, 0);
+      expect(state.hipLineDeg).toBeCloseTo(-s.pelvisRollDeg, 0);
+      expect(state.shoulderLineDeg).toBeCloseTo(s.shoulderTiltDeg, 0);
+      expect(state.kneeBendDeg.l).toBeCloseTo(s.freeKneeDeg, 0);
+      expect(state.kneeBendDeg.r).toBeLessThan(0.5);
+      expect(worldOf(root, "pelvis").x).toBeLessThan(-s.pelvisShift + 0.002);
+    });
+
+    it("resets to the rest pose before every write, so re-applying is idempotent and reset restores every bone", () => {
+      const root = figure();
+      const rest = rig.STANCE_BONE_NAMES.map((name) => worldOf(root, name));
+      rig.retargetSkeletons(root);
+      rig.collectPoseBones();
+      rig.applyStance(rig.STANCE);
+      const once = rig.stanceState(root)!;
+      rig.applyStance(rig.STANCE);
+      const twice = rig.stanceState(root)!;
+      expect(twice.pelvisYawDeg).toBeCloseTo(once.pelvisYawDeg, 9);
+      expect(twice.hipLineDeg).toBeCloseTo(once.hipLineDeg, 9);
+      expect(twice.kneeBendDeg.r).toBeCloseTo(once.kneeBendDeg.r, 9);
+      rig.resetStanceBones();
+      root.updateMatrixWorld(true);
+      rig.STANCE_BONE_NAMES.forEach((name, i) => {
+        expect(worldOf(root, name).distanceTo(rest[i])).toBeLessThan(1e-9);
+      });
+      const level = rig.stanceState(root)!;
+      expect(level.pelvisYawDeg).toBeCloseTo(0, 6);
+      expect(level.hipLineDeg).toBeCloseTo(0, 6);
+      expect(level.shoulderLineDeg).toBeCloseTo(0, 6);
+      expect(level.kneeBendDeg.r).toBeCloseTo(0, 6);
+    });
+
+    it("swings the free knee a degree or so at idle and reads the stance with that swing undone", () => {
+      const root = figure();
+      rig.retargetSkeletons(root);
+      rig.collectPoseBones();
+      rig.applyStance(rig.STANCE);
+      const posed = rig.stanceState(root)!;
+      const calf = root.getObjectByName("calf_r");
+      const posedQ = calf.quaternion.clone();
+      const weightCalf = root.getObjectByName("calf_l");
+      const weightQ = weightCalf.quaternion.clone();
+      // A quarter period in: the swing is at its amplitude.
+      const t = Math.PI / 2 / rig.STANCE.idleKneeRate;
+      rig.idleKnee(t);
+      expect(calf.quaternion.angleTo(posedQ)).toBeCloseTo(
+        rig.STANCE.idleKneeDeg * DEG,
+        3
+      );
+      // The weight leg does not move.
+      expect(weightCalf.quaternion.angleTo(weightQ)).toBe(0);
+      root.updateMatrixWorld(true);
+      const footR = worldOf(root, "foot_r");
+      // The probe undoes the swing...
+      const swung = rig.stanceState(root)!;
+      expect(swung.kneeBendDeg.r).toBeCloseTo(posed.kneeBendDeg.r, 6);
+      // ...and puts it back.
+      root.updateMatrixWorld(true);
+      expect(worldOf(root, "foot_r").distanceTo(footR)).toBeLessThan(1e-9);
+      // At the zero crossing the leg is back on its posed bend.
+      rig.idleKnee(0);
+      expect(calf.quaternion.angleTo(posedQ)).toBeLessThan(1e-6);
+    });
+
+    it("is a no-op without a pelvic channel (a rig with no legs falls back to arm asymmetry alone)", () => {
+      const root = new THREE.Group();
+      const pelvis = new THREE.Bone();
+      pelvis.name = "pelvis";
+      pelvis.position.set(0, 1, 0);
+      root.add(pelvis);
+      const spine = new THREE.Bone();
+      spine.name = "spine_03";
+      spine.position.set(0, 0.2, 0);
+      pelvis.add(spine);
+      root.updateMatrixWorld(true);
+      rig.retargetSkeletons(root);
+      rig.collectPoseBones();
+      expect(rig.hasPelvicChannel()).toBe(false);
+      expect(rig.applyStance(rig.STANCE)).toBe(false);
+      root.updateMatrixWorld(true);
+      expect(worldOf(root, "spine_03").x).toBe(0);
+      expect(rig.stanceState(root)!.pelvicChannel).toBe(false);
+    });
+  });
+
+  describe("soft hands", () => {
+    it("tells the finger phalanges from the metacarpals and everything else", () => {
+      for (const name of ["index_01_l", "index_02_r", "middle_01_l", "ring_02_r", "pinky_01_l", "thumb_01_r", "thumb_02_l"]) {
+        expect(rig.isFingerBone(name)).toBe(true);
+      }
+      for (const name of ["index_metacarpal_l", "hand_l", "lowerarm_r", "thumb", "index_01", ""]) {
+        expect(rig.isFingerBone(name)).toBe(false);
+      }
+      // The GLB's hand rig has two phalanges per finger and thumb on each
+      // side, all of them under the master skeleton the viewer poses.
+      const { jointNames } = readGlbMesh("Body_Hand");
+      const fingers = jointNames.filter((name) => rig.isFingerBone(name));
+      expect(fingers).toHaveLength(20);
+    });
+
+    it("curls the fingers toward the palm about their local across-hand axis: positive on the left, mirrored on the right, more on the second phalanx, half on the thumb, none on a rest hand", () => {
+      const root = new THREE.Group();
+      const hand = new THREE.Bone();
+      hand.name = "hand_l";
+      root.add(hand);
+      const names = ["index_01_l", "index_02_l", "thumb_01_l", "index_metacarpal_l", "index_01_r", "index_02_r"];
+      const bones: Record<string, Three> = {};
+      for (const name of names) {
+        const b = new THREE.Bone();
+        b.name = name;
+        b.position.set(0, 0.03, 0);
+        hand.add(b);
+        bones[name] = b;
+      }
+      root.updateMatrixWorld(true);
+      rig.retargetSkeletons(root);
+      rig.collectPoseBones();
+      const localZAngle = (b: Three) => {
+        const e = new THREE.Euler().setFromQuaternion(b.quaternion, "XYZ");
+        return e.z;
+      };
+      rig.poseFingers("l", 1);
+      expect(localZAngle(bones.index_01_l)).toBeCloseTo(rig.FINGER_CURL_RAD.first, 6);
+      expect(localZAngle(bones.index_02_l)).toBeCloseTo(rig.FINGER_CURL_RAD.second, 6);
+      expect(localZAngle(bones.thumb_01_l)).toBeCloseTo(rig.FINGER_CURL_RAD.first * rig.FINGER_CURL_RAD.thumb, 6);
+      expect(rig.FINGER_CURL_RAD.second).toBeGreaterThan(rig.FINGER_CURL_RAD.first);
+      // Metacarpals and the other hand are untouched.
+      expect(bones.index_metacarpal_l.quaternion.w).toBe(1);
+      expect(bones.index_01_r.quaternion.w).toBe(1);
+      rig.poseFingers("r", 0.5);
+      expect(localZAngle(bones.index_01_r)).toBeCloseTo(-0.5 * rig.FINGER_CURL_RAD.first, 6);
+      expect(localZAngle(bones.index_02_r)).toBeCloseTo(-0.5 * rig.FINGER_CURL_RAD.second, 6);
+      // Reset restores the rest hand; curl 0 leaves it there.
+      rig.resetFingerBones();
+      rig.poseFingers("l", 0);
+      for (const name of names) {
+        expect(bones[name].quaternion.w).toBe(1);
+      }
+      // A loose curl, never a fist: the poses stay under 0.6 and the full
+      // curl under 30 deg per phalanx.
+      expect(rig.FINGER_CURL_RAD.first).toBeLessThan(0.55);
+      expect(rig.FINGER_CURL_RAD.second).toBeLessThan(0.55);
+      for (const outfit of OUTFIT_INDICES) {
+        for (const side of sides(rig.OUTFIT_POSES[outfit])) {
+          expect(side.curl ?? 0).toBeLessThanOrEqual(0.6);
+        }
+      }
+    });
+
+    it("applies the stance and the curl on every outfit pose, and the headless check gates the stance with the design numbers", () => {
+      const html = fs.readFileSync(VIEWER_SOURCE, "utf8");
+      const apply = html.slice(
+        html.indexOf("function applyOutfitPose"),
+        html.indexOf("}", html.indexOf("poseFingers(\"r\""))
+      );
+      expect(apply).toContain("resetFingerBones();");
+      expect(apply).toContain("applyStance(pose.stance || STANCE);");
+      expect(apply).toMatch(/poseFingers\("l", pose\.l\.curl\)/);
+      expect(apply).toMatch(/poseFingers\("r", \(pose\.r \|\| pose\.l\)\.curl\)/);
+      // The idle loop swings the free knee every frame; the probe reports the
+      // stance on phViewerState.
+      expect(html).toMatch(/idleKnee\(clock\);/);
+      expect(html).toMatch(/stance: stanceState\(\),/);
+      const script = fs.readFileSync(
+        path.join(ROOT, "scripts", "check-avatar-viewer.js"),
+        "utf8"
+      );
+      const bands = script.slice(
+        script.indexOf("const STANCE_BANDS = {"),
+        script.indexOf("};", script.indexOf("const STANCE_BANDS = {")) + 2
+      );
+      const parsed = vm.runInNewContext(
+        "(" + bands.replace("const STANCE_BANDS = ", "").replace(/;$/, "") + ")"
+      ) as {
+        pelvisYawDeg: [number, number];
+        shoulderTiltDeg: [number, number];
+        freeKneeExtraDeg: [number, number];
+      };
+      expect(parsed.pelvisYawDeg).toEqual([3, 6]);
+      expect(parsed.shoulderTiltDeg).toEqual([2, 4]);
+      expect(rig.STANCE.pelvisYawDeg).toBeGreaterThanOrEqual(parsed.pelvisYawDeg[0]);
+      expect(rig.STANCE.pelvisYawDeg).toBeLessThanOrEqual(parsed.pelvisYawDeg[1]);
+      expect(rig.STANCE.freeKneeDeg).toBeGreaterThanOrEqual(parsed.freeKneeExtraDeg[0]);
+      expect(rig.STANCE.freeKneeDeg).toBeLessThanOrEqual(parsed.freeKneeExtraDeg[1]);
+      expect(script).toMatch(/if \(full\) assertStance\(entry, state\);/);
+      expect(script).toMatch(/await stancePass\(cdp, sessionId\);/);
+    });
   });
 });
 
