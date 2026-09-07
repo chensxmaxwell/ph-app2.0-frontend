@@ -29,6 +29,9 @@ type SliderKey = keyof Pick<
   | "faceWidth"
   | "jaw"
   | "chin"
+  | "lipFullness"
+  | "noseBridge"
+  | "browHeight"
   | "eyeSize"
   | "age"
 >;
@@ -58,12 +61,20 @@ const slidersForCategory = (category: Category): SliderConfig[] => {
     case "Skin":
       return [];
     // Face shape only; the eye is the Eyes tab's Size slider (same eyeSize
-    // key), so one value is never driven from two tabs.
+    // key), so one value is never driven from two tabs. The face axes pack
+    // (2026-09-07) follows Face / Jaw / Chin in the brief's order: Lip
+    // (Shape_MouthThin reversed), Bridge (Shape_NoseBridgeCurve — 鼻梁, never
+    // 鼻长: bozo-male.glb has no nose-length morph and the tilt morphs are not
+    // allowed to fake one, so a "Length" slider waits for a future target),
+    // Brow (Shape_LowerBrows / Shape_RaiseBrows, no longer tied to Eyes Size).
     case "Face":
       return [
         { key: "faceWidth", label: "Face" },
         { key: "jaw", label: "Jaw" },
         { key: "chin", label: "Chin" },
+        { key: "lipFullness", label: "Lip" },
+        { key: "noseBridge", label: "Bridge" },
+        { key: "browHeight", label: "Brow" },
       ];
     case "Body":
       return [
