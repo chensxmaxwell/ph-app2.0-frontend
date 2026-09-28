@@ -45,9 +45,9 @@
 		<true/>
 	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Pleasure House Requires the Set Up of Bluetooth Connection to Offer Better Experience</string>
+	<string>Pleasure House uses Bluetooth to connect to and control your Pleasure House device (ICD-001).</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Pleasure House Requires the Set Up of Bluetooth Connection to Offer Better Experience</string>
+	<string>Pleasure House uses Bluetooth to connect to and control your Pleasure House device (ICD-001).</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string></string>
 	<key>NSMicrophoneUsageDescription</key>

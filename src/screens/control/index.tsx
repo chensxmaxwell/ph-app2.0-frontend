@@ -1,9 +1,10 @@
 
 import React from 'react';
 import { View, StyleSheet, TouchableOpacity, FlatList, ListRenderItem } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { ControlType, useControl } from './hooks';
 import { ScreenWrapper } from '@common/components/screen-wrapper';
-import { FULL_SIZE } from '@common/constant';
+import { FULL_SIZE, SCREENS } from '@common/constant';
 import { colors } from '@common/styles/colors';
 import { fontSizes, fontWeights } from '@common/styles/fonts';
 import { BaseText } from '@common/components/base-text';
@@ -14,6 +15,7 @@ import { s } from '../avatar/scale';
 
 export const Control = () => {
   const { controls } = useControl();
+  const navigation = useNavigation();
 
   const renderControls: ListRenderItem<ControlType> = ({ item }) => {
     const { title, Icon, onPress } = item;
@@ -42,6 +44,14 @@ export const Control = () => {
           columnWrapperStyle={styles.columnWrapper}
         />
         <SessionLovePill style={{ top: s(80) }} />
+        {__DEV__ ? (
+          // Temporary engineering entry; the 高级控制 entry replaces it.
+          <TouchableOpacity
+            style={styles.bleDebugChip}
+            onPress={() => navigation.navigate(SCREENS.ICD001_DEBUG)}>
+            <BaseText style={styles.bleDebugText}>BLE</BaseText>
+          </TouchableOpacity>
+        ) : null}
       </View>
     </ScreenWrapper>
   );
@@ -74,6 +84,20 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     alignItems: 'center',
     paddingVertical: spacings.h16,
+  },
+  bleDebugChip: {
+    position: 'absolute',
+    top: s(8),
+    right: s(16),
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.white,
+  },
+  bleDebugText: {
+    color: colors.white,
+    fontSize: fontSizes.smallX,
   },
   controlTitle: {
     fontWeight: fontWeights.bold,

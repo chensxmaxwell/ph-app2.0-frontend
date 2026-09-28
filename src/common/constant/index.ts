@@ -17,6 +17,7 @@ const SCREENS = {
   MAIN: "Main" as never,
   NAV_BAR: "NavBar" as never,
   CONTROL: "Control" as never,
+  ICD001_DEBUG: "Icd001Debug" as never,
   CANVAS: "Canvas" as never,
   MANUAL: "Manual" as never,
   PATTERN: "Pattern" as never,
