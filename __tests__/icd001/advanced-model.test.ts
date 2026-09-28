@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals
 
 import {
   COOLED_DOWN_BANNER,
+  HOTSPOT_ZONES,
   RhythmCard,
   WingCtx,
   bannerFor,
@@ -164,6 +165,13 @@ describe('banners', () => {
     expect(b.lines[0]).toBe('Outputs paused to protect your skin. They can start again below 39°C.');
   });
 
+  it('overtemp release text follows INFO ch.ot.clear (no hard-coded 39)', () => {
+    const b = bannerFor(deriveScreenState(st({ overTemp: true })), tlm({ ntc: 40.1, ot: 1 }), null, {
+      ot: { tripC: 40, clearC: 37 },
+    })!;
+    expect(b.lines[0]).toBe('Outputs paused to protect your skin. They can start again below 37°C.');
+  });
+
   it('lowbat shows voltage; lower-priority conditions become extra lines', () => {
     const b = bannerFor(deriveScreenState(st({ lowBattery: true })), tlm({ vbat: 3.38, lb: 1 }), null)!;
     expect(b.title).toBe('Battery low · 3.38 V');
@@ -184,7 +192,7 @@ describe('banners', () => {
 });
 
 describe('device strip values', () => {
-  it('battery %: 3.40 V = 0 %, 4.20 V = 100 % (UI default, open question)', () => {
+  it('battery %: 3.40 V = 0 %, 4.20 V = 100 % (§8.1 provisional linear)', () => {
     expect(displayBatteryPct(3.4)).toBe(0);
     expect(displayBatteryPct(3.38)).toBe(0);
     expect(displayBatteryPct(4.2)).toBe(100);
@@ -209,6 +217,25 @@ describe('cards from INFO', () => {
     expect(p.range).toEqual({ min: 10, max: 50, def: 10 });
     expect(p.device).toEqual({ min: 2, max: 50 });
     expect(cards[2]).toMatchObject({ ppgIndex: 3, hasActuator: false });
+  });
+
+  it('wing groups carry app copy + hotspot zone (§8.5), independent of INFO labels', () => {
+    const raw = JSON.parse(V0_INFO);
+    raw.ch.lra = { A: 'Upper', B: 'Lower' };
+    const w = buildCards(parseInfo(raw))[0];
+    if (w.kind !== 'intensity') {
+      throw new Error('expected intensity');
+    }
+    expect(w.groups.map(g => [g.id, g.index, g.zone, g.name, g.short, g.detail, g.label])).toEqual([
+      ['A', 0, 'upper', 'Upper wings', 'Upper', 'left + right', 'Upper'],
+      ['B', 1, 'lower', 'Lower wings', 'Lower', 'left + right', 'Lower'],
+    ]);
+    expect(HOTSPOT_ZONES).toEqual({
+      upper: { card: 'wing', group: 'A' },
+      lower: { card: 'wing', group: 'B' },
+      head: { card: 'vcm' },
+      bullet: { card: 'egg' },
+    });
   });
 
   it('legacy H11: VCM 2–20, no bullet card (no ch.egg)', () => {

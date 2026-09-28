@@ -81,7 +81,7 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     await tick(400);
     expect(t.dev.snapshot().lra).toEqual([60, 40]);
     expect(t.wing()).toMatchObject({ on: true, values: { A: 60, B: 40 }, summary: 'A 60 · B 40 · Steady' });
-    expect(t.v().running).toEqual({ A: true, B: true, head: false });
+    expect(t.v().running).toEqual({ upper: true, lower: true, head: false });
 
     t.ctl.setWingOn(false);
     await tick(300);
@@ -144,15 +144,24 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.done();
   });
 
-  it('stage tap expands the matching card', async () => {
+  it('hotspot zones: upper = group A, lower = group B (§8.5), head = pulse, bullet = sensor', async () => {
     const t = await setup();
     t.ctl.selectPart('head');
     expect(t.v().expanded).toBe('vcm');
     expect(t.pulse().expanded).toBe(true);
-    t.ctl.selectPart('B');
-    expect(t.v().expanded).toBe('wing');
-    t.ctl.toggleCard('wing');
+    t.ctl.selectPart('lower');
+    expect(t.v()).toMatchObject({ expanded: 'wing', focusedGroup: 'B' });
+    t.ctl.selectPart('upper');
+    expect(t.v()).toMatchObject({ expanded: 'wing', focusedGroup: 'A' });
+    t.ctl.selectPart('bullet');
+    expect(t.v()).toMatchObject({ expanded: 'egg', focusedGroup: null });
+    t.ctl.toggleCard('egg');
     expect(t.v().expanded).toBeNull();
+    const g = t.wing().card.groups;
+    expect(g.map(x => [x.id, x.zone, x.name, x.label])).toEqual([
+      ['A', 'upper', 'Upper wings', '上翼'],
+      ['B', 'lower', 'Lower wings', '下翼'],
+    ]);
     t.done();
   });
 
@@ -193,6 +202,69 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.transport.pressStartKey(t.id);
     await tick(200);
     expect(t.v().banner?.lines[0]).toBe('All outputs are off. Stopped from the device button.');
+    t.done();
+  });
+
+  it('START key release of an app E-stop: normal state + "released on the device" notice (§8.3)', async () => {
+    const t = await setup();
+    t.ctl.stopAll();
+    await tick(4000);
+    t.ctl.beginRelease();
+    await tick(500);
+    t.transport.pressStartKey(t.id);
+    await tick(100);
+    expect(t.v().screen.kind).toBe('normal');
+    expect(t.v().estop).toMatchObject({
+      on: false,
+      holdProgress: 0,
+      lastChange: { on: false, source: 'device' },
+    });
+    expect(t.v().banner?.title).toBe('Emergency stop released on the device');
+    expect(t.dev.commandLog).not.toContain('ESTOP 0');
+    await tick(4200);
+    expect(t.v().banner).toBeNull();
+    t.done();
+  });
+
+  it('thresholds come from INFO: over-temp banner uses ch.ot.clear', async () => {
+    const dev0 = new MockIcd001Device('icd1', 'ICD1-TEST');
+    dev0.safety = { ot: { trip: 40, clear: 36.5 }, lb: { trip: 3.4, clear: 3.7, holdS: 60 } };
+    dev0.ntcOverride = 40.4;
+    dev0.vbatOverride = 3.95;
+    const client = new Icd001Client(new MockIcd001Transport([dev0], { mtu: 185, connectDelayMs: 10 }));
+    const ctl = new AdvancedControlController(client);
+    ctl.start();
+    const p = client.connect({
+      id: 'sim-ICD1-TEST',
+      name: dev0.name,
+      rssi: -50,
+      kind: null,
+      simulated: true,
+    });
+    await tick(1500);
+    expect(await p).toBe(true);
+    expect(ctl.getView().thresholds).toMatchObject({
+      ot: { tripC: 40, clearC: 36.5 },
+      fromInfo: { ot: true },
+    });
+    expect(ctl.getView().screen.kind).toBe('overtemp');
+    expect(ctl.getView().banner?.lines[0]).toBe(
+      'Outputs paused to protect your skin. They can start again below 36.5°C.',
+    );
+    ctl.dispose();
+    client.destroy();
+  });
+
+  it('low battery clears only after > 3.70 V for 60 s (firmware latch)', async () => {
+    const t = await setup();
+    t.dev.vbatOverride = 3.38;
+    await tick(500);
+    expect(t.v().screen.kind).toBe('lowbat');
+    t.dev.vbatOverride = 3.9;
+    await tick(58_000);
+    expect(t.v().screen.kind).toBe('lowbat');
+    await tick(3_000);
+    expect(t.v().screen.kind).toBe('normal');
     t.done();
   });
 

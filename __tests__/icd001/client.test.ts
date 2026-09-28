@@ -223,35 +223,93 @@ describe('Icd001Client + simulator', () => {
     expect(d.lra).toEqual([0, 0]);
   });
 
-  it('low battery: EVT LOWBAT 1 below 3.40 V, released by EVT LOWBAT 0 above 3.60 V (lb in TLM)', async () => {
+  it('low battery (v0): EVT LOWBAT 1 below 3.40 V; EVT LOWBAT 0 only after > 3.70 V held 60 s (§8.2)', async () => {
     const { dev, client, id } = setup('icd1');
     await connect(client, id, dev.name);
     dev.vbatOverride = 3.35;
     await tick(300);
     expect(client.getState().lowBattery).toBe(true);
     expect(client.getState().tlm?.lb).toBe(true);
-    dev.vbatOverride = 3.5; // inside hysteresis band: still locked
-    await tick(300);
+    dev.vbatOverride = 3.65; // old 3.60 release no longer applies
+    await tick(1000);
     expect(client.getState().lowBattery).toBe(true);
-    dev.vbatOverride = 3.7;
-    await tick(300);
+    dev.vbatOverride = 3.75;
+    await tick(30_000);
+    dev.vbatOverride = 3.69; // dip resets the 60 s hold
+    await tick(500);
+    dev.vbatOverride = 3.75;
+    await tick(50_000);
+    expect(client.getState().lowBattery).toBe(true);
+    await tick(10_500);
     expect(client.getState().lowBattery).toBe(false);
     expect(client.getState().log.some(l => l.includes('EVT LOWBAT 0'))).toBe(true);
     client.destroy();
   });
 
-  it('legacy board: app-side low-battery hysteresis on vbat (no lb field)', async () => {
+  it('v0 thresholds follow INFO ch.ot / ch.lb (mock with non-default values)', async () => {
+    const { dev, client, id } = setup('icd1');
+    dev.safety = { ot: { trip: 40, clear: 37 }, lb: { trip: 3.5, clear: 3.8, holdS: 5 } };
+    await connect(client, id, dev.name);
+    expect(client.getState().info?.safety).toMatchObject({ ot: { tripC: 40, clearC: 37 }, lb: { holdS: 5 } });
+    dev.ntcOverride = 40.2;
+    await tick(300);
+    expect(client.getState().overTemp).toBe(true);
+    dev.ntcOverride = 37.5;
+    await tick(300);
+    expect(client.getState().overTemp).toBe(true);
+    dev.ntcOverride = 36.9;
+    await tick(300);
+    expect(client.getState().overTemp).toBe(false);
+    dev.vbatOverride = 3.45;
+    await tick(300);
+    expect(client.getState().lowBattery).toBe(true);
+    dev.vbatOverride = 3.85;
+    await tick(5_500);
+    expect(client.getState().lowBattery).toBe(false);
+    client.destroy();
+  });
+
+  it('legacy board: app-side low battery with fallback 3.40 / 3.70 V held 60 s, STOP on trip', async () => {
     const { dev, client, id } = setup('h11');
     await connect(client, id, dev.name);
+    expect(client.getState().info?.safety.fromInfo).toEqual({ ot: false, lb: false });
+    client.setLra('A', 50);
+    await tick(300);
+    expect(dev.snapshot().lra[0]).toBe(50);
+    dev.commandLog.length = 0;
     dev.vbatOverride = 3.3;
     await tick(300);
     expect(client.getState().lockReasons).toContain('lowbat');
-    dev.vbatOverride = 3.5;
-    await tick(300);
+    expect(dev.commandLog).toContain('STOP');
+    expect(dev.snapshot().lra[0]).toBe(0);
+    dev.vbatOverride = 3.65; // above the old 3.60 release: still locked
+    await tick(1000);
     expect(client.getState().lowBattery).toBe(true);
-    dev.vbatOverride = 3.65;
-    await tick(300);
+    dev.vbatOverride = 3.72;
+    await tick(59_000);
+    expect(client.getState().lowBattery).toBe(true);
+    await tick(1_500);
     expect(client.getState().lowBattery).toBe(false);
+    client.destroy();
+  });
+
+  it('legacy board: app-side over-temp with fallback 42 / 39 °C, STOP on trip', async () => {
+    const { dev, client, id } = setup('h11');
+    await connect(client, id, dev.name);
+    client.setVcmHz(10);
+    await tick(300);
+    dev.commandLog.length = 0;
+    dev.ntcOverride = 42.1;
+    await tick(300);
+    expect(client.getState().overTemp).toBe(true);
+    expect(dev.commandLog).toContain('STOP');
+    expect(client.setLra('A', 20)).toBe(false);
+    dev.ntcOverride = 39.5;
+    await tick(300);
+    expect(client.getState().overTemp).toBe(true);
+    dev.ntcOverride = 38.9;
+    await tick(300);
+    expect(client.getState().overTemp).toBe(false);
     client.destroy();
   });
 
@@ -323,14 +381,54 @@ describe('Icd001Client + simulator', () => {
     await client.setEstop(true);
     await tick(300);
     expect(client.getState()).toMatchObject({ estop: true, estopSource: 'app' });
+    expect(client.getState().estopChange).toMatchObject({ on: true, source: 'app' });
     await tick(4000); // later TLM frames keep the source
     expect(client.getState().estopSource).toBe('app');
     await client.setEstop(false);
     await tick(200);
     expect(client.getState()).toMatchObject({ estop: false, estopSource: null });
+    expect(client.getState().estopChange).toMatchObject({ on: false, source: 'app' });
+    await tick(4000);
     transport.pressStartKey(id);
     await tick(200);
     expect(client.getState()).toMatchObject({ estop: true, estopSource: 'device' });
+    expect(client.getState().estopChange).toMatchObject({ on: true, source: 'device' });
+    client.destroy();
+  });
+
+  it('§8.3 START key releases an app E-stop without ESTOP 0 (EVT ESTOP 0 + TLM are the truth)', async () => {
+    const { dev, transport, client, id } = setup('icd1', 185);
+    await connect(client, id, dev.name);
+    await client.setEstop(true);
+    await tick(4000);
+    dev.commandLog.length = 0;
+    transport.pressStartKey(id);
+    await tick(50);
+    expect(dev.commandLog).not.toContain('ESTOP 0');
+    expect(client.getState()).toMatchObject({ estop: false, estopSource: null, locked: false });
+    expect(client.getState().estopChange).toMatchObject({ on: false, source: 'device' });
+    expect(client.getState().log.some(l => l.includes('EVT ESTOP 0'))).toBe(true);
+    expect(client.setLra('A', 30)).toBe(true);
+    await tick(300);
+    expect(dev.snapshot().lra[0]).toBe(30);
+    client.destroy();
+  });
+
+  it('TLM estop alone (EVT lost) still flips the state; ERR ESTOP does not set it but triggers GET (§8.6)', async () => {
+    const { dev, client, id } = setup('icd1', 185);
+    await connect(client, id, dev.name);
+    dev.estop = true; // firmware latched, EVT missed
+    await tick(300);
+    expect(client.getState()).toMatchObject({ estop: true, estopSource: 'device' });
+    dev.estop = false;
+    await tick(300);
+    expect(client.getState().estop).toBe(false);
+    dev.commandLog.length = 0;
+    client.onLine('ERR ESTOP');
+    expect(client.getState().estop).toBe(false);
+    expect(client.getState().lastSafetyErr?.reason).toBe('ESTOP');
+    await tick(200);
+    expect(dev.commandLog).toContain('GET');
     client.destroy();
   });
 

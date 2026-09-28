@@ -6,7 +6,8 @@
  *
  * Variants (PROTOCOL-ICD001.md, §7 wins):
  *  - 'icd1' = v0 "ICD001-0" (ICD1-5A3C): locked INFO schema with proto/ch,
- *    VHZ, LPULSE, telemetry vhz/lp/ot/lb, rx buffered until `\n`/`;` (100 ms
+ *    VHZ, LPULSE, telemetry vhz/lp/ot/lb, INFO ch.ot/ch.lb thresholds (low
+ *    battery clears after vbat > clear for holdS s), START key toggles E-stop, rx buffered until `\n`/`;` (100 ms
  *    idle flush, 256-byte overflow -> ERR OVERFLOW), actuator commands rejected
  *    with ERR ESTOP / ERR OVERTEMP / ERR LOWBAT (first only) and not stored.
  *  - 'h11'  = H11 v1.0 h11-demo-ble as on H11-91B1: INFO without proto,
@@ -58,6 +59,10 @@ export class MockIcd001Device {
   vbatOverride: number | null = null;
   readonly startedAt: number;
   commandLog: string[] = [];
+  /** Safety thresholds (v0 reports them in INFO ch.ot / ch.lb, §8.4). */
+  safety = { ot: { trip: 42, clear: 39 }, lb: { trip: 3.4, clear: 3.7, holdS: 60 } };
+  /** Seconds vbat has stayed above lb.clear while latched (§8.2). */
+  private lbAboveS = 0;
 
   constructor(
     readonly variant: MockVariant,
@@ -105,6 +110,8 @@ export class MockIcd001Device {
         lpulse: { min: 50, max: 2000 },
         ppg: ['J13', 'J22', 'J23', 'EGG'],
         egg: { ppg: 3, act: 0 },
+        ot: { ...this.safety.ot },
+        lb: { ...this.safety.lb },
       },
     });
   }
@@ -291,27 +298,34 @@ export class MockIcd001Device {
       this.vbat = Math.max(3.3, this.vbat - dtS * (0.00005 + 0.0002 * drive));
     }
     if (this.isV0) {
-      if (!this.ot && this.ntc >= 42) {
+      const { ot, lb } = this.safety;
+      if (!this.ot && this.ntc >= ot.trip) {
         this.ot = true;
         this.allStop();
         evts.push('EVT OVERTEMP 1');
-      } else if (this.ot && this.ntc < 39) {
+      } else if (this.ot && this.ntc < ot.clear) {
         this.ot = false;
         evts.push('EVT OVERTEMP 0');
       }
-      if (!this.lowbat && this.vbat < 3.4) {
+      if (!this.lowbat && this.vbat < lb.trip) {
         this.lowbat = true;
+        this.lbAboveS = 0;
         this.allStop();
         evts.push('EVT LOWBAT 1');
-      } else if (this.lowbat && this.vbat > 3.6) {
-        this.lowbat = false;
-        evts.push('EVT LOWBAT 0');
+      } else if (this.lowbat) {
+        // §8.2: release only after vbat > clear held for holdS seconds
+        this.lbAboveS = this.vbat > lb.clear ? this.lbAboveS + dtS : 0;
+        if (this.lbAboveS >= lb.holdS) {
+          this.lowbat = false;
+          this.lbAboveS = 0;
+          evts.push('EVT LOWBAT 0');
+        }
       }
     }
     return evts;
   }
 
-  /** Emulates the START key on the device body. */
+  /** Emulates the START key on the device body: toggles E-stop, emits EVT ESTOP n (§8.3). */
   pressStartKey(): string {
     this.estop = !this.estop;
     if (this.estop) {

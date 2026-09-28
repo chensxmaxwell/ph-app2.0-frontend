@@ -10,10 +10,11 @@ import {
   LpulseCaps,
   LraGroup,
   LraTarget,
+  OT_FALLBACK,
+  SafetyThresholds,
   Telemetry,
-  VBAT_FULL,
-  VBAT_LOW_CUT,
   VcmCaps,
+  batteryPercent,
   clamp,
   formatEstop,
   formatFreq,
@@ -27,9 +28,33 @@ import type { Icd001State } from '../../services/icd001/client';
 
 // ------------------------------------------------------------ constants
 
-/** Over-temp thresholds (PROTOCOL §5, provisional; spec Q12: never hard-code in copy). */
-export const OT_TRIP_C = 42;
-export const OT_RELEASE_C = 39;
+/*
+ * Over-temp / low-battery thresholds are NOT constants here (§8.4): they come
+ * from INFO `ch.ot` / `ch.lb` via `info.safety` (protocol.ts falls back to
+ * OT_FALLBACK / LB_FALLBACK only when INFO lacks them, i.e. legacy boards).
+ */
+
+/**
+ * App-side copy for the wing groups (§8.5, electrical mapping locked):
+ * A (J10) = left + right upper wings, B (J11) = left + right lower wings.
+ * Independent of the INFO labels (which are 上翼 / 下翼 and may be localised).
+ */
+export type WingZone = 'upper' | 'lower';
+export const WING_GROUP_COPY: Record<
+  'A' | 'B',
+  { zone: WingZone; name: string; short: string; detail: string }
+> = {
+  A: { zone: 'upper', name: 'Upper wings', short: 'Upper', detail: 'left + right' },
+  B: { zone: 'lower', name: 'Lower wings', short: 'Lower', detail: 'left + right' },
+};
+/** Product-image hotspot zones -> card (+ wing group for the two wing zones). */
+export type HotspotZone = WingZone | 'head' | 'bullet';
+export const HOTSPOT_ZONES: Record<HotspotZone, { card: 'wing' | 'vcm' | 'egg'; group?: 'A' | 'B' }> = {
+  upper: { card: 'wing', group: 'A' },
+  lower: { card: 'wing', group: 'B' },
+  head: { card: 'vcm' },
+  bullet: { card: 'egg' },
+};
 /** App-side cap for the voice-coil beat range (Maxwell 9/28: 10–50 Hz). */
 export const VHZ_UI_MIN = 10;
 export const VHZ_UI_MAX = 50;
@@ -112,7 +137,9 @@ export function bannerFor(
   screen: ScreenState,
   tlm: Telemetry | null,
   estopSource: Icd001State['estopSource'],
+  safety: Pick<SafetyThresholds, 'ot'> | null = null,
 ): BannerModel | null {
+  const otClear = (safety ?? { ot: OT_FALLBACK }).ot.clearC;
   const also = screen.also.map(c => ALSO_TEXT(c, tlm));
   switch (screen.kind) {
     case 'estop':
@@ -131,10 +158,7 @@ export function bannerFor(
         tone: 'amber',
         icon: 'therm',
         title: `Too warm${tlm?.ntcC != null ? ` · ${tlm.ntcC.toFixed(1)}°C` : ''}`,
-        lines: [
-          `Outputs paused to protect your skin. They can start again below ${OT_RELEASE_C}°C.`,
-          ...also,
-        ],
+        lines: [`Outputs paused to protect your skin. They can start again below ${otClear}°C.`, ...also],
       };
     case 'lowbat':
       return {
@@ -159,18 +183,22 @@ export const COOLED_DOWN_MS = 4000;
 // ------------------------------------------------------------ device strip
 
 /**
- * Battery % shown in the app. Open question (spec Q7) answered with an app
- * default: 0% = the firmware cut-off 3.40 V (not 3.50 V), 100% = 4.20 V, so the
- * user never sees "0%" while the device still runs. Pending a discharge curve.
+ * Battery % shown in the app = protocol `batteryPercent` (§8.1: provisional
+ * linear 3.40 V = 0 %, 4.20 V = 100 %; swap the curve in protocol.ts when the
+ * measured piecewise table arrives).
  */
-export const VBAT_DISPLAY_EMPTY = VBAT_LOW_CUT;
-
 export function displayBatteryPct(vbat: number | null): number | null {
-  if (vbat === null) {
-    return null;
-  }
-  return Math.round(clamp(((vbat - VBAT_DISPLAY_EMPTY) / (VBAT_FULL - VBAT_DISPLAY_EMPTY)) * 100, 0, 100));
+  return batteryPercent(vbat);
 }
+
+/** Device-button release (§8.3): shown briefly after EVT ESTOP 0 from the START key. */
+export const RELEASED_ON_DEVICE_BANNER: BannerModel = {
+  tone: 'amber',
+  icon: 'check',
+  title: 'Emergency stop released on the device',
+  lines: ['Outputs stay off. Turn modules back on.'],
+};
+export const RELEASED_NOTICE_MS = 4000;
 
 export function tempText(ntcC: number | null): string {
   return ntcC === null ? '—' : `${ntcC.toFixed(1)}°C`;
@@ -178,12 +206,20 @@ export function tempText(ntcC: number | null): string {
 
 // ------------------------------------------------------------ cards from INFO
 
+export interface WingGroupView extends LraGroup {
+  /** App-side copy + hotspot zone (§8.5), not the INFO label. */
+  zone: WingZone;
+  name: string;
+  short: string;
+  detail: string;
+}
+
 export interface IntensityCard {
   id: 'wing';
   kind: 'intensity';
   label: string;
   part: 'wings';
-  groups: LraGroup[];
+  groups: WingGroupView[];
   freq: { min: number; max: number; def: number };
   lpulse: LpulseCaps | null;
 }
@@ -260,7 +296,7 @@ export function buildCards(info: DeviceInfo | null): ModuleCard[] {
       kind: 'intensity',
       label: 'Wings',
       part: 'wings',
-      groups: w.groups,
+      groups: w.groups.map(g => ({ ...g, ...WING_GROUP_COPY[g.id] })),
       freq: w.freq,
       lpulse: w.lpulse,
     });

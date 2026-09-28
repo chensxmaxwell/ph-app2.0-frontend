@@ -10,8 +10,6 @@ import {
   LraTarget,
   Telemetry,
   SafetyErr,
-  VBAT_LOW_CUT,
-  VBAT_LOW_RELEASE,
   encodeCommand,
   formatEstop,
   formatFreq,
@@ -52,6 +50,11 @@ export interface Icd001State {
   estop: boolean;
   /** Who engaged the E-stop: this app (ESTOP 1) or the device START key / unknown. */
   estopSource: 'app' | 'device' | null;
+  /**
+   * Last E-stop transition, incl. who caused it. `{on:false, source:'device'}` =
+   * released with the START key on the device (§8.3), no ESTOP 0 from the app.
+   */
+  estopChange: { on: boolean; source: 'app' | 'device'; at: number } | null;
   overTemp: boolean;
   lowBattery: boolean;
   /** Actuator controls must be disabled when true (see lockReasons). */
@@ -88,19 +91,50 @@ export class Icd001Client {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private infoWaiters: Array<(i: DeviceInfo) => void> = [];
-  /** Legacy firmware has no `lb`: app-side 3.40/3.60 V hysteresis on vbat. */
+  /**
+   * Legacy firmware (no `lb` / `ot` in TLM) has no latches: the app applies the
+   * INFO thresholds (legacy INFO lacks them -> OT_FALLBACK / LB_FALLBACK), and
+   * sends STOP when a latch trips. Low battery clears only after vbat > clearV
+   * for holdS seconds, like v0 firmware (§8.2).
+   */
   private legacyLowBat = false;
+  private legacyLbAboveSince: number | null = null;
+  private legacyOt = false;
+  private appReleaseAt = -Infinity;
   private readonly opts: Required<Icd001ClientOptions>;
   /** STOP ALL pressed while offline: send STOP right after the next connect. */
   private stopOnConnect = false;
   private appEstopAt = -Infinity;
 
-  /** Source for an E-stop seen in TLM / OK / ERR (EVT ESTOP is always the key). */
+  /** Who caused an E-stop engage seen now: app if it sent ESTOP 1 in the last 3 s. */
   private estopSrc(): 'app' | 'device' {
     if (Date.now() - this.appEstopAt < 3000) {
       return 'app';
     }
     return this.state.estopSource ?? 'device';
+  }
+
+  /**
+   * Single place E-stop state changes (§8.3: EVT ESTOP n + TLM `estop` are the
+   * source of truth; the START key toggles and may release without ESTOP 0).
+   */
+  private applyEstop(on: boolean, patch: Partial<Icd001State> = {}): Partial<Icd001State> {
+    const now = Date.now();
+    patch.estop = on;
+    if (on) {
+      patch.estopSource = this.state.estop ? this.state.estopSource ?? this.estopSrc() : this.estopSrc();
+    } else {
+      patch.estopSource = null;
+    }
+    if (on !== this.state.estop) {
+      const source: 'app' | 'device' = on
+        ? patch.estopSource ?? 'device'
+        : now - this.appReleaseAt < 3000
+        ? 'app'
+        : 'device';
+      patch.estopChange = { on, source, at: now };
+    }
+    return patch;
   }
 
   constructor(readonly transport: Icd001Transport, opts: Icd001ClientOptions = {}) {
@@ -121,6 +155,7 @@ export class Icd001Client {
       tlmAt: null,
       estop: false,
       estopSource: null,
+      estopChange: null,
       overTemp: false,
       lowBattery: false,
       locked: true,
@@ -249,8 +284,18 @@ export class Icd001Client {
       if (!info) {
         throw new Error('设备没有返回 INFO');
       }
-      this.set({ info, tlm: null, tlmAt: null, estop: false, overTemp: false, lowBattery: false });
+      this.set({
+        info,
+        tlm: null,
+        tlmAt: null,
+        estop: false,
+        estopSource: null,
+        overTemp: false,
+        lowBattery: false,
+      });
       this.legacyLowBat = false;
+      this.legacyLbAboveSince = null;
+      this.legacyOt = false;
       await this.write(formatRate(this.opts.tlmHz), true);
       if (this.stopOnConnect) {
         this.stopOnConnect = false;
@@ -383,25 +428,30 @@ export class Icd001Client {
     switch (p.kind) {
       case 'tlm': {
         const t = p.tlm;
+        const now = Date.now();
+        const safety = this.state.info?.safety;
         let lowBattery: boolean;
         if (t.lb !== null) {
           lowBattery = t.lb; // v0: firmware latch is authoritative
         } else {
-          if (t.vbat !== null && t.vbat < VBAT_LOW_CUT) {
-            this.legacyLowBat = true;
-          } else if (t.vbat === null || t.vbat > VBAT_LOW_RELEASE) {
-            this.legacyLowBat = false;
-          }
-          lowBattery = this.legacyLowBat;
+          lowBattery = this.legacyLowBatteryStep(t.vbat, now);
         }
-        this.set({
-          tlm: t,
-          tlmAt: Date.now(),
-          estop: t.estop,
-          estopSource: t.estop ? this.estopSrc() : null,
-          overTemp: t.ot,
-          lowBattery,
-        });
+        let overTemp = t.ot;
+        if (t.format === 'legacy' && safety) {
+          if (!this.legacyOt && t.ntcC !== null && t.ntcC >= safety.ot.tripC) {
+            this.legacyOt = true;
+          } else if (this.legacyOt && (t.ntcC === null || t.ntcC < safety.ot.clearC)) {
+            this.legacyOt = false;
+          }
+          overTemp = this.legacyOt;
+        }
+        const tripped =
+          t.format === 'legacy' &&
+          ((overTemp && !this.state.overTemp) || (lowBattery && !this.state.lowBattery));
+        this.set(this.applyEstop(t.estop, { tlm: t, tlmAt: now, overTemp, lowBattery }));
+        if (tripped) {
+          this.stopForSafety('legacy app-side latch');
+        }
         return;
       }
       case 'info':
@@ -411,8 +461,8 @@ export class Icd001Client {
         return;
       case 'ok':
         if (p.args[0]?.toUpperCase() === 'ESTOP') {
-          const on = p.args[1] === '1';
-          this.set({ estop: on, estopSource: on ? this.estopSrc() : null });
+          // direct reply to our ESTOP n: the firmware state now
+          this.set(this.applyEstop(p.args[1] === '1'));
         }
         this.set({ lastReply: line });
         this.pushLog(`< ${line}`);
@@ -425,10 +475,9 @@ export class Icd001Client {
         const patch: Partial<Icd001State> = { lastErr: { text: line, at: now }, lastReply: line };
         if (se) {
           patch.lastSafetyErr = { reason: se, at: now };
-          if (se === 'ESTOP') {
-            patch.estop = true;
-            patch.estopSource = this.estopSrc();
-          } else if (se === 'OVERTEMP') {
+          // ERR ESTOP: state comes from EVT ESTOP / TLM (§8.3); the GET below
+          // refreshes it. Expected for 0-value commands during E-stop (§8.6).
+          if (se === 'OVERTEMP') {
             patch.overTemp = true;
           } else {
             patch.lowBattery = true;
@@ -444,8 +493,8 @@ export class Icd001Client {
       case 'evt':
         this.pushLog(`< ${line}`);
         if (p.name === 'ESTOP') {
-          const on = p.args[0] === '1';
-          this.set({ estop: on, estopSource: on ? 'device' : null });
+          // START key toggles (or firmware echo of our ESTOP n): authoritative
+          this.set(this.applyEstop(p.args[0] === '1'));
         } else if (p.name === 'OVERTEMP') {
           this.set({ overTemp: p.args[0] !== '0' });
         } else if (p.name === 'LOWBAT') {
@@ -561,6 +610,8 @@ export class Icd001Client {
     }
     if (on) {
       this.appEstopAt = Date.now();
+    } else {
+      this.appReleaseAt = Date.now();
     }
     await this.scheduler.sendNow(formatEstop(on));
   }
@@ -572,6 +623,34 @@ export class Icd001Client {
   requestStopOnConnect(): void {
     this.stopOnConnect = true;
     this.pushLog('# STOP queued for next connect');
+  }
+
+  /** Legacy-only low-battery latch: trip < tripV; clear > clearV held holdS (§8.2). */
+  private legacyLowBatteryStep(vbat: number | null, now: number): boolean {
+    const lb = this.state.info?.safety.lb;
+    if (!lb || vbat === null) {
+      // not measured (e.g. dev board on USB without battery): no latch
+      this.legacyLbAboveSince = null;
+      this.legacyLowBat = false;
+      return false;
+    }
+    if (!this.legacyLowBat) {
+      if (vbat < lb.tripV) {
+        this.legacyLowBat = true;
+        this.legacyLbAboveSince = null;
+      }
+    } else if (vbat > lb.clearV) {
+      if (this.legacyLbAboveSince === null) {
+        this.legacyLbAboveSince = now;
+      }
+      if (now - this.legacyLbAboveSince >= lb.holdS * 1000) {
+        this.legacyLowBat = false;
+        this.legacyLbAboveSince = null;
+      }
+    } else {
+      this.legacyLbAboveSince = null;
+    }
+    return this.legacyLowBat;
   }
 
   /** Call when leaving the control page or when the app goes to background. */

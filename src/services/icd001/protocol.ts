@@ -43,12 +43,35 @@ export const VCM_LEGACY_HZ = { min: 2, max: 20 } as const;
 /** Default beat frequency when the device does not say (protocol: VHZ default 10). */
 export const VCM_DEFAULT_HZ = 10;
 
-/** Battery (PROTOCOL-ICD001 §4, rough linear estimate). */
-export const VBAT_FULL = 4.2;
-export const VBAT_EMPTY = 3.5;
-/** Firmware low-battery cut: EVT LOWBAT 1 below 3.40 V, EVT LOWBAT 0 above 3.60 V (§7.7). */
-export const VBAT_LOW_CUT = 3.4;
-export const VBAT_LOW_RELEASE = 3.6;
+/**
+ * Battery % curve (PROTOCOL §8.1, provisional): linear 3.40 V = 0 %, 4.20 V = 100 %.
+ * The 0 % point equals the firmware low-battery cut. A measured piecewise
+ * table will replace this: call setBatteryCurve() / edit the default (sorted [volts, percent] points,
+ * interpolated linearly between points, clamped outside).
+ */
+export type BatteryCurve = ReadonlyArray<readonly [volts: number, pct: number]>;
+export const BATTERY_CURVE_LINEAR_V8: BatteryCurve = [
+  [3.4, 0],
+  [4.2, 100],
+];
+let batteryCurve: BatteryCurve = BATTERY_CURVE_LINEAR_V8;
+export function getBatteryCurve(): BatteryCurve {
+  return batteryCurve;
+}
+/** Install a measured discharge table (sorted by volts here). */
+export function setBatteryCurve(curve: BatteryCurve): void {
+  if (curve.length < 2) {
+    throw new Error('battery curve needs ≥ 2 points');
+  }
+  batteryCurve = [...curve].sort((a, b) => a[0] - b[0]);
+}
+
+/**
+ * Safety thresholds come from INFO `ch.ot` / `ch.lb` (§8.4). These values are
+ * ONLY a fallback for firmware whose INFO lacks them (H11 v1.0 legacy).
+ */
+export const OT_FALLBACK = { tripC: 42, clearC: 39 } as const;
+export const LB_FALLBACK = { tripV: 3.4, clearV: 3.7, holdS: 60 } as const;
 /** Below this we assume vbat is not wired / not measured (e.g. dev board on USB). */
 export const VBAT_VALID_MIN = 1.0;
 
@@ -203,6 +226,15 @@ export interface EggCaps {
   hasActuator: boolean;
 }
 
+export interface SafetyThresholds {
+  /** Over-temp: trip at ntc ≥ tripC, clear below clearC. */
+  ot: { tripC: number; clearC: number };
+  /** Low battery: trip below tripV; clear above clearV held for holdS seconds. */
+  lb: { tripV: number; clearV: number; holdS: number };
+  /** true when both came from INFO `ch.ot` / `ch.lb`; false = fallback values. */
+  fromInfo: { ot: boolean; lb: boolean };
+}
+
 export interface DeviceModules {
   wings: {
     groups: LraGroup[];
@@ -224,11 +256,14 @@ export interface DeviceInfo {
   fw: string | null;
   ver: string | null;
   modules: DeviceModules;
+  /** Safety thresholds from INFO `ch.ot` / `ch.lb` (§8.4), fallback when absent. */
+  safety: SafetyThresholds;
   selfTest: Record<string, unknown>;
   raw: Json;
 }
 
-const DEFAULT_LRA_LABELS: Record<LraGroupId, string> = { A: 'A 组', B: 'B 组' };
+/** §8.5: A (J10) = left + right upper wings, B (J11) = left + right lower wings. */
+const DEFAULT_LRA_LABELS: Record<LraGroupId, string> = { A: '上翼', B: '下翼' };
 export const LPULSE_FALLBACK: LpulseCaps = { minMs: 50, maxMs: 2000 };
 
 /** ch.lra is locked as {"A":"上翼","B":"下翼"}; a group missing from the object is absent. */
@@ -274,6 +309,25 @@ function parsePpg(names: unknown, selfTestPpg: unknown): PpgChannel[] {
   return present.map((_, i) => mk(i, null));
 }
 
+function parseSafety(ch: Json | null): SafetyThresholds {
+  const ot = ch && isObj(ch.ot) ? ch.ot : null;
+  const lb = ch && isObj(ch.lb) ? ch.lb : null;
+  const trip = ot ? num(ot.trip) : null;
+  const clear = ot ? num(ot.clear) : null;
+  const otOk = trip !== null && clear !== null && clear <= trip;
+  const lbTrip = lb ? num(lb.trip) : null;
+  const lbClear = lb ? num(lb.clear) : null;
+  const lbHold = lb ? num(lb.holdS) : null;
+  const lbOk = lbTrip !== null && lbClear !== null && lbClear >= lbTrip;
+  return {
+    ot: otOk ? { tripC: trip, clearC: clear } : { ...OT_FALLBACK },
+    lb: lbOk
+      ? { tripV: lbTrip, clearV: lbClear, holdS: lbHold !== null && lbHold >= 0 ? lbHold : LB_FALLBACK.holdS }
+      : { ...LB_FALLBACK },
+    fromInfo: { ot: otOk, lb: lbOk },
+  };
+}
+
 const LEGACY_VCM: VcmCaps = {
   minHz: VCM_LEGACY_HZ.min,
   maxHz: VCM_LEGACY_HZ.max,
@@ -285,7 +339,8 @@ const LEGACY_VCM: VcmCaps = {
  * Parse the INFO characteristic / `INFO` reply (schema locked in §7.2):
  * {"proto":"ICD001-0","prod":"ICD-001","hw":"H1.1","fw":"…",<self-test>,
  *  "ch":{"lra":{"A":"上翼","B":"下翼"},"freq":{min,max,def},"vhz":{min,max,def},
- *        "lpulse":{min,max},"ppg":["J13","J22","J23","EGG"],"egg":{"ppg":3,"act":0}}}
+ *        "lpulse":{min,max},"ppg":["J13","J22","J23","EGG"],"egg":{"ppg":3,"act":0},
+ *        "ot":{"trip":42,"clear":39},"lb":{"trip":3.40,"clear":3.70,"holdS":60}}}   (ot/lb: §8.4)
  * No `proto` => H11 v1.0 legacy (h11-demo-ble): fixed J10/J11 LRA, VCM 2–20 Hz,
  * no LPULSE, PPG count from the self-test array.
  */
@@ -369,6 +424,7 @@ export function parseInfo(input: string | Json): DeviceInfo | null {
     fw: str(raw.fw),
     ver: str(raw.ver),
     modules,
+    safety: parseSafety(ch),
     selfTest,
     raw,
   };
@@ -412,11 +468,27 @@ export interface Telemetry {
   lb: boolean | null;
 }
 
-export function batteryPercent(vbat: number | null): number | null {
+/** Battery % from vbat via the installed curve (piecewise linear, clamped). */
+export function batteryPercent(vbat: number | null, curve: BatteryCurve = batteryCurve): number | null {
   if (vbat === null || vbat < VBAT_VALID_MIN) {
     return null;
   }
-  return Math.round(clamp(((vbat - VBAT_EMPTY) / (VBAT_FULL - VBAT_EMPTY)) * 100, 0, 100));
+  const first = curve[0];
+  const last = curve[curve.length - 1];
+  if (vbat <= first[0]) {
+    return Math.round(clamp(first[1], 0, 100));
+  }
+  if (vbat >= last[0]) {
+    return Math.round(clamp(last[1], 0, 100));
+  }
+  for (let i = 1; i < curve.length; i++) {
+    const [v1, p1] = curve[i];
+    if (vbat <= v1) {
+      const [v0, p0] = curve[i - 1];
+      return Math.round(clamp(p0 + ((vbat - v0) / (v1 - v0)) * (p1 - p0), 0, 100));
+    }
+  }
+  return Math.round(clamp(last[1], 0, 100));
 }
 
 export function halfMsToHz(halfMs: number): number {

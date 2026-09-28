@@ -14,6 +14,10 @@ import {
   BannerModel,
   COOLED_DOWN_BANNER,
   COOLED_DOWN_MS,
+  HOTSPOT_ZONES,
+  HotspotZone,
+  RELEASED_NOTICE_MS,
+  RELEASED_ON_DEVICE_BANNER,
   ControlAction,
   ControlClient,
   FREQ_STEP_HZ,
@@ -40,13 +44,12 @@ import {
 } from './model';
 
 import type { Icd001State } from '../../services/icd001/client';
-import type { DeviceInfo, LraGroupId } from '../../services/icd001/protocol';
+import type { DeviceInfo, LraGroupId, SafetyThresholds } from '../../services/icd001/protocol';
 import type { DiscoveredDevice } from '../../services/icd001/transport';
 
 export type CardId = ModuleCard['id'];
-/** Stage parts (tap targets on the product image). */
-export type StagePart = 'A' | 'B' | 'head' | 'egg';
-export const PART_TO_CARD: Record<StagePart, CardId> = { A: 'wing', B: 'wing', head: 'vcm', egg: 'egg' };
+/** Product-image hotspot zones (§8.5: upper = group A, lower = group B). */
+export type StagePart = HotspotZone;
 
 /** Optimistic value wins over telemetry for this long after the last user input. */
 export const OPTIMISTIC_MS = 800;
@@ -126,10 +129,20 @@ export interface AdvancedControlView {
   /** Disconnected: ghosted cards from the last INFO seen this session. */
   lastSeen: CardView[];
   scan: { scanning: boolean; connecting: boolean; devices: DiscoveredDevice[] };
-  estop: { on: boolean; source: Icd001State['estopSource']; holdProgress: number };
+  estop: {
+    on: boolean;
+    source: Icd001State['estopSource'];
+    holdProgress: number;
+    /** Last transition incl. device-button release (§8.3). */
+    lastChange: Icd001State['estopChange'];
+  };
   expanded: CardId | null;
-  /** Running parts (stage highlight / live dots). */
-  running: { A: boolean; B: boolean; head: boolean };
+  /** Wing group picked via the upper / lower hotspot (null = none). */
+  focusedGroup: LraGroupId | null;
+  /** Running zones (stage highlight / live dots): upper = A, lower = B (§8.5). */
+  running: { upper: boolean; lower: boolean; head: boolean };
+  /** Thresholds in use (INFO ch.ot / ch.lb, or fallback on legacy boards). */
+  thresholds: SafetyThresholds | null;
   toast: string | null;
   /** STOP ALL pressed while offline; STOP goes out right after connecting. */
   stopQueued: boolean;
@@ -148,6 +161,9 @@ export class AdvancedControlController {
   private lastName: string | null = null;
 
   private expanded: CardId | null = null;
+  private focusedGroup: LraGroupId | null = null;
+  private seenEstopChangeAt: number | null = null;
+  private releasedUntil = 0;
   private wing = {
     link: false,
     mode: 'steady' as 'steady' | 'rhythm',
@@ -176,6 +192,7 @@ export class AdvancedControlController {
   constructor(readonly client: ClientLike, private readonly now: () => number = Date.now) {
     this.s = client.getState();
     this.seenErrAt = this.s.lastErr?.at ?? null;
+    this.seenEstopChangeAt = this.s.estopChange?.at ?? null;
     this.absorb(this.s);
     this.recompute();
   }
@@ -212,11 +229,14 @@ export class AdvancedControlController {
 
   toggleCard(id: CardId): void {
     this.expanded = this.expanded === id ? null : id;
+    this.focusedGroup = null;
     this.emit();
   }
 
   selectPart(part: StagePart): void {
-    this.expanded = PART_TO_CARD[part];
+    const z = HOTSPOT_ZONES[part];
+    this.expanded = z.card;
+    this.focusedGroup = z.group ?? null;
     this.emit();
   }
 
@@ -414,6 +434,17 @@ export class AdvancedControlController {
       this.schedule(COOLED_DOWN_MS);
     }
     this.prevOverTemp = s.overTemp;
+    // E-stop released with the START key on the device (§8.3)
+    const ch = s.estopChange;
+    if (ch && ch.at !== this.seenEstopChangeAt) {
+      this.seenEstopChangeAt = ch.at;
+      if (!ch.on && ch.source === 'device') {
+        this.releasedUntil = t + RELEASED_NOTICE_MS;
+        this.schedule(RELEASED_NOTICE_MS);
+      } else if (ch.on) {
+        this.releasedUntil = 0;
+      }
+    }
     // non-safety ERR after an input -> revert to device values + toast
     if (s.lastErr && s.lastErr.at !== this.seenErrAt) {
       this.seenErrAt = s.lastErr.at;
@@ -555,7 +586,10 @@ export class AdvancedControlController {
     const t = this.now();
     const screen = deriveScreenState(s);
     const live = screen.kind !== 'disconnected';
-    let banner = bannerFor(screen, s.tlm, s.estopSource);
+    let banner = bannerFor(screen, s.tlm, s.estopSource, s.info?.safety ?? null);
+    if (!banner && live && t < this.releasedUntil) {
+      banner = RELEASED_ON_DEVICE_BANNER;
+    }
     if (!banner && live && t < this.cooledUntil) {
       banner = COOLED_DOWN_BANNER;
     }
@@ -579,14 +613,17 @@ export class AdvancedControlController {
       estop: {
         on: live && s.estop,
         source: s.estopSource,
+        lastChange: s.estopChange,
         holdProgress: this.holdStart === null ? 0 : Math.min(1, (t - this.holdStart) / RELEASE_HOLD_MS),
       },
       expanded: live ? this.expanded : null,
+      focusedGroup: live && this.expanded === 'wing' ? this.focusedGroup : null,
       running: {
-        A: !!tlm && tlm.lra[0] > 0,
-        B: !!tlm && tlm.lra[1] > 0,
+        upper: !!tlm && tlm.lra[0] > 0,
+        lower: !!tlm && tlm.lra[1] > 0,
         head: !!tlm && tlm.vcm.on,
       },
+      thresholds: (live ? s.info : this.lastInfo)?.safety ?? null,
       toast: this.toast && t < this.toast.until ? this.toast.text : null,
       stopQueued: this.stopQueued,
     };

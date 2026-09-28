@@ -8,7 +8,12 @@ import {
   safetyErrOf,
   LineAssembler,
   VCM_LEGACY_HZ,
+  BATTERY_CURVE_LINEAR_V8,
+  LB_FALLBACK,
+  OT_FALLBACK,
   batteryPercent,
+  getBatteryCurve,
+  setBatteryCurve,
   clampVcmHz,
   classifyDeviceName,
   formatEstop,
@@ -41,7 +46,7 @@ const V0_INFO =
   '{"proto":"ICD001-0","prod":"ICD-001","hw":"H1.1","fw":"icd001-0.1","mux":1,"adsA":1,"adsB":1,"imu":1,' +
   '"ppg":[1,1,1,1],"ch":{"lra":{"A":"上翼","B":"下翼"},"freq":{"min":100,"max":300,"def":170},' +
   '"vhz":{"min":2,"max":50,"def":10},"lpulse":{"min":50,"max":2000},"ppg":["J13","J22","J23","EGG"],' +
-  '"egg":{"ppg":3,"act":0}}}';
+  '"egg":{"ppg":3,"act":0},"ot":{"trip":42,"clear":39},"lb":{"trip":3.40,"clear":3.70,"holdS":60}}}';
 
 describe('device name filter', () => {
   it('accepts ICD1- and H11- prefixes only', () => {
@@ -93,6 +98,45 @@ describe('LineAssembler', () => {
     a.push(new Array(40).fill(0x41));
     expect(a.pendingBytes).toBeLessThanOrEqual(16);
     expect(a.push(encodeUtf8('\nOK\n'))).toEqual(['OK']);
+  });
+});
+
+describe('INFO safety thresholds (§8.4)', () => {
+  it('v0 reads ch.ot / ch.lb', () => {
+    const i = parseInfo(V0_INFO)!;
+    expect(i.safety).toEqual({
+      ot: { tripC: 42, clearC: 39 },
+      lb: { tripV: 3.4, clearV: 3.7, holdS: 60 },
+      fromInfo: { ot: true, lb: true },
+    });
+  });
+  it('non-default INFO values are used as-is', () => {
+    const raw = JSON.parse(V0_INFO);
+    raw.ch.ot = { trip: 40, clear: 36.5 };
+    raw.ch.lb = { trip: 3.3, clear: 3.8, holdS: 30 };
+    expect(parseInfo(raw)!.safety).toMatchObject({
+      ot: { tripC: 40, clearC: 36.5 },
+      lb: { tripV: 3.3, clearV: 3.8, holdS: 30 },
+    });
+  });
+  it('legacy / missing / invalid -> fallback 42/39 and 3.40/3.70/60 s', () => {
+    expect(parseInfo(LEGACY_INFO)!.safety).toEqual({
+      ot: OT_FALLBACK,
+      lb: LB_FALLBACK,
+      fromInfo: { ot: false, lb: false },
+    });
+    const raw = JSON.parse(V0_INFO);
+    delete raw.ch.ot;
+    raw.ch.lb = { trip: 3.8, clear: 3.4 }; // clear < trip: invalid
+    const s = parseInfo(raw)!.safety;
+    expect(s.fromInfo).toEqual({ ot: false, lb: false });
+    expect(s.ot).toEqual({ tripC: 42, clearC: 39 });
+    expect(s.lb).toEqual({ tripV: 3.4, clearV: 3.7, holdS: 60 });
+    raw.ch.lb = { trip: 3.4, clear: 3.7 }; // holdS missing -> 60
+    expect(parseInfo(raw)!.safety.lb.holdS).toBe(60);
+  });
+  it('legacy INFO group labels default to 上翼 / 下翼 (§8.5)', () => {
+    expect(parseInfo(LEGACY_INFO)!.modules.wings!.groups.map(g => g.label)).toEqual(['上翼', '下翼']);
   });
 });
 
@@ -183,7 +227,7 @@ describe('TLM parsing (format by field presence)', () => {
     ]);
     expect(t.lraFreqHz).toBe(170);
     expect(t.vbat).toBe(3.95);
-    expect(t.batteryPct).toBe(64);
+    expect(t.batteryPct).toBe(69); // §8.1: 3.40 V = 0 %, 4.20 V = 100 %
     expect(t.ot).toBe(false);
     expect(t.lb).toBeNull();
     expect(t.estop).toBe(false);
@@ -224,12 +268,42 @@ describe('TLM parsing (format by field presence)', () => {
     ]);
   });
 
-  it('battery linear 3.5–4.2 V clamped', () => {
+  it('battery §8.1: linear 3.40 V = 0 %, 4.20 V = 100 %, clamped', () => {
     expect(batteryPercent(4.3)).toBe(100);
-    expect(batteryPercent(3.5)).toBe(0);
+    expect(batteryPercent(4.2)).toBe(100);
+    expect(batteryPercent(3.4)).toBe(0);
     expect(batteryPercent(3.2)).toBe(0);
-    expect(batteryPercent(3.85)).toBe(50);
+    expect(batteryPercent(3.8)).toBe(50);
+    expect(batteryPercent(3.95)).toBe(69);
+    expect(batteryPercent(0.5)).toBeNull();
     expect(batteryPercent(null)).toBeNull();
+  });
+
+  it('battery curve is swappable for a piecewise table', () => {
+    const table = [
+      [4.2, 100],
+      [3.4, 0],
+      [3.7, 20],
+      [4.0, 80],
+    ] as const;
+    expect(
+      batteryPercent(
+        3.55,
+        table.slice().sort((a, b) => a[0] - b[0]),
+      ),
+    ).toBe(10);
+    setBatteryCurve(table);
+    try {
+      expect(getBatteryCurve().map(p => p[0])).toEqual([3.4, 3.7, 4.0, 4.2]);
+      expect(batteryPercent(3.7)).toBe(20);
+      expect(batteryPercent(3.85)).toBe(50);
+      expect(batteryPercent(4.1)).toBe(90);
+      expect(parseTelemetry({ vbat: 3.85 }).batteryPct).toBe(50);
+    } finally {
+      setBatteryCurve(BATTERY_CURVE_LINEAR_V8);
+    }
+    expect(batteryPercent(3.85)).toBe(56);
+    expect(() => setBatteryCurve([[3.4, 0]])).toThrow();
   });
 });
 

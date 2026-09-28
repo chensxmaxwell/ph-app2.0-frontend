@@ -68,7 +68,7 @@ export const AdvancedControlScreen = () => {
           {c.card.groups.map(g => (
             <Row key={g.id}>
               <T>
-                {g.id} · {g.label}: {c.values[g.id]}
+                {g.id} · {g.name} ({g.detail}): {c.values[g.id]}
               </T>
               <Btn
                 label="-10"
