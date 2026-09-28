@@ -5,6 +5,7 @@ import {
   IntensityView,
   RhythmView,
   SensorView,
+  STAGE_TINT,
 } from '../../src/screens/advanced-control/controller';
 import { Icd001Client } from '../../src/services/icd001/client';
 import { MockIcd001Device, MockIcd001Transport } from '../../src/services/icd001/mock';
@@ -238,15 +239,13 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     expect(t.wing().row).toEqual({ kind: 'ab', A: 60, B: 40 });
     expect(t.pulse().row).toEqual({ kind: 'hz', hz: 10 });
     expect(t.egg()?.row.kind).toBe('bpm');
-    expect(t.v().stage).toEqual({
-      dim: false,
-      compact: false,
-      tint: { upper: 0.36, lower: 0.24, head: 0, egg: 0 },
-    });
+    expect(t.v().stage).toMatchObject({ dim: false, compact: false, tint: { head: 0, egg: 0 } });
+    expect(t.v().stage.tint.upper).toBeCloseTo(0.6 * STAGE_TINT.upper);
+    expect(t.v().stage.tint.lower).toBeCloseTo(0.4 * STAGE_TINT.lower);
     t.ctl.selectPart('head');
-    expect(t.v().stage).toMatchObject({ compact: true, tint: { head: 0.6, egg: 0 } });
+    expect(t.v().stage).toMatchObject({ compact: true, tint: { head: STAGE_TINT.head, egg: 0 } });
     t.ctl.selectPart('bullet');
-    expect(t.v().stage.tint).toMatchObject({ head: 0, egg: 0.45 });
+    expect(t.v().stage.tint).toMatchObject({ head: 0, egg: STAGE_TINT.egg });
     t.ctl.collapse();
     t.ctl.stopAll();
     await tick(300);

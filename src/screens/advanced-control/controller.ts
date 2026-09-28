@@ -157,7 +157,7 @@ export interface AdvancedControlView {
   /**
    * Product stage: dim = disconnected / E-stop (grey product); compact = a row is
    * expanded or outputs are paused; tint = per-part accent overlay opacity 0..1
-   * (upper = A, lower = B at intensity/100 × 0.6; head / egg while their row is open).
+   * (upper = A, lower = B at intensity/100 × STAGE_TINT; head / egg while their row is open).
    */
   stage: {
     dim: boolean;
@@ -172,6 +172,13 @@ export interface AdvancedControlView {
 type Listener = () => void;
 
 const CARD_NAME: Record<CardId, string> = { wing: 'Wings', vcm: 'Pulse', egg: 'Bullet' };
+
+/**
+ * Tinted-PNG overlay opacities, tuned against design v2 (CSS blend) by mean
+ * colour per part (call-qa/adv-control-v2/boards/tint-closeup.png).
+ * upper / lower are scaled by the group level (0..100).
+ */
+export const STAGE_TINT = { upper: 0.6, lower: 0.43, head: 0.68, egg: 0.34 } as const;
 
 export class AdvancedControlController {
   private listeners = new Set<Listener>();
@@ -665,10 +672,10 @@ export class AdvancedControlController {
       const t = this.now();
       const va = t - this.inputAt.A <= OPTIMISTIC_MS ? this.wing.values.A : a;
       const vb = t - this.inputAt.B <= OPTIMISTIC_MS ? this.wing.values.B : b;
-      tint.upper = (Math.max(0, Math.min(100, va)) / 100) * 0.6;
-      tint.lower = (Math.max(0, Math.min(100, vb)) / 100) * 0.6;
-      tint.head = this.expanded === 'vcm' ? 0.6 : 0;
-      tint.egg = this.expanded === 'egg' ? 0.45 : 0;
+      tint.upper = (Math.max(0, Math.min(100, va)) / 100) * STAGE_TINT.upper;
+      tint.lower = (Math.max(0, Math.min(100, vb)) / 100) * STAGE_TINT.lower;
+      tint.head = this.expanded === 'vcm' ? STAGE_TINT.head : 0;
+      tint.egg = this.expanded === 'egg' ? STAGE_TINT.egg : 0;
     }
     return {
       dim: screen.kind === 'disconnected' || screen.kind === 'estop',

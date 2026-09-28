@@ -167,17 +167,18 @@ export const AdvancedControlScreen = () => {
         ) : null}
         <View style={styles.mods}>{rows.map(renderRow)}</View>
       </ScrollView>
-      {showLeave ? (
-        <View style={[styles.leaveWrap, { bottom: stopBottom + 74 }]} pointerEvents="none">
-          <Text style={styles.leave}>Leaving this page stops all outputs.</Text>
-        </View>
-      ) : null}
       <StopDock
         engaged={view.estop.on}
         bottom={stopBottom}
         onStop={() => ctl.stopAll()}
         onRelease={() => ctl.release()}
       />
+      {/* Above the dock scrim, like the design (.leave z-index 4). */}
+      {showLeave ? (
+        <View style={[styles.leaveWrap, { bottom: stopBottom + 74 }]} pointerEvents="none">
+          <Text style={styles.leave}>Leaving this page stops all outputs.</Text>
+        </View>
+      ) : null}
       {wing ? (
         <FineTuneSheet
           visible={fineTune && wing.enabled}
