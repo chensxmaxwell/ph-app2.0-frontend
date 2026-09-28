@@ -23,7 +23,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GLOW_PT, IMG } from './assets';
 import { DeviceLine } from './components/DeviceLine';
-import { FineTuneSheet } from './components/FineTuneSheet';
 import { ModuleRow } from './components/ModuleRow';
 import { Notice } from './components/Notice';
 import { OverlayHost, stopZoneHeight } from './components/OverlayHost';
@@ -35,7 +34,7 @@ import { reduceMotion } from './motion';
 import { nocturne as N, qs, text } from './theme';
 import { useAdvancedControl } from './useAdvancedControl';
 
-import type { CardId, CardView, IntensityView, StagePart } from './controller';
+import type { CardId, CardView, StagePart } from './controller';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -45,14 +44,18 @@ const EXPAND = LayoutAnimation.create(200, LayoutAnimation.Types.easeOut, Layout
 
 export type AdvancedControlParams = { expanded?: CardId } | undefined;
 
-export const AdvancedControlScreen = () => {
+export const AdvancedControlScreen = ({ initialOverlay }: { initialOverlay?: React.ReactNode } = {}) => {
   const { view, ctl } = useAdvancedControl();
   const navigation = useNavigation();
   const route = useRoute();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  /** Open sheet, if any. All sheets go through <OverlayHost> (Stop-all safety rule). */
-  const [sheet, setSheet] = useState<'fineTune' | null>(null);
+  /**
+   * Open sheet/overlay content, if any. Every overlay on this page goes through
+   * <OverlayHost> (Stop-all safety rule). No overlay is used right now (Fine tune
+   * was removed); `initialOverlay` exists for previews and the safety tests.
+   */
+  const [sheet, setSheet] = useState<React.ReactNode | null>(initialOverlay ?? null);
   const closeSheet = useCallback(() => setSheet(null), []);
 
   // Deep link / QA harness: open a row on arrival.
@@ -64,13 +67,6 @@ export const AdvancedControlScreen = () => {
       ctl.toggleCard(initial);
     }
   }, [ctl, initial, view.cards]);
-
-  const wingEnabled = view.cards.some(c => c.kind === 'intensity' && c.enabled);
-  useEffect(() => {
-    if (sheet === 'fineTune' && !wingEnabled) {
-      setSheet(null); // paused / e-stop / disconnected: the sheet's controls no longer apply
-    }
-  }, [sheet, wingEnabled]);
 
   const toggle = useCallback(
     (id: CardId) => {
@@ -94,7 +90,6 @@ export const AdvancedControlScreen = () => {
   const { screen, banner, device, stage } = view;
   const live = screen.kind !== 'disconnected';
   const rows: CardView[] = live ? view.cards : view.lastSeen;
-  const wing = view.cards.find((c): c is IntensityView => c.kind === 'intensity');
   const stopBottom = Math.max(insets.bottom + 4, 16);
   const showLeave = live && screen.kind === 'normal' && view.expanded === null;
 
@@ -114,7 +109,7 @@ export const AdvancedControlScreen = () => {
       case 'intensity':
         return (
           <ModuleRow {...common}>
-            <WingsBody v={c} ctl={ctl} onFineTune={() => setSheet('fineTune')} />
+            <WingsBody v={c} ctl={ctl} />
           </ModuleRow>
         );
       case 'rhythm':
@@ -185,15 +180,7 @@ export const AdvancedControlScreen = () => {
       ) : null}
       {/* Sheets: laid out above the reserved Stop-all zone. See the SAFETY RULE in OverlayHost. */}
       <OverlayHost visible={sheet !== null} onClose={closeSheet} reserveBottom={stopZoneHeight(stopBottom)}>
-        {sheet === 'fineTune' && wing ? (
-          <FineTuneSheet
-            freq={wing.freq}
-            range={wing.card.freq}
-            def={wing.card.freq.def}
-            onChange={hz => ctl.setWingFreq(hz)}
-            onClose={closeSheet}
-          />
-        ) : null}
+        {sheet}
       </OverlayHost>
       {/* Stop all: rendered LAST so it is the topmost layer, above any scrim or sheet. */}
       <StopDock

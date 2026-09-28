@@ -1,8 +1,7 @@
 /** Expanded row bodies (design v2 §6.4-6.8). App copy only, never INFO labels (Q10). */
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
-import { Icon } from '../icons';
 import { RHYTHM_PRESETS, RhythmPresetId } from '../model';
 import { nocturne as N, num, qs, text } from '../theme';
 
@@ -18,15 +17,7 @@ const PATTERN = [
 /** Q6: presets only, no raw ms (Slow 800/800, Medium 400/400, Fast 150/150). */
 const BEAT = RHYTHM_PRESETS.map(r => ({ id: r.id, label: r.label }));
 
-export const WingsBody = ({
-  v,
-  ctl,
-  onFineTune,
-}: {
-  v: IntensityView;
-  ctl: AdvancedControlController;
-  onFineTune: () => void;
-}) => (
+export const WingsBody = ({ v, ctl }: { v: IntensityView; ctl: AdvancedControlController }) => (
   <View>
     {v.card.groups.map((g, i) => (
       <Slider
@@ -69,19 +60,6 @@ export const WingsBody = ({
         ) : null}
       </>
     ) : null}
-    <Pressable
-      onPress={onFineTune}
-      disabled={!v.enabled}
-      accessibilityRole="button"
-      accessibilityLabel={`Fine tune, vibration frequency ${v.freq} hertz`}
-      style={({ pressed }) => [styles.ft, pressed && styles.pressed]}
-    >
-      <Text style={styles.ftText}>Fine tune</Text>
-      <View style={styles.ftRight}>
-        <Text style={num(16)}>{`${v.freq} Hz`}</Text>
-        <Icon name="caret-right" size={16} color={N.ink2} />
-      </View>
-    </Pressable>
   </View>
 );
 
@@ -138,19 +116,6 @@ const styles = StyleSheet.create({
   line: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 18 },
   lineFirst: { marginTop: 2 },
   k: text(qs.semiBold, 15, N.ink, 18),
-  ft: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 16,
-    minHeight: 44,
-    paddingTop: 2,
-    borderTopWidth: 1,
-    borderTopColor: N.line,
-  },
-  ftText: text(qs.semiBold, 15, N.ink2),
-  ftRight: { flexDirection: 'row', alignItems: 'center' },
-  pressed: { opacity: 0.7 },
   note: { ...text(qs.medium, 13, N.ink3), marginTop: 8 },
   reads: { flexDirection: 'row', marginTop: 4 },
   rd: { flex: 1 },

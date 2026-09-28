@@ -20,7 +20,6 @@ import {
   RELEASED_ON_DEVICE_BANNER,
   ControlAction,
   ControlClient,
-  FREQ_STEP_HZ,
   IntensityCard,
   ModuleCard,
   RhythmCard,
@@ -39,6 +38,7 @@ import {
   runCalls,
   sensorReading,
   sensorSummary,
+  wingFreqCorrection,
   tempText,
   wingSummary,
 } from './model';
@@ -88,7 +88,6 @@ export interface IntensityView {
   mode: 'steady' | 'rhythm';
   rhythm: RhythmPresetId;
   rhythmAvailable: boolean;
-  freq: number;
   summary: string;
 }
 
@@ -199,14 +198,14 @@ export class AdvancedControlController {
     rhythm: 'medium' as RhythmPresetId,
     values: { A: 0, B: 0 } as Record<LraGroupId, number>,
     restore: { A: 50, B: 50 } as Record<LraGroupId, number>,
-    freq: null as number | null,
   };
+  /** FREQ 170 correction done (or not needed) for the current connection. */
+  private freqChecked = false;
   private pulse = { hz: null as number | null, restore: 0 };
-  private inputAt: Record<'A' | 'B' | 'vcm' | 'freq', number> = {
+  private inputAt: Record<'A' | 'B' | 'vcm', number> = {
     A: -1e12,
     B: -1e12,
     vcm: -1e12,
-    freq: -1e12,
   };
   private lastInput: { card: CardId; at: number } | null = null;
   private seenErrAt: number | null = null;
@@ -318,20 +317,6 @@ export class AdvancedControlController {
     this.dispatch('wing', { t: 'wingRhythm', preset });
   }
 
-  stepFreq(dir: 1 | -1): void {
-    const w = this.wingCtx();
-    if (!w) {
-      return;
-    }
-    const calls = mapAction({ t: 'freqStep', delta: dir * FREQ_STEP_HZ }, { wing: w });
-    const c = calls[0];
-    if (c && c.fn === 'setFreq') {
-      this.wing.freq = c.hz;
-      this.inputAt.freq = this.now();
-    }
-    this.run('wing', calls);
-  }
-
   setPulseHz(hz: number, preset = false): void {
     const card = this.card('vcm') as RhythmCard | undefined;
     if (!card) {
@@ -427,21 +412,6 @@ export class AdvancedControlController {
     }
   }
 
-  /** Fine tune (FREQ 100-300 Hz, shared by A and B). */
-  setWingFreq(hz: number): void {
-    const w = this.wingCtx();
-    if (!w) {
-      return;
-    }
-    const calls = mapAction({ t: 'freqSet', hz }, { wing: w });
-    const c = calls[0];
-    if (c && c.fn === 'setFreq') {
-      this.wing.freq = c.hz;
-      this.inputAt.freq = this.now();
-    }
-    this.run('wing', calls);
-  }
-
   scan(): void {
     this.client.startScan().catch(() => undefined);
   }
@@ -472,9 +442,7 @@ export class AdvancedControlController {
       mode: this.wing.mode,
       rhythm: this.wing.rhythm,
       values: { ...this.wing.values },
-      freq: this.wing.freq ?? this.s.tlm?.lraFreqHz ?? c.freq.def,
       groups: c.groups.map(g => g.id),
-      freqRange: { min: c.freq.min, max: c.freq.max },
     };
   }
 
@@ -518,8 +486,7 @@ export class AdvancedControlController {
       this.seenErrAt = s.lastErr.at;
       const safety = s.lastSafetyErr?.at === s.lastErr.at;
       if (!safety && this.lastInput && t - this.lastInput.at < ERR_ATTRIBUTION_MS) {
-        this.inputAt = { A: -1e12, B: -1e12, vcm: -1e12, freq: -1e12 };
-        this.wing.freq = null;
+        this.inputAt = { A: -1e12, B: -1e12, vcm: -1e12 };
         this.toast = {
           text: `Couldn't change ${CARD_NAME[this.lastInput.card]}. Showing the device's current setting.`,
           until: t + TOAST_MS,
@@ -529,11 +496,31 @@ export class AdvancedControlController {
     }
     if (s.status === 'connected' && prev.status !== 'connected') {
       this.stopQueued = false;
+      this.freqChecked = false;
     }
+    this.ensureWingFreq(s);
     if (!s.estop) {
       this.cancelRelease(false);
     }
     this.emit();
+  }
+
+  /**
+   * Wing frequency is fixed at WING_FREQ_HZ (no UI). Once INFO and the first TLM
+   * are in, send `FREQ 170` if the device reports anything else; otherwise send
+   * nothing. Retried on later updates only while the client refuses (locked).
+   */
+  private ensureWingFreq(s: Icd001State): void {
+    if (this.freqChecked || s.status !== 'connected' || !s.info || !s.tlm) {
+      return;
+    }
+    const fix = wingFreqCorrection(s.info, s.tlm.lraFreqHz);
+    if (!fix || fix.fn !== 'setFreq') {
+      this.freqChecked = true;
+      return;
+    }
+    this.freqChecked = true; // set first: setFreq can re-enter onState synchronously
+    this.freqChecked = this.client.setFreq(fix.hz);
   }
 
   /** Pull device values into local state unless the user touched the control recently. */
@@ -563,9 +550,6 @@ export class AdvancedControlController {
       if (tlm.vcm.on && tlm.vcm.hz) {
         this.pulse.restore = tlm.vcm.hz;
       }
-    }
-    if (t - this.inputAt.freq > OPTIMISTIC_MS && tlm.lraFreqHz) {
-      this.wing.freq = tlm.lraFreqHz;
     }
     if (tlm.lp.some(p => p[0] > 0) && t - this.inputAt.A > OPTIMISTIC_MS) {
       this.wing.mode = 'rhythm';
@@ -605,7 +589,6 @@ export class AdvancedControlController {
           mode: this.wing.mode,
           rhythm: this.wing.rhythm,
           rhythmAvailable: !!card.lpulse,
-          freq: this.wing.freq ?? card.freq.def,
           summary: !live
             ? '—'
             : !enabled && screen.kind !== 'normal'

@@ -1,12 +1,12 @@
 /**
  * SAFETY RULE (design v2 sign-off): while a sheet/overlay is open on the
- * advanced-control page, Stop all stays visible, tappable and undimmed above the
+ * advanced-control page (OverlayHost), Stop all stays visible, tappable and undimmed above the
  * scrim and the sheet; tapping it closes the sheet and sends ESTOP 1.
  * See src/screens/advanced-control/components/OverlayHost.tsx.
  */
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import renderer, { act, ReactTestInstance } from 'react-test-renderer';
 
 jest.mock('react-native-ble-manager', () => ({}));
@@ -53,7 +53,7 @@ const ancestors = (n: ReactTestInstance) => {
   return out;
 };
 
-describe('Stop-all safety rule with the Fine tune sheet open', () => {
+describe('Stop-all safety rule with a sheet open (OverlayHost)', () => {
   let r!: renderer.ReactTestRenderer;
   const log = () => getIcd001Client().getState().log;
 
@@ -61,7 +61,7 @@ describe('Stop-all safety rule with the Fine tune sheet open', () => {
     jest.useFakeTimers({ now: 12_000_000 });
     await setIcd001Mode('mock');
     await act(async () => {
-      r = renderer.create(<AdvancedControlScreen />);
+      r = renderer.create(<AdvancedControlScreen initialOverlay={<Text>Test sheet</Text>} />);
     });
     await act(async () => {
       const p = getIcd001Client().connect({
@@ -74,18 +74,9 @@ describe('Stop-all safety rule with the Fine tune sheet open', () => {
       await settle(1000);
       await p;
     });
-    // Wings row is open via the route param; open the Fine tune sheet.
-    await act(async () => {
-      r.root
-        .findAll(
-          n =>
-            typeof n.props.onPress === 'function' &&
-            /^Fine tune, vibration frequency/.test(n.props.accessibilityLabel ?? ''),
-        )[0]
-        .props.onPress();
-      await settle(400);
-    });
+    // A sheet is open from the start (initialOverlay); Fine tune no longer exists.
     expect(byTestId(r, 'overlay-host').length).toBeGreaterThan(0);
+    expect(r.root.findAllByType(Text).some(n => n.props.children === 'Test sheet')).toBe(true);
   });
   afterAll(() => {
     act(() => r.unmount());

@@ -16,10 +16,11 @@ const tick = async (ms: number) => {
   }
 };
 
-async function setup(variant: 'icd1' | 'h11' = 'icd1') {
+async function setup(variant: 'icd1' | 'h11' = 'icd1', pre?: (dev: MockIcd001Device) => void) {
   const dev = new MockIcd001Device(variant, variant === 'icd1' ? 'ICD1-TEST' : 'H11-91B1');
   dev.ntcOverride = 34.2;
   dev.vbatOverride = 3.95;
+  pre?.(dev);
   const transport = new MockIcd001Transport([dev], { mtu: 185, connectDelayMs: 10 });
   const client = new Icd001Client(transport, { reconnectDelaysMs: [100, 100] });
   const ctl = new AdvancedControlController(client);
@@ -108,7 +109,7 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.done();
   });
 
-  it('rhythm mode sends LPULSE; freq stepper sends FREQ ±5', async () => {
+  it('rhythm mode sends LPULSE', async () => {
     const t = await setup();
     t.ctl.setWingValue('A', 50);
     await tick(300);
@@ -117,10 +118,6 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     expect(t.dev.commandLog).toContain('LPULSE 0 50 150 150');
     await tick(1000); // telemetry now reports lp -> summary follows the device
     expect(t.wing().summary).toBe('A 50 · B 0 · Rhythm');
-    t.ctl.stepFreq(1);
-    await tick(300);
-    expect(t.dev.commandLog).toContain('FREQ 175');
-    expect(t.wing().freq).toBe(175);
     t.done();
   });
 
@@ -282,12 +279,26 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.done();
   });
 
-  it('fine tune slider sets FREQ (snapped to 5 Hz)', async () => {
+  it('wing frequency: device already at 170 Hz -> no FREQ is sent', async () => {
     const t = await setup();
-    t.ctl.setWingFreq(213);
-    await tick(300);
-    expect(t.dev.commandLog).toContain('FREQ 215');
-    expect(t.wing().freq).toBe(215);
+    await tick(1500);
+    expect(t.dev.commandLog.filter(l => l.startsWith('FREQ'))).toEqual([]);
+    expect('freq' in t.wing()).toBe(false); // not exposed to the UI
+    expect('setWingFreq' in t.ctl).toBe(false);
+    t.done();
+  });
+
+  it('wing frequency: device reports 200 Hz -> FREQ 170 once after connect/INFO', async () => {
+    const t = await setup('icd1', dev => {
+      dev.freq = 200;
+    });
+    await tick(1500);
+    expect(t.dev.commandLog.filter(l => l.startsWith('FREQ'))).toEqual(['FREQ 170']);
+    expect(t.dev.freq).toBe(170);
+    // later telemetry / UI activity does not send it again
+    t.ctl.setWingValue('A', 30);
+    await tick(1500);
+    expect(t.dev.commandLog.filter(l => l.startsWith('FREQ'))).toEqual(['FREQ 170']);
     t.done();
   });
 

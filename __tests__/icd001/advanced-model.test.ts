@@ -4,6 +4,7 @@ import {
   COOLED_DOWN_BANNER,
   HOTSPOT_ZONES,
   RhythmCard,
+  WING_FREQ_HZ,
   WingCtx,
   bannerFor,
   beatLabel,
@@ -18,6 +19,7 @@ import {
   sensorReading,
   sensorSummary,
   tempText,
+  wingFreqCorrection,
 } from '../../src/screens/advanced-control/model';
 import { Icd001Client, Icd001State, LockReason } from '../../src/services/icd001/client';
 import { MockIcd001Device, MockIcd001Transport } from '../../src/services/icd001/mock';
@@ -331,9 +333,7 @@ describe('control -> command mapping (wire text per PROTOCOL §7)', () => {
     mode: 'steady',
     rhythm: 'medium',
     values: { A: 60, B: 40 },
-    freq: 170,
     groups: ['A', 'B'],
-    freqRange: { min: 100, max: 300 },
   };
   const wire = (a: Parameters<typeof mapAction>[0], w: WingCtx = wing, info: DeviceInfo = v0) =>
     mapAction(a, { wing: w, pulse: buildCards(info)[1] as RhythmCard }).map(c => callToWire(c, info));
@@ -367,16 +367,20 @@ describe('control -> command mapping (wire text per PROTOCOL §7)', () => {
     expect(wire({ t: 'wingSlider', group: 'A', value: 0 }, r)).toEqual(['LRA 0 0']);
   });
 
-  it('fine tune slider -> FREQ snapped to 5 Hz, clamped to INFO range', () => {
-    expect(wire({ t: 'freqSet', hz: 212 })).toEqual(['FREQ 210']);
-    expect(wire({ t: 'freqSet', hz: 40 })).toEqual(['FREQ 100']);
-    expect(wire({ t: 'freqSet', hz: 999 })).toEqual(['FREQ 300']);
-  });
-
-  it('freq stepper ±5 -> FREQ, clamped to INFO range', () => {
-    expect(wire({ t: 'freqStep', delta: 5 })).toEqual(['FREQ 175']);
-    expect(wire({ t: 'freqStep', delta: -5 }, { ...wing, freq: 100 })).toEqual(['FREQ 100']);
-    expect(wire({ t: 'freqStep', delta: 5 }, { ...wing, freq: 300 })).toEqual(['FREQ 300']);
+  it('wing frequency is fixed at 170 Hz: correction only when the device reports otherwise', () => {
+    expect(WING_FREQ_HZ).toBe(170);
+    expect(wingFreqCorrection(v0, 170)).toBeNull();
+    expect(wingFreqCorrection(v0, undefined)).toBeNull(); // INFO def 170
+    expect(wingFreqCorrection(v0, 200)).toEqual({ fn: 'setFreq', hz: 170 });
+    const def150: DeviceInfo = {
+      ...v0,
+      modules: { ...v0.modules, wings: { ...v0.modules.wings!, freq: { min: 100, max: 300, def: 150 } } },
+    };
+    expect(wingFreqCorrection(def150, null)).toEqual({ fn: 'setFreq', hz: 170 });
+    expect(wingFreqCorrection(def150, 170)).toBeNull(); // TLM wins over INFO def
+    expect(wingFreqCorrection({ ...v0, modules: { ...v0.modules, wings: null } }, 200)).toBeNull();
+    expect(wingFreqCorrection(null, 200)).toBeNull();
+    expect(callToWire({ fn: 'setFreq', hz: WING_FREQ_HZ }, v0)).toBe('FREQ 170');
   });
 
   it('pulse slider/preset -> VHZ hz within 10–50; switch off -> VHZ 0', () => {
@@ -428,9 +432,7 @@ describe('mapping through the real client + simulator (throttle, latest wins)', 
       mode: 'steady',
       rhythm: 'medium',
       values: { A: 0, B: 0 },
-      freq: 170,
       groups: ['A', 'B'],
-      freqRange: { min: 100, max: 300 },
     };
     dev.commandLog.length = 0;
     for (let i = 1; i <= 50; i++) {

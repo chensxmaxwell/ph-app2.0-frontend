@@ -1,6 +1,6 @@
 /**
  * Design v2 screen on the simulator: notices, module rows with live values,
- * expanding a row, the Fine tune sheet, Stop all / Release, and STOP on leave.
+ * expanding a row (no Fine tune), Stop all / Release, and STOP on leave.
  * Also the Control-home entry (Q9: visible only while ICD1-/H11- connected).
  */
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
@@ -114,7 +114,7 @@ describe('AdvancedControlScreen v2 on the mock', () => {
     expect(entry.root.findAll(n => n.props.testID === 'advanced-entry').length).toBeGreaterThan(0);
     expect(texts(entry)).toContain('Each part on its own');
 
-    // Expand Wings, raise upper wings through the a11y action, open Fine tune.
+    // Expand Wings, raise upper wings through the a11y action.
     await act(async () => {
       byLabel(r, /^Wings\. Upper and lower pairs\./).props.onPress();
       await settle(100);
@@ -132,22 +132,8 @@ describe('AdvancedControlScreen v2 on the mock', () => {
       await settle(300);
     });
     expect(client.getState().log.some(l => /LRA/.test(l))).toBe(true);
-    await act(async () => {
-      byLabel(r, /^Fine tune, vibration frequency/).props.onPress();
-      await settle(100);
-    });
-    expect(texts(r)).toContain('Vibration frequency, shared by upper and lower wings.');
-    await act(async () => {
-      r.root
-        .findAll(
-          n =>
-            n.props.accessibilityRole === 'button' &&
-            typeof n.props.onPress === 'function' &&
-            flat(n.findAll(x => (x.type as unknown) === 'Text').map(x => flat(x.props.children))) === 'Done',
-        )[0]
-        .props.onPress();
-      await settle(100);
-    });
+    // Wing frequency is fixed at 170 Hz: no Fine tune row or sheet.
+    expect(texts(r)).not.toContain('Fine tune');
 
     // Stop all -> emergency stop notice + Release (single tap).
     await act(async () => {

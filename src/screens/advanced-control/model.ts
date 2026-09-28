@@ -58,7 +58,12 @@ export const HOTSPOT_ZONES: Record<HotspotZone, { card: 'wing' | 'vcm' | 'egg'; 
 /** App-side cap for the voice-coil beat range (Maxwell 9/28: 10–50 Hz). */
 export const VHZ_UI_MIN = 10;
 export const VHZ_UI_MAX = 50;
-export const FREQ_STEP_HZ = 5;
+/**
+ * Wing (LRA) drive frequency is fixed at the device default and not exposed in
+ * the UI (Maxwell, 2026-09-29: no Fine tune). The controller corrects a device
+ * that reports anything else once per connection; see wingFreqCorrection().
+ */
+export const WING_FREQ_HZ = 170;
 /** Wing rhythm presets (spec Q6 not answered: v1 ships presets, not raw ms). */
 export const RHYTHM_PRESETS = [
   { id: 'slow', label: 'Slow', onMs: 800, offMs: 800 },
@@ -260,7 +265,6 @@ export interface IntensityCard {
   subtitle: string;
   part: 'wings';
   groups: WingGroupView[];
-  freq: { min: number; max: number; def: number };
   lpulse: LpulseCaps | null;
 }
 
@@ -342,7 +346,6 @@ export function buildCards(info: DeviceInfo | null): ModuleCard[] {
       subtitle: 'Upper and lower pairs',
       part: 'wings',
       groups: w.groups.map(g => ({ ...g, ...WING_GROUP_COPY[g.id] })),
-      freq: w.freq,
       lpulse: w.lpulse,
     });
   }
@@ -414,15 +417,27 @@ export type ClientCall =
   | { fn: 'setEstop'; on: boolean }
   | { fn: 'stop' };
 
+/**
+ * FREQ to send once after connect/INFO so the wings run at WING_FREQ_HZ, or
+ * null when the device already reports it (TLM `f` when present, else INFO
+ * `ch.freq.def`) or has no wings.
+ */
+export function wingFreqCorrection(info: DeviceInfo | null, tlmFreqHz?: number | null): ClientCall | null {
+  const wings = info?.modules.wings;
+  if (!wings) {
+    return null;
+  }
+  const current = tlmFreqHz || wings.freq.def;
+  return current === WING_FREQ_HZ ? null : { fn: 'setFreq', hz: WING_FREQ_HZ };
+}
+
 export interface WingCtx {
   link: boolean;
   mode: 'steady' | 'rhythm';
   rhythm: RhythmPresetId;
   /** Last non-zero intensities, restored when the switch turns on. */
   values: { A: number; B: number };
-  freq: number;
   groups: LraGroupId[];
-  freqRange: { min: number; max: number };
 }
 type LraGroupId = 'A' | 'B';
 
@@ -431,9 +446,6 @@ export type ControlAction =
   | { t: 'wingSwitch'; on: boolean }
   | { t: 'wingMode'; mode: 'steady' | 'rhythm' }
   | { t: 'wingRhythm'; preset: RhythmPresetId }
-  | { t: 'freqStep'; delta: number }
-  /** Fine tune slider (design v2 Q5): absolute Hz, snapped to FREQ_STEP_HZ. */
-  | { t: 'freqSet'; hz: number }
   | { t: 'pulseSlider'; hz: number }
   | { t: 'pulsePreset'; hz: number }
   | { t: 'pulseSwitch'; on: boolean; lastHz: number }
@@ -488,20 +500,6 @@ export function mapAction(a: ControlAction, ctx: { wing?: WingCtx; pulse?: Rhyth
           : { ...ctx.wing, mode: 'rhythm', rhythm: a.preset };
       const running = next.values.A > 0 || next.values.B > 0;
       return running ? wingAll(next) : [];
-    }
-    case 'freqStep':
-      if (!ctx.wing) {
-        return [];
-      }
-      return [
-        { fn: 'setFreq', hz: clamp(ctx.wing.freq + a.delta, ctx.wing.freqRange.min, ctx.wing.freqRange.max) },
-      ];
-    case 'freqSet': {
-      if (!ctx.wing) {
-        return [];
-      }
-      const snapped = Math.round(a.hz / FREQ_STEP_HZ) * FREQ_STEP_HZ;
-      return [{ fn: 'setFreq', hz: clamp(snapped, ctx.wing.freqRange.min, ctx.wing.freqRange.max) }];
     }
     case 'pulseSlider':
     case 'pulsePreset': {
