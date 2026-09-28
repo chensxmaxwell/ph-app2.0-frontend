@@ -10,24 +10,37 @@ import Gradient from 'react-native-linear-gradient';
 import { Icon } from '../icons';
 import { nocturne as N, qs, text } from '../theme';
 
+import { STOP_BUTTON_H, stopZoneHeight } from './OverlayHost';
+
 export const StopDock = ({
   engaged,
   bottom,
+  overlayOpen,
   onStop,
   onRelease,
 }: {
   engaged: boolean;
   bottom: number;
+  /**
+   * A sheet/overlay is open (OverlayHost). The dock stays exactly where and how
+   * it is; only its backdrop becomes an opaque, touch-blocking Stop-all zone so
+   * the page underneath neither shows through nor receives taps.
+   */
+  overlayOpen?: boolean;
   onStop: () => void;
   onRelease: () => void;
 }) => (
   <>
-    <Gradient
-      pointerEvents="none"
-      colors={['rgba(16,13,15,0)', 'rgba(16,13,15,0.92)', N.bgBottom]}
-      locations={[0, 0.38, 0.6]}
-      style={[styles.scrim, { height: 150 + Math.max(0, bottom - 38) }]}
-    />
+    {overlayOpen ? (
+      <View style={[styles.scrim, styles.zone, { height: stopZoneHeight(bottom) }]} testID="stop-zone" />
+    ) : (
+      <Gradient
+        pointerEvents="none"
+        colors={['rgba(16,13,15,0)', 'rgba(16,13,15,0.92)', N.bgBottom]}
+        locations={[0, 0.38, 0.6]}
+        style={[styles.scrim, { height: 150 + Math.max(0, bottom - 38) }]}
+      />
+    )}
     {engaged ? (
       <View style={[styles.stop, styles.eng, { bottom }]} accessibilityLiveRegion="assertive">
         <View style={styles.engLeft} accessible accessibilityLabel="Emergency stop is on">
@@ -48,6 +61,7 @@ export const StopDock = ({
         onPress={onStop}
         accessibilityRole="button"
         accessibilityLabel="Stop all outputs"
+        testID="stop-all"
         style={({ pressed }) => [styles.stopWrap, { bottom }, pressed && styles.pressed]}
       >
         <Gradient colors={[N.stop, N.stop2]} style={styles.stop}>
@@ -62,11 +76,12 @@ export const StopDock = ({
 
 const styles = StyleSheet.create({
   scrim: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+  zone: { backgroundColor: N.bgBottom },
   stopWrap: {
     position: 'absolute',
     left: 16,
     right: 16,
-    height: 58,
+    height: STOP_BUTTON_H,
     borderRadius: N.radius.l,
     shadowColor: '#000',
     shadowOpacity: 0.25,
@@ -75,7 +90,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   stop: {
-    height: 58,
+    height: STOP_BUTTON_H,
     borderRadius: N.radius.l,
     flexDirection: 'row',
     alignItems: 'center',

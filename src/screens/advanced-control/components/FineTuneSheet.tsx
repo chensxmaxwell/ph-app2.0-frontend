@@ -1,70 +1,53 @@
 /**
- * Fine tune bottom sheet (design v2 Q5: FREQ lives in a collapsed secondary
- * panel). Not drawn in the package; reuses the same slider and tokens.
+ * Fine tune sheet content (design v2 Q5: FREQ lives in a collapsed secondary
+ * panel). Rendered inside <OverlayHost> so Stop all stays on top (safety rule).
  */
 import React from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { nocturne as N, qs, text } from '../theme';
 
 import { Slider } from './Slider';
 
 export const FineTuneSheet = ({
-  visible,
   freq,
   range,
   def,
-  bottom,
   onChange,
   onClose,
 }: {
-  visible: boolean;
   freq: number;
   range: { min: number; max: number };
   def: number;
-  bottom: number;
   onChange: (hz: number) => void;
   onClose: () => void;
 }) => (
-  <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-    <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close fine tune" />
-    <View style={[styles.sheet, { paddingBottom: bottom + 16 }]}>
-      <View style={styles.grab} />
-      <Text style={styles.title}>Fine tune</Text>
-      <Text style={styles.p}>Vibration frequency, shared by upper and lower wings.</Text>
-      <Slider
-        label="Frequency"
-        value={freq}
-        min={range.min}
-        max={range.max}
-        step={5}
-        unit=" Hz"
-        ends={[`${range.min} Hz`, `${range.max} Hz`]}
-        onChange={onChange}
-      />
-      <View style={styles.actions}>
-        <Pressable onPress={() => onChange(def)} accessibilityRole="button" style={styles.ghost}>
-          <Text style={styles.ghostText}>{`Reset to ${def} Hz`}</Text>
-        </Pressable>
-        <Pressable onPress={onClose} accessibilityRole="button" style={styles.done}>
-          <Text style={styles.doneText}>Done</Text>
-        </Pressable>
-      </View>
+  <View>
+    <View style={styles.grab} />
+    <Text style={styles.title}>Fine tune</Text>
+    <Text style={styles.p}>Vibration frequency, shared by upper and lower wings.</Text>
+    <Slider
+      label="Frequency"
+      value={freq}
+      min={range.min}
+      max={range.max}
+      step={5}
+      unit=" Hz"
+      ends={[`${range.min} Hz`, `${range.max} Hz`]}
+      onChange={onChange}
+    />
+    <View style={styles.actions}>
+      <Pressable onPress={() => onChange(def)} accessibilityRole="button" style={styles.ghost}>
+        <Text style={styles.ghostText}>{`Reset to ${def} Hz`}</Text>
+      </Pressable>
+      <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Done" style={styles.done}>
+        <Text style={styles.doneText}>Done</Text>
+      </Pressable>
     </View>
-  </Modal>
+  </View>
 );
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(8,6,7,0.6)' },
-  sheet: {
-    backgroundColor: '#1B1618',
-    borderTopLeftRadius: N.radius.l,
-    borderTopRightRadius: N.radius.l,
-    paddingHorizontal: N.pad,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderColor: N.line,
-  },
   grab: {
     alignSelf: 'center',
     width: 36,

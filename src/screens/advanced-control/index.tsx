@@ -26,6 +26,7 @@ import { DeviceLine } from './components/DeviceLine';
 import { FineTuneSheet } from './components/FineTuneSheet';
 import { ModuleRow } from './components/ModuleRow';
 import { Notice } from './components/Notice';
+import { OverlayHost, stopZoneHeight } from './components/OverlayHost';
 import { Stage } from './components/Stage';
 import { StopDock } from './components/StopDock';
 import { BulletBody, PulseBody, WingsBody } from './components/bodies';
@@ -50,7 +51,9 @@ export const AdvancedControlScreen = () => {
   const route = useRoute();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const [fineTune, setFineTune] = useState(false);
+  /** Open sheet, if any. All sheets go through <OverlayHost> (Stop-all safety rule). */
+  const [sheet, setSheet] = useState<'fineTune' | null>(null);
+  const closeSheet = useCallback(() => setSheet(null), []);
 
   // Deep link / QA harness: open a row on arrival.
   const initial = (route.params as AdvancedControlParams)?.expanded;
@@ -61,6 +64,13 @@ export const AdvancedControlScreen = () => {
       ctl.toggleCard(initial);
     }
   }, [ctl, initial, view.cards]);
+
+  const wingEnabled = view.cards.some(c => c.kind === 'intensity' && c.enabled);
+  useEffect(() => {
+    if (sheet === 'fineTune' && !wingEnabled) {
+      setSheet(null); // paused / e-stop / disconnected: the sheet's controls no longer apply
+    }
+  }, [sheet, wingEnabled]);
 
   const toggle = useCallback(
     (id: CardId) => {
@@ -104,7 +114,7 @@ export const AdvancedControlScreen = () => {
       case 'intensity':
         return (
           <ModuleRow {...common}>
-            <WingsBody v={c} ctl={ctl} onFineTune={() => setFineTune(true)} />
+            <WingsBody v={c} ctl={ctl} onFineTune={() => setSheet('fineTune')} />
           </ModuleRow>
         );
       case 'rhythm':
@@ -123,7 +133,7 @@ export const AdvancedControlScreen = () => {
   };
 
   return (
-    <View style={styles.root}>
+    <View style={styles.root} testID="advanced-control">
       <StatusBar barStyle="light-content" />
       <Gradient
         colors={[N.bgTop, N.bg, N.bgBottom]}
@@ -167,29 +177,35 @@ export const AdvancedControlScreen = () => {
         ) : null}
         <View style={styles.mods}>{rows.map(renderRow)}</View>
       </ScrollView>
-      <StopDock
-        engaged={view.estop.on}
-        bottom={stopBottom}
-        onStop={() => ctl.stopAll()}
-        onRelease={() => ctl.release()}
-      />
       {/* Above the dock scrim, like the design (.leave z-index 4). */}
-      {showLeave ? (
+      {showLeave && !sheet ? (
         <View style={[styles.leaveWrap, { bottom: stopBottom + 74 }]} pointerEvents="none">
           <Text style={styles.leave}>Leaving this page stops all outputs.</Text>
         </View>
       ) : null}
-      {wing ? (
-        <FineTuneSheet
-          visible={fineTune && wing.enabled}
-          freq={wing.freq}
-          range={wing.card.freq}
-          def={wing.card.freq.def}
-          bottom={insets.bottom}
-          onChange={hz => ctl.setWingFreq(hz)}
-          onClose={() => setFineTune(false)}
-        />
-      ) : null}
+      {/* Sheets: laid out above the reserved Stop-all zone. See the SAFETY RULE in OverlayHost. */}
+      <OverlayHost visible={sheet !== null} onClose={closeSheet} reserveBottom={stopZoneHeight(stopBottom)}>
+        {sheet === 'fineTune' && wing ? (
+          <FineTuneSheet
+            freq={wing.freq}
+            range={wing.card.freq}
+            def={wing.card.freq.def}
+            onChange={hz => ctl.setWingFreq(hz)}
+            onClose={closeSheet}
+          />
+        ) : null}
+      </OverlayHost>
+      {/* Stop all: rendered LAST so it is the topmost layer, above any scrim or sheet. */}
+      <StopDock
+        engaged={view.estop.on}
+        bottom={stopBottom}
+        overlayOpen={sheet !== null}
+        onStop={() => {
+          setSheet(null); // safety rule: Stop all closes any open sheet and enters e-stop
+          ctl.stopAll();
+        }}
+        onRelease={() => ctl.release()}
+      />
     </View>
   );
 };
