@@ -1,14 +1,17 @@
 /**
  * Simulator for ICD-001 / H1.1 so the advanced-control UI can be built and
- * screenshotted without hardware. It emulates the firmware text protocol:
- * INFO characteristic, `;`/`\n` separated commands, OK/ERR replies, EVT lines,
- * and TLM JSON pushed at RATE Hz and chunked to MTU-3 bytes (exercising the
- * app-side line reassembly).
+ * screenshotted without hardware. Emulates the firmware text protocol: INFO
+ * characteristic, commands, OK/ERR replies, EVT lines, and TLM JSON pushed at
+ * RATE Hz and chunked to MTU-3 bytes (exercising app-side line reassembly).
  *
- * Variants:
- *  - 'icd1'  = PROTOCOL-ICD001 v0 (prod/ch in INFO, VHZ, vcm:[on,hz], ot, 4 PPG)
- *  - 'h11'   = h11-demo-ble as flashed on H11-91B1 today (legacy INFO,
- *              VCM on halfMs, vcm:[on,halfMs], 3 PPG, VHZ -> ERR UNKNOWN)
+ * Variants (PROTOCOL-ICD001.md, §7 wins):
+ *  - 'icd1' = v0 "ICD001-0" (ICD1-5A3C): locked INFO schema with proto/ch,
+ *    VHZ, LPULSE, telemetry vhz/lp/ot/lb, rx buffered until `\n`/`;` (100 ms
+ *    idle flush, 256-byte overflow -> ERR OVERFLOW), actuator commands rejected
+ *    with ERR ESTOP / ERR OVERTEMP / ERR LOWBAT (first only) and not stored.
+ *  - 'h11'  = H11 v1.0 h11-demo-ble as on H11-91B1: INFO without proto,
+ *    `VCM on halfMs`, telemetry vcm:[on,halfMs], 3 PPG, each write executed
+ *    as-is, VHZ/LPULSE -> ERR UNKNOWN, no ot/lb.
  */
 import { clamp } from './protocol';
 import { decodeUtf8, encodeUtf8 } from './utf8';
@@ -19,18 +22,26 @@ export type MockVariant = 'icd1' | 'h11';
 
 export interface MockDeviceSnapshot {
   lra: [number, number];
+  lp: [[number, number], [number, number]];
   freq: number;
   vcmOn: boolean;
   vcmHz: number;
   estop: boolean;
   ot: boolean;
+  lowbat: boolean;
   ntc: number;
   vbat: number;
   rate: number;
 }
 
+const ACTUATOR_CMDS = new Set(['LRA', 'LPULSE', 'VHZ', 'VCM', 'AUTO', 'TEST']);
+
 export class MockIcd001Device {
   lra: [number, number] = [0, 0];
+  lp: [[number, number], [number, number]] = [
+    [0, 0],
+    [0, 0],
+  ];
   freq = 170;
   vcmOn = false;
   vcmHz = 10; // stored as Hz; legacy variant reports 500/hz as half-period
@@ -41,8 +52,10 @@ export class MockIcd001Device {
   rate = 5;
   ntc = 33.5;
   vbat = 4.05;
-  /** Force temperature (for testing the over-temp lock in UI). null = simulate. */
+  /** Force temperature (UI testing of the over-temp lock). null = simulate. */
   ntcOverride: number | null = null;
+  /** Force battery voltage (UI testing of the low-battery lock). null = simulate. */
+  vbatOverride: number | null = null;
   readonly startedAt: number;
   commandLog: string[] = [];
 
@@ -54,12 +67,16 @@ export class MockIcd001Device {
     this.startedAt = now();
   }
 
-  get vcmRange(): { min: number; max: number } {
-    return this.variant === 'icd1' ? { min: 2, max: 50 } : { min: 2, max: 20 };
+  get isV0(): boolean {
+    return this.variant === 'icd1';
+  }
+
+  get vhzRange(): { min: number; max: number } {
+    return this.isV0 ? { min: 2, max: 50 } : { min: 2, max: 20 };
   }
 
   infoJson(): string {
-    if (this.variant === 'h11') {
+    if (!this.isV0) {
       return JSON.stringify({
         fw: 'h11-demo-ble',
         ver: 'sim',
@@ -70,12 +87,12 @@ export class MockIcd001Device {
         ppg: [1, 1, 1],
       });
     }
-    // NOTE: the shape of `ch` beyond `vcm` is an app-side proposal; see ledger.
+    // §7.2 locked schema
     return JSON.stringify({
+      proto: 'ICD001-0',
       prod: 'ICD-001',
       hw: 'H1.1',
       fw: 'icd001-sim',
-      ver: '0.0-sim',
       mux: 1,
       adsA: 1,
       adsB: 1,
@@ -84,8 +101,9 @@ export class MockIcd001Device {
       ch: {
         lra: { A: '上翼', B: '下翼' },
         freq: { min: 100, max: 300, def: 170 },
-        vcm: { min: 2, max: 50, def: 10 },
-        ppg: ['翼左', '翼右', '翼中', '跳蛋'],
+        vhz: { min: 2, max: 50, def: 10 },
+        lpulse: { min: 50, max: 2000 },
+        ppg: ['J13', 'J22', 'J23', 'EGG'],
         egg: { ppg: 3, act: 0 },
       },
     });
@@ -93,13 +111,18 @@ export class MockIcd001Device {
 
   private allStop(): void {
     this.lra = [0, 0];
+    this.lp = [
+      [0, 0],
+      [0, 0],
+    ];
     this.vcmOn = false;
     this.auto = false;
   }
 
-  private actuatorLocked(): string | null {
-    if (this.variant === 'h11') {
-      return null; // legacy firmware accepts commands; outputs gated internally
+  /** v0 rejection (§7.5): first of ESTOP > OVERTEMP > LOWBAT. */
+  private rejection(): string | null {
+    if (!this.isV0) {
+      return null; // H11 v1.0 accepts; outputs gated internally
     }
     if (this.estop) {
       return 'ERR ESTOP';
@@ -113,7 +136,7 @@ export class MockIcd001Device {
     return null;
   }
 
-  /** Handle one BLE write; returns reply lines (without `\n`). */
+  /** Execute a chunk of text the way the firmware splits it (`\n` / `;`). */
   handleWrite(text: string): string[] {
     const out: string[] = [];
     for (const part of text.split(/[\n;]/)) {
@@ -126,12 +149,36 @@ export class MockIcd001Device {
     return out;
   }
 
+  /** Parse LRA/LPULSE target; returns group indexes or null. */
+  private targets(t: string | undefined): number[] | null {
+    if (t === '0' || (this.isV0 && t === 'A') || (!this.isV0 && t === 'CORE')) {
+      return [0];
+    }
+    if (t === '1' || (this.isV0 && t === 'B') || (!this.isV0 && t === 'WING')) {
+      return [1];
+    }
+    if (t === 'BOTH' || (this.isV0 && t === 'ALL') || (!this.isV0 && t === 'B')) {
+      return [0, 1];
+    }
+    return null;
+  }
+
   private handleCmd(c: string): string[] {
     const p = c.toUpperCase().split(/\s+/);
     const op = p[0];
     const a1 = p[1];
-    const v1 = a1 !== undefined ? parseInt(a1, 10) : NaN;
-    const v2 = p[2] !== undefined ? parseInt(p[2], 10) : NaN;
+    const n = (i: number) => (p[i] !== undefined ? parseInt(p[i], 10) : NaN);
+    const v1 = n(1);
+    const v2 = n(2);
+    if (!this.isV0 && (op === 'VHZ' || op === 'LPULSE')) {
+      return [`ERR UNKNOWN ${op}`];
+    }
+    if (ACTUATOR_CMDS.has(op)) {
+      const rej = this.rejection();
+      if (rej) {
+        return [rej]; // value NOT stored
+      }
+    }
     switch (op) {
       case 'PING':
         return ['OK PONG'];
@@ -155,6 +202,9 @@ export class MockIcd001Device {
         this.allStop();
         this.auto = v1 !== 0;
         return [`OK AUTO ${this.auto ? 1 : 0}`];
+      case 'TEST':
+        this.allStop();
+        return ['OK TEST'];
       case 'RATE':
         if (Number.isNaN(v1) || v1 < 0 || v1 > 20) {
           return ['ERR RATE 0-20'];
@@ -171,30 +221,35 @@ export class MockIcd001Device {
         if (Number.isNaN(v2) || v2 < 0 || v2 > 100) {
           return ['ERR LRA <0|1|B> <0-100>'];
         }
-        const locked = v2 > 0 ? this.actuatorLocked() : null;
-        if (locked) {
-          return [locked];
-        }
-        this.auto = false;
-        const t = a1;
-        if (t === '0' || t === 'CORE' || (this.variant === 'icd1' && t === 'A')) {
-          this.lra[0] = v2;
-        } else if (t === '1' || t === 'WING' || (this.variant === 'icd1' && t === 'B')) {
-          this.lra[1] = v2;
-        } else if (t === 'BOTH' || t === 'ALL' || (this.variant === 'h11' && t === 'B')) {
-          this.lra = [v2, v2];
-        } else {
+        const g = this.targets(a1);
+        if (!g) {
           return ['ERR LRA target'];
         }
+        this.auto = false;
+        g.forEach(i => {
+          this.lra[i] = v2;
+          this.lp[i] = [0, 0]; // LRA cancels rhythm on that group
+        });
         return [`OK LRA ${this.lra[0]} ${this.lra[1]}`];
+      }
+      case 'LPULSE': {
+        const on = n(3);
+        const off = n(4);
+        const g = this.targets(a1);
+        const bad = (x: number) => Number.isNaN(x) || x < 50 || x > 2000;
+        if (!g || Number.isNaN(v2) || v2 < 0 || v2 > 100 || bad(on) || bad(off)) {
+          return ['ERR LPULSE <0|1|A|B|ALL> <0-100> <50-2000> <50-2000>'];
+        }
+        this.auto = false;
+        g.forEach(i => {
+          this.lra[i] = v2;
+          this.lp[i] = [on, off];
+        });
+        return [`OK LPULSE ${a1} ${v2} ${on} ${off}`];
       }
       case 'VCM': {
         if (Number.isNaN(v1)) {
           return ['ERR VCM 0|1 [halfMs 25-250]'];
-        }
-        const locked = v1 !== 0 ? this.actuatorLocked() : null;
-        if (locked) {
-          return [locked];
         }
         this.auto = false;
         this.vcmOn = v1 !== 0;
@@ -204,16 +259,9 @@ export class MockIcd001Device {
         return [`OK VCM ${this.vcmOn ? 1 : 0} ${Math.round(500 / this.vcmHz)}`];
       }
       case 'VHZ': {
-        if (this.variant === 'h11') {
-          return ['ERR UNKNOWN VHZ'];
-        }
-        const { min, max } = this.vcmRange;
+        const { min, max } = this.vhzRange;
         if (Number.isNaN(v1) || (v1 !== 0 && (v1 < min || v1 > max))) {
           return [`ERR VHZ 0|${min}-${max}`];
-        }
-        const locked = v1 !== 0 ? this.actuatorLocked() : null;
-        if (locked) {
-          return [locked];
         }
         this.auto = false;
         this.vcmOn = v1 !== 0;
@@ -237,8 +285,12 @@ export class MockIcd001Device {
       const target = 33.5 + 4 * drive;
       this.ntc += (target - this.ntc) * Math.min(1, dtS / 30);
     }
-    this.vbat = Math.max(3.3, this.vbat - dtS * (0.00005 + 0.0002 * drive));
-    if (this.variant === 'icd1') {
+    if (this.vbatOverride !== null) {
+      this.vbat = this.vbatOverride;
+    } else {
+      this.vbat = Math.max(3.3, this.vbat - dtS * (0.00005 + 0.0002 * drive));
+    }
+    if (this.isV0) {
       if (!this.ot && this.ntc >= 42) {
         this.ot = true;
         this.allStop();
@@ -250,7 +302,10 @@ export class MockIcd001Device {
       if (!this.lowbat && this.vbat < 3.4) {
         this.lowbat = true;
         this.allStop();
-        evts.push('EVT LOWBAT');
+        evts.push('EVT LOWBAT 1');
+      } else if (this.lowbat && this.vbat > 3.6) {
+        this.lowbat = false;
+        evts.push('EVT LOWBAT 0');
       }
     }
     return evts;
@@ -267,15 +322,14 @@ export class MockIcd001Device {
 
   tlmJson(): string {
     const t = this.now() - this.startedAt;
-    const nPpg = this.variant === 'icd1' ? 4 : 3;
+    const nPpg = this.isV0 ? 4 : 3;
     const warm = t > 3000;
     const ppg = Array.from({ length: nPpg }, (_, i) => [
       52000 + i * 1500 + Math.round(Math.sin(t / 160 + i) * 800),
       1,
       warm ? 70 + ((i * 3 + Math.floor(t / 4000)) % 6) : 0,
     ]);
-    const vcmOut = this.vcmOn && !this.estop ? 1 : 0;
-    const vcmVal = this.variant === 'icd1' ? Math.round(this.vcmHz) : Math.round(500 / this.vcmHz);
+    const vcmOut = this.vcmOn && !this.estop;
     const obj: Record<string, unknown> = {
       t,
       ppg,
@@ -287,12 +341,18 @@ export class MockIcd001Device {
       gyr: [0, 0, 0],
       lra: [this.lra[0], this.lra[1]],
       f: this.freq,
-      vcm: [vcmOut, vcmVal],
-      auto: this.auto ? 1 : 0,
-      estop: this.estop ? 1 : 0,
     };
-    if (this.variant === 'icd1') {
+    if (this.isV0) {
+      obj.lp = this.lp;
+      obj.vhz = vcmOut ? Math.round(this.vcmHz) : 0;
+    } else {
+      obj.vcm = [vcmOut ? 1 : 0, Math.round(500 / this.vcmHz)];
+    }
+    obj.auto = this.auto ? 1 : 0;
+    obj.estop = this.estop ? 1 : 0;
+    if (this.isV0) {
       obj.ot = this.ot ? 1 : 0;
+      obj.lb = this.lowbat ? 1 : 0;
     }
     return JSON.stringify(obj);
   }
@@ -300,11 +360,16 @@ export class MockIcd001Device {
   snapshot(): MockDeviceSnapshot {
     return {
       lra: [this.lra[0], this.lra[1]],
+      lp: [
+        [this.lp[0][0], this.lp[0][1]],
+        [this.lp[1][0], this.lp[1][1]],
+      ],
       freq: this.freq,
       vcmOn: this.vcmOn,
       vcmHz: this.vcmHz,
       estop: this.estop,
       ot: this.ot,
+      lowbat: this.lowbat,
       ntc: this.ntc,
       vbat: this.vbat,
       rate: this.rate,
@@ -314,13 +379,23 @@ export class MockIcd001Device {
 
 type Timer = ReturnType<typeof setInterval>;
 
+interface Conn {
+  mtu: number;
+  timer: Timer;
+  lastStep: number;
+  lastTlm: number;
+  /** v0 receive buffer (executes on `\n`/`;`, or after 100 ms idle). */
+  rx: string;
+  rxIdle: ReturnType<typeof setTimeout> | null;
+}
+
 /** In-memory transport backed by MockIcd001Device instances. */
 export class MockIcd001Transport implements Icd001Transport {
   readonly kind = 'mock' as const;
   readonly devices: Map<string, MockIcd001Device>;
   private notifyCbs = new Set<(id: string, bytes: number[]) => void>();
   private discCbs = new Set<(id: string) => void>();
-  private connected = new Map<string, { mtu: number; timer: Timer; lastStep: number; lastTlm: number }>();
+  private connected = new Map<string, Conn>();
 
   constructor(
     devices?: MockIcd001Device[],
@@ -339,17 +414,13 @@ export class MockIcd001Transport implements Icd001Transport {
     let i = 0;
     for (const [id, d] of this.devices) {
       const kind = d.name.startsWith('ICD1-') ? 'product' : 'devboard';
-      setTimeout(
-        () =>
-          onDevice({
-            id,
-            name: d.name,
-            rssi: -48 - i * 9,
-            kind,
-            simulated: true,
-          }),
-        150 + i++ * 200,
-      );
+      const delay = 150 + i * 200;
+      const rssi = -48 - i * 9;
+      i++;
+      // Like a real active scan: adv packet (UUID only) first, then the scan
+      // response with the name.
+      setTimeout(() => onDevice({ id, name: null, rssi, kind: null, simulated: true }), delay);
+      setTimeout(() => onDevice({ id, name: d.name, rssi, kind, simulated: true }), delay + 50);
     }
   }
 
@@ -363,14 +434,9 @@ export class MockIcd001Transport implements Icd001Transport {
     await new Promise<void>(r => setTimeout(() => r(), this.opts.connectDelayMs ?? 400));
     const mtu = this.opts.mtu ?? 185; // iOS typically lands on 185
     const now = Date.now();
-    const state = {
-      mtu,
-      lastStep: now,
-      lastTlm: now,
-      timer: 0 as unknown as Timer,
-    };
-    state.timer = setInterval(() => this.tick(id), 25);
-    this.connected.set(id, state);
+    const c: Conn = { mtu, lastStep: now, lastTlm: now, timer: 0 as unknown as Timer, rx: '', rxIdle: null };
+    c.timer = setInterval(() => this.tick(id), 25);
+    this.connected.set(id, c);
     return { mtu };
   }
 
@@ -389,9 +455,11 @@ export class MockIcd001Transport implements Icd001Transport {
       return;
     }
     clearInterval(c.timer);
+    if (c.rxIdle) {
+      clearTimeout(c.rxIdle);
+    }
     this.connected.delete(id);
-    const dev = this.devices.get(id);
-    dev?.handleWrite('STOP'); // firmware: BLE disconnect -> stop all
+    this.devices.get(id)?.handleWrite('STOP'); // firmware: BLE disconnect -> stop all
     if (notify) {
       this.discCbs.forEach(cb => cb(id));
     }
@@ -402,14 +470,49 @@ export class MockIcd001Transport implements Icd001Transport {
     return encodeUtf8(dev.infoJson());
   }
 
-  async write(id: string, bytes: number[]): Promise<void> {
+  async write(id: string, bytes: number[], _withResponse: boolean, allowSplit: boolean): Promise<void> {
     const dev = this.requireConnected(id);
-    const c = this.connected.get(id);
-    if (c && bytes.length > c.mtu - 3) {
+    const c = this.connected.get(id) as Conn;
+    const max = c.mtu - 3;
+    if (bytes.length > max && !allowSplit) {
       throw new Error('write exceeds MTU');
     }
-    const replies = dev.handleWrite(decodeUtf8(bytes));
-    setTimeout(() => replies.forEach(r => this.sendLine(id, r)), 5);
+    // Deliver as ATT-sized packets, like the BLE stack would.
+    for (let i = 0; i < bytes.length; i += max) {
+      this.receive(id, dev, c, decodeUtf8(bytes.slice(i, i + max)));
+    }
+  }
+
+  private receive(id: string, dev: MockIcd001Device, c: Conn, text: string): void {
+    const reply = (lines: string[]) => setTimeout(() => lines.forEach(r => this.sendLine(id, r)), 5);
+    if (!dev.isV0) {
+      reply(dev.handleWrite(text)); // H11 v1.0: each write executed as-is
+      return;
+    }
+    c.rx += text;
+    if (c.rx.length > 256) {
+      c.rx = '';
+      reply(['ERR OVERFLOW']);
+      return;
+    }
+    const lastSep = Math.max(c.rx.lastIndexOf('\n'), c.rx.lastIndexOf(';'));
+    if (lastSep >= 0) {
+      const ready = c.rx.slice(0, lastSep + 1);
+      c.rx = c.rx.slice(lastSep + 1);
+      reply(dev.handleWrite(ready));
+    }
+    if (c.rxIdle) {
+      clearTimeout(c.rxIdle);
+      c.rxIdle = null;
+    }
+    if (c.rx.length) {
+      c.rxIdle = setTimeout(() => {
+        c.rxIdle = null;
+        const rest = c.rx;
+        c.rx = '';
+        reply(dev.handleWrite(rest));
+      }, 100);
+    }
   }
 
   onNotify(cb: (id: string, bytes: number[]) => void): () => void {

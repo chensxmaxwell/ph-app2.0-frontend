@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals
 
 import { Icd001Client } from '../../src/services/icd001/client';
 import { MockIcd001Device, MockIcd001Transport } from '../../src/services/icd001/mock';
+import { encodeCommand } from '../../src/services/icd001/protocol';
+import { encodeUtf8 } from '../../src/services/icd001/utf8';
 
 const tick = async (ms: number) => {
   for (let i = 0; i < ms; i += 10) {
@@ -169,6 +171,150 @@ describe('Icd001Client + simulator', () => {
     dev.rate = 0;
     await tick(4500);
     expect(client.getState().lockReasons).toContain('stale');
+    client.destroy();
+  });
+  it('ERR ESTOP (silent device-side estop) maps to a lock reason; value not stored', async () => {
+    const { dev, client, id } = setup('icd1');
+    await connect(client, id, dev.name);
+    dev.rate = 0; // no telemetry to reveal the state; only the ERR does
+    dev.estop = true;
+    expect(client.setLra('B', 55)).toBe(true);
+    await tick(100);
+    const s = client.getState();
+    expect(s.lastSafetyErr?.reason).toBe('ESTOP');
+    expect(s.lockReasons).toContain('estop');
+    expect(dev.snapshot().lra).toEqual([0, 0]);
+    expect(client.setLra('B', 55)).toBe(false);
+    client.destroy();
+  });
+
+  it('ERR OVERTEMP / ERR LOWBAT map to lock reasons', async () => {
+    for (const [flag, reason] of [
+      ['ot', 'overtemp'],
+      ['lowbat', 'lowbat'],
+    ] as const) {
+      const { dev, client, id } = setup('icd1');
+      await connect(client, id, dev.name);
+      dev.rate = 0;
+      // hold the latch inside its hysteresis band so the sim does not clear it
+      dev.ntcOverride = 40;
+      dev.vbatOverride = 3.5;
+      dev[flag] = true;
+      client.setVcmHz(20);
+      await tick(100);
+      expect(client.getState().lockReasons).toContain(reason);
+      expect(dev.snapshot().vcmOn).toBe(false);
+      client.destroy();
+    }
+  });
+
+  it('firmware rejection order is ESTOP > OVERTEMP > LOWBAT; STOP/RATE/ESTOP 0 always accepted', () => {
+    const d = new MockIcd001Device('icd1', 'ICD1-X');
+    d.estop = true;
+    d.ot = true;
+    d.lowbat = true;
+    expect(d.handleWrite('LRA 0 10\n')).toEqual(['ERR ESTOP']);
+    expect(d.handleWrite('LPULSE 0 10 100 100\n')).toEqual(['ERR ESTOP']);
+    expect(d.handleWrite('STOP\nRATE 5\nPING\n')).toEqual(['OK STOP', 'OK RATE 5', 'OK PONG']);
+    expect(d.handleWrite('ESTOP 0\n')).toEqual(['OK ESTOP 0']);
+    expect(d.handleWrite('VHZ 20\n')).toEqual(['ERR OVERTEMP']);
+    d.ot = false;
+    expect(d.handleWrite('VCM 1 50\n')).toEqual(['ERR LOWBAT']);
+    expect(d.lra).toEqual([0, 0]);
+  });
+
+  it('low battery: EVT LOWBAT 1 below 3.40 V, released by EVT LOWBAT 0 above 3.60 V (lb in TLM)', async () => {
+    const { dev, client, id } = setup('icd1');
+    await connect(client, id, dev.name);
+    dev.vbatOverride = 3.35;
+    await tick(300);
+    expect(client.getState().lowBattery).toBe(true);
+    expect(client.getState().tlm?.lb).toBe(true);
+    dev.vbatOverride = 3.5; // inside hysteresis band: still locked
+    await tick(300);
+    expect(client.getState().lowBattery).toBe(true);
+    dev.vbatOverride = 3.7;
+    await tick(300);
+    expect(client.getState().lowBattery).toBe(false);
+    expect(client.getState().log.some(l => l.includes('EVT LOWBAT 0'))).toBe(true);
+    client.destroy();
+  });
+
+  it('legacy board: app-side low-battery hysteresis on vbat (no lb field)', async () => {
+    const { dev, client, id } = setup('h11');
+    await connect(client, id, dev.name);
+    dev.vbatOverride = 3.3;
+    await tick(300);
+    expect(client.getState().lockReasons).toContain('lowbat');
+    dev.vbatOverride = 3.5;
+    await tick(300);
+    expect(client.getState().lowBattery).toBe(true);
+    dev.vbatOverride = 3.65;
+    await tick(300);
+    expect(client.getState().lowBattery).toBe(false);
+    client.destroy();
+  });
+
+  it('LPULSE on v0 (split across 20-byte writes at MTU 23), LRA cancels rhythm; legacy refuses', async () => {
+    const { dev, client, id } = setup('icd1', 23);
+    await connect(client, id, dev.name);
+    expect(client.setLpulse('ALL', 100, 2000, 2000)).toBe(true);
+    await tick(300);
+    expect(dev.commandLog).toContain('LPULSE BOTH 100 2000 2000');
+    expect(client.getState().tlm?.lp).toEqual([
+      [2000, 2000],
+      [2000, 2000],
+    ]);
+    client.setLra('B', 40);
+    await tick(300);
+    expect(dev.snapshot().lp).toEqual([
+      [2000, 2000],
+      [0, 0],
+    ]);
+    expect(dev.snapshot().lra).toEqual([100, 40]);
+    client.destroy();
+
+    const legacy = setup('h11');
+    await connect(legacy.client, legacy.id, legacy.dev.name);
+    expect(legacy.client.setLpulse('A', 50, 300, 300)).toBe(false);
+    legacy.client.destroy();
+  });
+
+  it('v0 rx buffering: executes on \\n, idle 100 ms flush, 256-byte overflow', async () => {
+    const { dev, transport, client, id } = setup('icd1', 185);
+    await connect(client, id, dev.name);
+    const lines: string[] = [];
+    transport.onNotify((_, b) => lines.push(String.fromCharCode(...b)));
+    await transport.write(id, encodeUtf8('LRA 0 '), false, true);
+    await transport.write(id, encodeUtf8('33\n'), false, true);
+    await tick(20);
+    expect(dev.lra[0]).toBe(33);
+    await transport.write(id, encodeUtf8('LRA 1 44'), false, true); // no terminator
+    await tick(50);
+    expect(dev.lra[1]).toBe(0);
+    await tick(100);
+    expect(dev.lra[1]).toBe(44);
+    await transport.write(id, encodeUtf8('X'.repeat(180)), false, true);
+    await transport.write(id, encodeUtf8('X'.repeat(100)), false, true);
+    await tick(20);
+    expect(lines.join('')).toContain('ERR OVERFLOW');
+    client.destroy();
+  });
+
+  it('client writes are \\n-terminated', async () => {
+    const { dev, transport, client, id } = setup('icd1');
+    const writes: number[][] = [];
+    const orig = transport.write.bind(transport);
+    transport.write = async (i, b, r, s) => {
+      writes.push(b);
+      return orig(i, b, r, s);
+    };
+    await connect(client, id, dev.name);
+    client.setLra('A', 12);
+    await tick(200);
+    expect(writes.length).toBeGreaterThan(0);
+    writes.forEach(w => expect(w[w.length - 1]).toBe(0x0a));
+    expect(writes).toContainEqual(encodeCommand('LRA 0 12'));
     client.destroy();
   });
 });

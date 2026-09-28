@@ -28,8 +28,11 @@ export interface Icd001Transport {
   disconnect(id: string): Promise<void>;
   /** Read INFO characteristic raw bytes. */
   readInfo(id: string): Promise<number[]>;
-  /** Write one command (already UTF-8 encoded) to CMD. */
-  write(id: string, bytes: number[], withResponse: boolean): Promise<void>;
+  /**
+   * Write one command (UTF-8, `\n`-terminated) to CMD. `allowSplit` = the
+   * firmware buffers until `\n` (v0), so the bytes may span several ATT writes.
+   */
+  write(id: string, bytes: number[], withResponse: boolean, allowSplit: boolean): Promise<void>;
   onNotify(cb: (id: string, bytes: number[]) => void): () => void;
   onDisconnected(cb: (id: string) => void): () => void;
 }

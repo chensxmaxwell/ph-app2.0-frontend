@@ -2,6 +2,10 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   ICD001_MIN_WRITE_BYTES,
+  acceptScanResult,
+  encodeCommand,
+  formatLpulse,
+  safetyErrOf,
   LineAssembler,
   VCM_LEGACY_HZ,
   batteryPercent,
@@ -25,22 +29,19 @@ const LEGACY_TLM =
   '{"t":12345,"ppg":[[51000,1,72],[0,0,0],[300,0,0]],"fsr":[1,2,3,4,5],"hall":-3,"ntc":-99.0,"vbat":3.95,' +
   '"acc":[0.01,-0.02,1.00],"gyr":[0,1,2],"lra":[40,0],"f":170,"vcm":[1,50],"auto":0,"estop":0}';
 
+// §7.3 / §7.7: v0 frame has vhz (Hz, 0 = off), lp, ot, lb and no vcm.
 const V0_TLM =
   '{"t":99,"ppg":[[1,1,70],[1,1,0],[1,0,0],[1,1,66]],"fsr":[0,0,0,0,0],"hall":0,"ntc":36.2,"vbat":3.38,' +
-  '"acc":[0,0,1],"gyr":[0,0,0],"lra":[10,20],"f":180,"vcm":[1,35],"auto":0,"estop":1,"ot":1}';
+  '"acc":[0,0,1],"gyr":[0,0,0],"lra":[10,20],"lp":[[300,200],[0,0]],"f":180,"vhz":35,"auto":0,"estop":1,' +
+  '"ot":1,"lb":1}';
 
 const LEGACY_INFO = '{"fw":"h11-demo-ble","ver":"1.0","mux":1,"adsA":1,"adsB":0,"imu":1,"ppg":[1,0,1]}';
-const V0_INFO = JSON.stringify({
-  prod: 'ICD-001',
-  hw: 'H1.1',
-  fw: 'icd001-0.1',
-  ppg: [1, 1, 1, 1],
-  ch: {
-    lra: { A: '上翼', B: '下翼' },
-    vcm: { min: 2, max: 50 },
-    ppg: ['L', 'R', 'M', '跳蛋'],
-  },
-});
+// §7.2 locked schema
+const V0_INFO =
+  '{"proto":"ICD001-0","prod":"ICD-001","hw":"H1.1","fw":"icd001-0.1","mux":1,"adsA":1,"adsB":1,"imu":1,' +
+  '"ppg":[1,1,1,1],"ch":{"lra":{"A":"上翼","B":"下翼"},"freq":{"min":100,"max":300,"def":170},' +
+  '"vhz":{"min":2,"max":50,"def":10},"lpulse":{"min":50,"max":2000},"ppg":["J13","J22","J23","EGG"],' +
+  '"egg":{"ppg":3,"act":0}}}';
 
 describe('device name filter', () => {
   it('accepts ICD1- and H11- prefixes only', () => {
@@ -50,6 +51,14 @@ describe('device name filter', () => {
     expect(classifyDeviceName('ICD2-0000')).toBeNull();
     expect(classifyDeviceName('Pleasure House')).toBeNull();
     expect(classifyDeviceName(undefined)).toBeNull();
+  });
+
+  it('scan: unnamed (adv packet, name pending in scan response) listed; foreign names dropped', () => {
+    expect(acceptScanResult(null)).toBe(true);
+    expect(acceptScanResult('')).toBe(true);
+    expect(acceptScanResult('ICD1-5A3C')).toBe(true);
+    expect(acceptScanResult('H11-91B1')).toBe(true);
+    expect(acceptScanResult('Mi Band')).toBe(false);
   });
 });
 
@@ -88,48 +97,68 @@ describe('LineAssembler', () => {
 });
 
 describe('INFO parsing', () => {
-  it('legacy h11-demo-ble INFO -> fallback modules, legacy VCM 2–20 Hz', () => {
+  it('no proto => H11 v1.0 legacy: fixed A/B wings, VCM 2–20 Hz, no LPULSE', () => {
     const i = parseInfo(LEGACY_INFO)!;
+    expect(i.proto).toBeNull();
+    expect(i.legacy).toBe(true);
     expect(i.fw).toBe('h11-demo-ble');
-    expect(i.prod).toBeNull();
-    expect(i.hasChannelTable).toBe(false);
-    expect(i.vcmUnits).toBe('halfMs');
     expect(i.modules.wings!.groups.map(g => g.id)).toEqual(['A', 'B']);
-    expect(i.modules.vcm).toEqual({
-      minHz: 2,
-      maxHz: 20,
-      defaultHz: 10,
-      command: 'VCM',
-    });
+    expect(i.modules.wings!.lpulse).toBeNull();
+    expect(i.modules.vcm).toEqual({ minHz: 2, maxHz: 20, defaultHz: 10, command: 'VCM' });
     expect(i.modules.ppg.map(p => p.present)).toEqual([true, false, true]);
     expect(i.modules.egg).toBeNull();
     expect(i.selfTest.adsB).toBe(0);
   });
 
-  it('v0 INFO -> modules from ch, VHZ with reported range, egg sensor only', () => {
+  it('locked v0 schema: modules from ch (lra names, freq, vhz, lpulse, ppg names, egg)', () => {
     const i = parseInfo(V0_INFO)!;
+    expect(i.proto).toBe('ICD001-0');
+    expect(i.legacy).toBe(false);
     expect(i.prod).toBe('ICD-001');
-    expect(i.hasChannelTable).toBe(true);
-    expect(i.vcmUnits).toBe('hz');
-    expect(i.modules.wings!.groups).toEqual([
-      { id: 'A', index: 0, label: '上翼' },
-      { id: 'B', index: 1, label: '下翼' },
-    ]);
-    expect(i.modules.vcm).toEqual({
-      minHz: 2,
-      maxHz: 50,
-      defaultHz: 10,
-      command: 'VHZ',
+    expect(i.modules.wings).toEqual({
+      groups: [
+        { id: 'A', index: 0, label: '上翼' },
+        { id: 'B', index: 1, label: '下翼' },
+      ],
+      freq: { min: 100, max: 300, def: 170 },
+      lpulse: { minMs: 50, maxMs: 2000 },
     });
-    expect(i.modules.ppg).toHaveLength(4);
+    expect(i.modules.vcm).toEqual({ minHz: 2, maxHz: 50, defaultHz: 10, command: 'VHZ' });
+    expect(i.modules.ppg.map(p => p.label)).toEqual(['J13', 'J22', 'J23', 'EGG']);
+    expect(i.modules.ppg.every(p => p.present)).toBe(true);
     expect(i.modules.egg).toEqual({ ppgIndex: 3, hasActuator: false });
+    expect(i.selfTest).not.toHaveProperty('proto');
   });
 
-  it('ch without vcm range falls back to legacy VCM; ch.vcm=0 hides the module', () => {
-    expect(parseInfo({ fw: 'x', ch: { lra: 2 } })!.modules.vcm!.command).toBe('VCM');
-    expect(parseInfo({ fw: 'x', ch: { vcm: 0 } })!.modules.vcm).toBeNull();
-    expect(parseInfo({ fw: 'x', ch: { lra: ['only A'] } })!.modules.wings!.groups).toHaveLength(1);
-    expect(parseInfo({ fw: 'x', ch: { lra: 0 } })!.modules.wings).toBeNull();
+  it('H1.1 board on v0: ppg array length = real channel count (3), no egg', () => {
+    const raw = JSON.parse(V0_INFO);
+    raw.ppg = [1, 1, 1];
+    raw.ch.ppg = ['J13', 'J22', 'J23'];
+    delete raw.ch.egg;
+    const i = parseInfo(raw)!;
+    expect(i.modules.ppg).toHaveLength(3);
+    expect(i.modules.egg).toBeNull();
+  });
+
+  it('ch fields drive modules: missing group, missing vhz, narrower ranges', () => {
+    const raw = JSON.parse(V0_INFO);
+    raw.ch.lra = { A: '上翼' };
+    delete raw.ch.vhz;
+    raw.ch.lpulse = { min: 100, max: 1000 };
+    const i = parseInfo(raw)!;
+    expect(i.modules.wings!.groups.map(g => g.id)).toEqual(['A']);
+    expect(i.modules.wings!.lpulse).toEqual({ minMs: 100, maxMs: 1000 });
+    expect(i.modules.vcm).toBeNull();
+    raw.ch.vhz = { min: 10, max: 50 };
+    expect(parseInfo(raw)!.modules.vcm).toEqual({ minHz: 10, maxHz: 50, defaultHz: 10, command: 'VHZ' });
+  });
+
+  it('old-style vcm key in ch is ignored (renamed vhz); ch without proto is legacy', () => {
+    expect(parseInfo({ fw: 'x', ch: { vhz: { min: 2, max: 50 } } })!.legacy).toBe(true);
+    expect(parseInfo({ fw: 'x', ch: { vhz: { min: 2, max: 50 } } })!.modules.vcm!.command).toBe('VCM');
+    expect(
+      parseInfo({ proto: 'ICD001-0', fw: 'x', ch: { vcm: { min: 2, max: 50 } } })!.modules.vcm,
+    ).toBeNull();
   });
 
   it('rejects garbage', () => {
@@ -139,43 +168,60 @@ describe('INFO parsing', () => {
   });
 });
 
-describe('TLM parsing', () => {
-  it('legacy frame: vcm [on,halfMs] -> Hz, ntc -99 -> null, hr 0 -> null', () => {
-    const t = parseTelemetry(JSON.parse(LEGACY_TLM), 'halfMs');
+describe('TLM parsing (format by field presence)', () => {
+  it('legacy frame (only vcm): [on,halfMs] -> Hz, ntc -99 -> null, hr 0 -> null, no lb', () => {
+    const t = parseTelemetry(JSON.parse(LEGACY_TLM));
+    expect(t.format).toBe('legacy');
     expect(t.vcm).toEqual({ on: true, hz: 10 });
     expect(t.ntcC).toBeNull();
     expect(t.ppg[0]).toEqual({ ir: 51000, contact: true, hr: 72 });
     expect(t.ppg[1].hr).toBeNull();
     expect(t.lra).toEqual([40, 0]);
+    expect(t.lp).toEqual([
+      [0, 0],
+      [0, 0],
+    ]);
     expect(t.lraFreqHz).toBe(170);
     expect(t.vbat).toBe(3.95);
     expect(t.batteryPct).toBe(64);
     expect(t.ot).toBe(false);
+    expect(t.lb).toBeNull();
     expect(t.estop).toBe(false);
   });
 
-  it('v0 frame: vcm [on,hz], ot, estop, 4 PPG', () => {
-    const t = parseTelemetry(JSON.parse(V0_TLM), 'hz');
+  it('v0 frame (vhz): Hz, lp, ot, lb, estop, 4 PPG', () => {
+    const t = parseTelemetry(JSON.parse(V0_TLM));
+    expect(t.format).toBe('v0');
     expect(t.vcm).toEqual({ on: true, hz: 35 });
+    expect(t.lp).toEqual([
+      [300, 200],
+      [0, 0],
+    ]);
     expect(t.ot).toBe(true);
+    expect(t.lb).toBe(true);
     expect(t.estop).toBe(true);
     expect(t.ppg).toHaveLength(4);
     expect(t.ntcC).toBe(36.2);
   });
 
-  it('same array read with the wrong units would differ, units come from INFO', () => {
-    expect(parseTelemetry({ vcm: [1, 50] }, 'hz').vcm.hz).toBe(50);
-    expect(parseTelemetry({ vcm: [1, 50] }, 'halfMs').vcm.hz).toBe(10);
-    expect(parseTelemetry({ vcm: [1, 0] }, 'hz').vcm.on).toBe(false);
+  it('vhz 0 = off; vhz wins over a stray vcm', () => {
+    expect(parseTelemetry({ vhz: 0 }).vcm).toEqual({ on: false, hz: 0 });
+    expect(parseTelemetry({ vhz: 40, vcm: [1, 50] }).vcm).toEqual({ on: true, hz: 40 });
+    expect(parseTelemetry({ vcm: [1, 50] }).vcm.hz).toBe(10);
+    expect(parseTelemetry({ vcm: [0, 25] }).vcm).toEqual({ on: false, hz: 20 });
   });
 
-  it('tolerates missing / malformed fields', () => {
-    const t = parseTelemetry({ t: 1, ppg: 'x', lra: [5], vbat: 0.02 }, 'hz');
+  it('tolerates missing / malformed fields; vbat < 1.0 V = not measured', () => {
+    const t = parseTelemetry({ t: 1, ppg: 'x', lra: [5], vbat: 0.02, lp: 'x' });
     expect(t.lra).toEqual([5, 0]);
     expect(t.ppg).toEqual([]);
     expect(t.vbat).toBeNull();
     expect(t.batteryPct).toBeNull();
     expect(t.vcm).toEqual({ on: false, hz: null });
+    expect(t.lp).toEqual([
+      [0, 0],
+      [0, 0],
+    ]);
   });
 
   it('battery linear 3.5–4.2 V clamped', () => {
@@ -189,28 +235,26 @@ describe('TLM parsing', () => {
 
 describe('parseLine', () => {
   it('classifies all line types', () => {
-    expect(parseLine(LEGACY_TLM, 'halfMs').kind).toBe('tlm');
-    expect(parseLine(LEGACY_INFO, 'halfMs').kind).toBe('info');
-    expect(parseLine('OK LRA 40 0', 'hz')).toEqual({
-      kind: 'ok',
-      text: 'OK LRA 40 0',
-      args: ['LRA', '40', '0'],
-    });
-    expect(parseLine('ERR ESTOP', 'hz')).toMatchObject({
-      kind: 'err',
-      args: ['ESTOP'],
-    });
-    expect(parseLine('EVT OVERTEMP 1', 'hz')).toMatchObject({
-      kind: 'evt',
-      name: 'OVERTEMP',
-      args: ['1'],
-    });
-    expect(parseLine('EVT BLE_DISCONNECT STOP', 'hz')).toMatchObject({
-      kind: 'evt',
-      name: 'BLE_DISCONNECT',
-    });
-    expect(parseLine('{broken', 'hz').kind).toBe('unknown');
-    expect(parseLine('hello', 'hz').kind).toBe('unknown');
+    expect(parseLine(LEGACY_TLM).kind).toBe('tlm');
+    expect(parseLine(V0_TLM).kind).toBe('tlm');
+    expect(parseLine(LEGACY_INFO).kind).toBe('info');
+    expect(parseLine(V0_INFO).kind).toBe('info');
+    expect(parseLine('OK LRA 40 0')).toEqual({ kind: 'ok', text: 'OK LRA 40 0', args: ['LRA', '40', '0'] });
+    expect(parseLine('ERR ESTOP')).toMatchObject({ kind: 'err', args: ['ESTOP'] });
+    expect(parseLine('EVT OVERTEMP 1')).toMatchObject({ kind: 'evt', name: 'OVERTEMP', args: ['1'] });
+    expect(parseLine('EVT LOWBAT 0')).toMatchObject({ kind: 'evt', name: 'LOWBAT', args: ['0'] });
+    expect(parseLine('EVT BLE_DISCONNECT STOP')).toMatchObject({ kind: 'evt', name: 'BLE_DISCONNECT' });
+    expect(parseLine('{broken').kind).toBe('unknown');
+    expect(parseLine('hello').kind).toBe('unknown');
+  });
+
+  it('maps firmware safety rejections', () => {
+    expect(safetyErrOf(parseLine('ERR ESTOP'))).toBe('ESTOP');
+    expect(safetyErrOf(parseLine('ERR OVERTEMP'))).toBe('OVERTEMP');
+    expect(safetyErrOf(parseLine('ERR LOWBAT'))).toBe('LOWBAT');
+    expect(safetyErrOf(parseLine('ERR OVERFLOW'))).toBeNull();
+    expect(safetyErrOf(parseLine('ERR FREQ 100-300'))).toBeNull();
+    expect(safetyErrOf(parseLine('OK ESTOP 1'))).toBeNull();
   });
 });
 
@@ -238,7 +282,20 @@ describe('command formatting', () => {
     expect(formatRate(10)).toBe('RATE 10');
   });
 
-  it('every command fits in a single 20-byte write', () => {
+  it('LPULSE t v on off, 0/1/BOTH targets, clamps to INFO lpulse range', () => {
+    expect(formatLpulse('A', 60, 300, 200)).toBe('LPULSE 0 60 300 200');
+    expect(formatLpulse('B', 101, 10, 5000)).toBe('LPULSE 1 100 50 2000');
+    expect(formatLpulse('ALL', 50, 500, 500)).toBe('LPULSE BOTH 50 500 500');
+    expect(formatLpulse('A', 50, 60, 1500, { minMs: 100, maxMs: 1000 })).toBe('LPULSE 0 50 100 1000');
+  });
+
+  it('every command goes out terminated by exactly one \\n', () => {
+    expect(encodeCommand('STOP')).toEqual(encodeUtf8('STOP\n'));
+    expect(encodeCommand('LRA 0 5\n')).toEqual(encodeUtf8('LRA 0 5\n'));
+    expect(encodeCommand('VHZ 10;')).toEqual(encodeUtf8('VHZ 10\n'));
+  });
+
+  it('legacy-capable commands fit in a single 20-byte write including \\n', () => {
     const cmds = [
       formatLra('ALL', 100),
       formatFreq(300),
@@ -247,7 +304,7 @@ describe('command formatting', () => {
       formatEstop(true),
       formatRate(20),
     ];
-    cmds.forEach(c => expect(encodeUtf8(c).length).toBeLessThanOrEqual(ICD001_MIN_WRITE_BYTES));
+    cmds.forEach(c => expect(encodeCommand(c).length).toBeLessThanOrEqual(ICD001_MIN_WRITE_BYTES));
   });
 });
 

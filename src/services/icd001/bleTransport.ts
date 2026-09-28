@@ -2,7 +2,7 @@
  * Real BLE transport on react-native-ble-manager (already a dependency, v11).
  */
 import { NativeEventEmitter, NativeModules, PermissionsAndroid, Platform } from 'react-native';
-import BleManager from 'react-native-ble-manager';
+import BleManager, { BleScanMode } from 'react-native-ble-manager';
 
 import {
   ICD001_CMD_UUID,
@@ -11,6 +11,7 @@ import {
   ICD001_REQUESTED_MTU,
   ICD001_SERVICE_UUID,
   ICD001_TLM_UUID,
+  acceptScanResult,
   classifyDeviceName,
 } from './protocol';
 
@@ -76,21 +77,23 @@ export class BleIcd001Transport implements Icd001Transport {
     if (!this.scanCb) {
       return;
     }
+    // OS already filtered on the service UUID; the name comes from the scan
+    // response (allowDuplicates=true re-reports the device once it arrives).
     const name = p.advertising?.localName || p.name || null;
-    const kind = classifyDeviceName(name);
-    const hasSvc = (p.advertising?.serviceUUIDs || []).some(u => sameUuid(u, ICD001_SERVICE_UUID));
-    // Name prefix ICD1- / H11- is the filter; a device that only advertises the
-    // service UUID (name still in the pending scan response) is also accepted.
-    if (!kind && !(hasSvc && !name)) {
+    if (!acceptScanResult(name)) {
       return;
     }
-    this.scanCb({ id: p.id, name, rssi: p.rssi ?? null, kind });
+    this.scanCb({ id: p.id, name, rssi: p.rssi ?? null, kind: classifyDeviceName(name) });
   }
 
   async startScan(onDevice: (d: DiscoveredDevice) => void, timeoutMs: number): Promise<void> {
     this.scanCb = onDevice;
-    // Firmware advertises the service UUID (name is in the scan response).
-    await BleManager.scan([ICD001_SERVICE_UUID], Math.max(1, Math.round(timeoutMs / 1000)), true);
+    // Filter by service UUID (only thing in the adv packet). Scanning is active:
+    // Android ScanSettings and iOS foreground scans request the scan response,
+    // which carries the ICD1-/H11- name. LowLatency so the name shows quickly.
+    await BleManager.scan([ICD001_SERVICE_UUID], Math.max(1, Math.round(timeoutMs / 1000)), true, {
+      scanMode: BleScanMode.LowLatency,
+    });
   }
 
   async stopScan(): Promise<void> {
@@ -128,10 +131,10 @@ export class BleIcd001Transport implements Icd001Transport {
     return BleManager.read(id, ICD001_SERVICE_UUID, ICD001_INFO_UUID);
   }
 
-  async write(id: string, bytes: number[], withResponse: boolean): Promise<void> {
+  async write(id: string, bytes: number[], withResponse: boolean, allowSplit: boolean): Promise<void> {
     const max = Math.max(ICD001_MIN_WRITE_BYTES, (this.mtus.get(id) ?? 23) - 3);
-    if (bytes.length > max) {
-      // Firmware would treat a split write as two commands; refuse instead.
+    if (bytes.length > max && !allowSplit) {
+      // H11 v1.0 would treat a split write as two commands; refuse instead.
       throw new Error(`command too long for one BLE write (${bytes.length} > ${max})`);
     }
     if (withResponse) {

@@ -7,7 +7,7 @@
  * /workspace/firmware/h11-demo-ble/PROTOCOL.md (H1.1 v1.0, what the dev board
  * H11-91B1 runs today).
  */
-import { decodeUtf8 } from './utf8';
+import { decodeUtf8, encodeUtf8 } from './utf8';
 
 // ---------------------------------------------------------------- constants
 
@@ -23,7 +23,11 @@ export const ICD001_NAME_PREFIXES = {
 } as const;
 
 export const ICD001_REQUESTED_MTU = 247;
-/** ATT payload with the default MTU of 23. Every command must fit in one write. */
+/**
+ * ATT payload with the default MTU of 23. H11 v1.0 firmware executes whatever
+ * one write contains, so legacy commands must fit in one write; v0 buffers
+ * until `\n` (§7.4) so longer commands (LPULSE) may span writes.
+ */
 export const ICD001_MIN_WRITE_BYTES = 20;
 
 /** Telemetry rate the app asks for (firmware allows 0–20 Hz, default 5). */
@@ -42,8 +46,9 @@ export const VCM_DEFAULT_HZ = 10;
 /** Battery (PROTOCOL-ICD001 §4, rough linear estimate). */
 export const VBAT_FULL = 4.2;
 export const VBAT_EMPTY = 3.5;
-/** Firmware low-battery cut (§5). The app locks controls at the same level. */
+/** Firmware low-battery cut: EVT LOWBAT 1 below 3.40 V, EVT LOWBAT 0 above 3.60 V (§7.7). */
 export const VBAT_LOW_CUT = 3.4;
+export const VBAT_LOW_RELEASE = 3.6;
 /** Below this we assume vbat is not wired / not measured (e.g. dev board on USB). */
 export const VBAT_VALID_MIN = 1.0;
 
@@ -61,6 +66,16 @@ export function classifyDeviceName(name?: string | null): DeviceKind | null {
     return 'devboard';
   }
   return null;
+}
+
+/**
+ * Scan results come from an OS-level service-UUID filter with active scanning
+ * (§7.7: the advertising packet has only the UUID, the name is in the scan
+ * response). A result without a name yet is listed (name arrives with the scan
+ * response); a named result must carry the ICD1- / H11- prefix.
+ */
+export function acceptScanResult(name?: string | null): boolean {
+  return !name || classifyDeviceName(name) !== null;
 }
 
 // ---------------------------------------------------------------- reassembly
@@ -150,6 +165,9 @@ export function clamp(v: number, min: number, max: number): number {
 
 // ---------------------------------------------------------------- INFO
 
+/** Protocol id in v0 INFO (§7.2). INFO without `proto` = H11 v1.0 legacy. */
+export const ICD001_PROTO_V0 = 'ICD001-0';
+
 export type LraGroupId = 'A' | 'B';
 
 export interface LraGroup {
@@ -163,8 +181,14 @@ export interface VcmCaps {
   minHz: number;
   maxHz: number;
   defaultHz: number;
-  /** 'VHZ' = v0 `VHZ hz`; 'VCM' = legacy `VCM on halfMs` (h11-demo-ble today). */
+  /** 'VHZ' = v0 `VHZ hz`; 'VCM' = legacy `VCM on halfMs` (H11 v1.0). */
   command: 'VHZ' | 'VCM';
+}
+
+/** Wing rhythm (`LPULSE`), v0 only. */
+export interface LpulseCaps {
+  minMs: number;
+  maxMs: number;
 }
 
 export interface PpgChannel {
@@ -175,7 +199,7 @@ export interface PpgChannel {
 
 export interface EggCaps {
   ppgIndex: number;
-  /** BOM has no actuator in the egg (§2 待拍板); UI greys out control when false. */
+  /** `egg.act` 0 = no actuator in the egg; UI greys out control. */
   hasActuator: boolean;
 }
 
@@ -183,6 +207,8 @@ export interface DeviceModules {
   wings: {
     groups: LraGroup[];
     freq: { min: number; max: number; def: number };
+    /** null on legacy firmware (no LPULSE). */
+    lpulse: LpulseCaps | null;
   } | null;
   vcm: VcmCaps | null;
   ppg: PpgChannel[];
@@ -190,98 +216,78 @@ export interface DeviceModules {
 }
 
 export interface DeviceInfo {
+  /** e.g. "ICD001-0"; null = H11 v1.0 legacy firmware. */
+  proto: string | null;
+  legacy: boolean;
   prod: string | null;
   hw: string | null;
   fw: string | null;
   ver: string | null;
-  /** true when INFO carries a `ch` table (v0), false for legacy h11-demo-ble INFO. */
-  hasChannelTable: boolean;
-  /** Units of TLM `vcm[1]`: v0 reports Hz, legacy reports half-period ms. */
-  vcmUnits: 'hz' | 'halfMs';
   modules: DeviceModules;
   selfTest: Record<string, unknown>;
   raw: Json;
 }
 
 const DEFAULT_LRA_LABELS: Record<LraGroupId, string> = { A: 'A 组', B: 'B 组' };
+export const LPULSE_FALLBACK: LpulseCaps = { minMs: 50, maxMs: 2000 };
 
-function parseLraGroups(v: unknown): LraGroup[] | null {
-  if (v === undefined) {
-    return null;
-  }
-  if (v === 0 || v === false || v === null) {
+/** ch.lra is locked as {"A":"上翼","B":"下翼"}; a group missing from the object is absent. */
+function parseLraGroups(v: unknown): LraGroup[] {
+  const ids: LraGroupId[] = ['A', 'B'];
+  if (!isObj(v)) {
     return [];
   }
-  const ids: LraGroupId[] = ['A', 'B'];
-  const mk = (i: number, label: string | null): LraGroup => ({
-    id: ids[i],
-    index: i as 0 | 1,
-    label: label || DEFAULT_LRA_LABELS[ids[i]],
+  const out: LraGroup[] = [];
+  ids.forEach((id, i) => {
+    const e = v[id];
+    if (e === undefined || e === null || e === 0 || e === false) {
+      return;
+    }
+    out.push({ id, index: i as 0 | 1, label: str(e) || DEFAULT_LRA_LABELS[id] });
   });
-  if (typeof v === 'number') {
-    return ids.slice(0, clamp(Math.floor(v), 0, 2)).map((_, i) => mk(i, null));
-  }
-  if (Array.isArray(v)) {
-    return v.slice(0, 2).map((e, i) => {
-      if (isObj(e)) {
-        return mk(i, str(e.name) ?? str(e.label) ?? str(e.loc));
-      }
-      return mk(i, str(e));
-    });
-  }
-  if (isObj(v)) {
-    const out: LraGroup[] = [];
-    ids.forEach((id, i) => {
-      const e = v[id] ?? v[id.toLowerCase()] ?? v[String(i)];
-      if (e === undefined || e === 0 || e === false) {
-        return;
-      }
-      out.push(mk(i, isObj(e) ? str(e.name) ?? str(e.label) ?? str(e.loc) : str(e)));
-    });
-    return out;
-  }
-  return null;
+  return out;
 }
 
-function parseVcmRange(v: unknown): { min: number; max: number; def: number | null } | null | 'absent' {
-  if (v === undefined) {
-    return 'absent';
-  }
+function parseRange(v: unknown): { min: number; max: number; def: number | null } | null {
   if (!isObj(v)) {
-    return v === 0 || v === false ? null : 'absent';
+    return null;
   }
   const min = num(v.min);
   const max = num(v.max);
   if (min === null || max === null || min <= 0 || max < min) {
-    return 'absent';
+    return null;
   }
-  return { min, max, def: num(v.def ?? v.default) };
+  return { min, max, def: num(v.def) };
 }
 
-function parsePpg(v: unknown, selfTestPpg: unknown): PpgChannel[] {
+function parsePpg(names: unknown, selfTestPpg: unknown): PpgChannel[] {
   const present = Array.isArray(selfTestPpg) ? selfTestPpg.map(flag) : [];
   const mk = (index: number, label: string | null): PpgChannel => ({
     index,
     label: label || `PPG${index}`,
     present: index < present.length ? present[index] : null,
   });
-  if (typeof v === 'number') {
-    return Array.from({ length: Math.max(0, Math.floor(v)) }, (_, i) => mk(i, null));
-  }
-  if (Array.isArray(v)) {
-    return v.map((e, i) => (isObj(e) ? mk(i, str(e.name) ?? str(e.label) ?? str(e.loc)) : mk(i, str(e))));
+  // v0: ch.ppg is an array of names; its length is the real channel count.
+  if (Array.isArray(names)) {
+    return names.map((e, i) => mk(i, str(e)));
   }
   return present.map((_, i) => mk(i, null));
 }
 
+const LEGACY_VCM: VcmCaps = {
+  minHz: VCM_LEGACY_HZ.min,
+  maxHz: VCM_LEGACY_HZ.max,
+  defaultHz: VCM_DEFAULT_HZ,
+  command: 'VCM',
+};
+
 /**
- * Parse the INFO characteristic / `INFO` reply.
- *
- * v0 INFO (not yet in firmware): {"prod":"ICD-001","hw":"H1.1","fw":"…","ch":{…}}
- * with `ch.vcm = {"min":2,"max":50}`. The exact shape of the rest of `ch` is not
- * pinned down by the protocol draft, so this parser is tolerant (see
- * parseLraGroups / parsePpg) and falls back to the legacy H1.1 layout when `ch`
- * is missing.
+ * Parse the INFO characteristic / `INFO` reply (schema locked in §7.2):
+ * {"proto":"ICD001-0","prod":"ICD-001","hw":"H1.1","fw":"…",<self-test>,
+ *  "ch":{"lra":{"A":"上翼","B":"下翼"},"freq":{min,max,def},"vhz":{min,max,def},
+ *        "lpulse":{min,max},"ppg":["J13","J22","J23","EGG"],"egg":{"ppg":3,"act":0}}}
+ * No `proto` => H11 v1.0 legacy (h11-demo-ble): fixed J10/J11 LRA, VCM 2–20 Hz,
+ * no LPULSE, PPG count from the self-test array.
  */
 export function parseInfo(input: string | Json): DeviceInfo | null {
   let raw: Json;
@@ -298,87 +304,71 @@ export function parseInfo(input: string | Json): DeviceInfo | null {
   } else {
     raw = input;
   }
-  if (!('fw' in raw) && !('prod' in raw) && !('ch' in raw)) {
+  if (!('fw' in raw) && !('proto' in raw) && !('prod' in raw)) {
     return null;
   }
-  const ch = isObj(raw.ch) ? raw.ch : null;
+  const proto = str(raw.proto);
+  const legacy = proto === null;
+  const ch = !legacy && isObj(raw.ch) ? raw.ch : null;
   const selfTest: Record<string, unknown> = {};
   for (const k of Object.keys(raw)) {
-    if (!['prod', 'hw', 'fw', 'ver', 'ch'].includes(k)) {
+    if (!['proto', 'prod', 'hw', 'fw', 'ver', 'ch'].includes(k)) {
       selfTest[k] = raw[k];
     }
   }
 
-  // Wings
-  let groups = ch ? parseLraGroups(ch.lra) : null;
-  if (groups === null) {
-    // Legacy INFO or ch without lra: H1.1 always has J10 + J11 LRA outputs.
-    groups = parseLraGroups(2) as LraGroup[];
-  }
-  let freq: { min: number; max: number; def: number } = {
-    ...LRA_FREQ_FALLBACK,
-  };
-  const chFreq = ch && isObj(ch.freq) ? ch.freq : null;
-  if (chFreq) {
-    const mn = num(chFreq.min);
-    const mx = num(chFreq.max);
-    if (mn !== null && mx !== null && mx >= mn) {
-      freq = {
-        min: mn,
-        max: mx,
-        def: clamp(num(chFreq.def) ?? LRA_FREQ_FALLBACK.def, mn, mx),
-      };
-    }
-  }
-  const wings = groups.length ? { groups, freq } : null;
-
-  // Voice coil / pulse (one actuator)
-  const vr = ch ? parseVcmRange(ch.vcm) : 'absent';
-  let vcm: VcmCaps | null;
-  let vcmUnits: 'hz' | 'halfMs';
-  if (vr === null) {
-    vcm = null;
-    vcmUnits = 'hz';
-  } else if (vr === 'absent') {
-    vcm = {
-      minHz: VCM_LEGACY_HZ.min,
-      maxHz: VCM_LEGACY_HZ.max,
-      defaultHz: VCM_DEFAULT_HZ,
-      command: 'VCM',
+  let modules: DeviceModules;
+  if (legacy || !ch) {
+    const groups: LraGroup[] = [
+      { id: 'A', index: 0, label: DEFAULT_LRA_LABELS.A },
+      { id: 'B', index: 1, label: DEFAULT_LRA_LABELS.B },
+    ];
+    modules = {
+      wings: { groups, freq: { ...LRA_FREQ_FALLBACK }, lpulse: legacy ? null : { ...LPULSE_FALLBACK } },
+      vcm: legacy ? { ...LEGACY_VCM } : { ...LEGACY_VCM, command: 'VHZ' },
+      ppg: parsePpg(undefined, raw.ppg),
+      egg: null,
     };
-    vcmUnits = 'halfMs';
   } else {
-    vcm = {
-      minHz: vr.min,
-      maxHz: vr.max,
-      defaultHz: clamp(vr.def ?? VCM_DEFAULT_HZ, vr.min, vr.max),
-      command: 'VHZ',
+    const groups = parseLraGroups(ch.lra);
+    const fr = parseRange(ch.freq);
+    const freq = fr
+      ? { min: fr.min, max: fr.max, def: clamp(fr.def ?? LRA_FREQ_FALLBACK.def, fr.min, fr.max) }
+      : { ...LRA_FREQ_FALLBACK };
+    const lp = parseRange(ch.lpulse);
+    const lpulse: LpulseCaps = lp ? { minMs: lp.min, maxMs: lp.max } : { ...LPULSE_FALLBACK };
+    const vr = parseRange(ch.vhz);
+    const vcm: VcmCaps | null = vr
+      ? {
+          minHz: vr.min,
+          maxHz: vr.max,
+          defaultHz: clamp(vr.def ?? VCM_DEFAULT_HZ, vr.min, vr.max),
+          command: 'VHZ',
+        }
+      : null; // v0 without ch.vhz = no voice coil on this unit
+    let egg: EggCaps | null = null;
+    if (isObj(ch.egg)) {
+      const idx = num(ch.egg.ppg);
+      if (idx !== null) {
+        egg = { ppgIndex: idx, hasActuator: flag(ch.egg.act) };
+      }
+    }
+    modules = {
+      wings: groups.length ? { groups, freq, lpulse } : null,
+      vcm,
+      ppg: parsePpg(ch.ppg, raw.ppg),
+      egg,
     };
-    vcmUnits = 'hz';
-  }
-
-  // Sensors
-  const ppg = parsePpg(ch ? ch.ppg : undefined, raw.ppg);
-  let egg: EggCaps | null = null;
-  if (ch && isObj(ch.egg)) {
-    const idx = num(ch.egg.ppg);
-    egg = {
-      ppgIndex: idx ?? 3,
-      hasActuator: flag(ch.egg.act),
-    };
-  } else if (ch && ppg.length >= 4) {
-    // §4: product has 4 PPG groups, the 4th is the egg.
-    egg = { ppgIndex: 3, hasActuator: false };
   }
 
   return {
+    proto,
+    legacy,
     prod: str(raw.prod),
     hw: str(raw.hw),
     fw: str(raw.fw),
     ver: str(raw.ver),
-    hasChannelTable: ch !== null,
-    vcmUnits,
-    modules: { wings, vcm, ppg, egg },
+    modules,
     selfTest,
     raw,
   };
@@ -394,25 +384,32 @@ export interface PpgReading {
 }
 
 export interface Telemetry {
+  /** 'v0' when the frame has `vhz`, 'legacy' when it only has `vcm`. */
+  format: 'v0' | 'legacy';
   t: number | null;
   ppg: PpgReading[];
   fsr: number[];
   hall: number | null;
   /** null when firmware reports -99 (not wired / out of range). */
   ntcC: number | null;
-  /** null when not measured (see VBAT_VALID_MIN). */
+  /** null when not measured (< 1.0 V, e.g. no battery fitted). */
   vbat: number | null;
   batteryPct: number | null;
   acc: number[];
   gyr: number[];
   /** Actual intensities [A (J10), B (J11)], 0–100. */
   lra: [number, number];
+  /** Wing rhythm per group [[onMs,offMs],[onMs,offMs]]; [0,0] = constant. Legacy: always [0,0]. */
+  lp: [[number, number], [number, number]];
   lraFreqHz: number | null;
+  /** Voice-coil pulse: hz is the beat frequency (legacy converted from half-period). */
   vcm: { on: boolean; hz: number | null };
   auto: boolean;
   estop: boolean;
-  /** Over-temperature latch (v0, absent on legacy firmware -> false). */
+  /** Over-temperature latch (v0 `ot`; absent on legacy -> false). */
   ot: boolean;
+  /** Low-battery latch (v0 `lb`; null when the frame does not carry it, i.e. legacy). */
+  lb: boolean | null;
 }
 
 export function batteryPercent(vbat: number | null): number | null {
@@ -426,30 +423,40 @@ export function halfMsToHz(halfMs: number): number {
   return halfMs > 0 ? Math.round((500 / halfMs) * 10) / 10 : 0;
 }
 
-export function parseTelemetry(obj: Json, vcmUnits: 'hz' | 'halfMs'): Telemetry {
+function pair(v: unknown): [number, number] {
+  const a = Array.isArray(v) ? v : [];
+  return [num(a[0]) ?? 0, num(a[1]) ?? 0];
+}
+
+/**
+ * Parse a telemetry frame. Format is decided by field presence (§7.3):
+ * `vhz` present => v0 (Hz, 0 = off); only `vcm` => H11 v1.0 `[on, halfMs]`.
+ */
+export function parseTelemetry(obj: Json): Telemetry {
   const ppg: PpgReading[] = Array.isArray(obj.ppg)
     ? obj.ppg.map(e => {
         const a = Array.isArray(e) ? e : [];
         const hr = num(a[2]);
-        return {
-          ir: num(a[0]) ?? 0,
-          contact: flag(a[1]),
-          hr: hr && hr > 0 ? hr : null,
-        };
+        return { ir: num(a[0]) ?? 0, contact: flag(a[1]), hr: hr && hr > 0 ? hr : null };
       })
     : [];
   const ntc = num(obj.ntc);
   const vbatRaw = num(obj.vbat);
   const vbat = vbatRaw !== null && vbatRaw >= VBAT_VALID_MIN ? vbatRaw : null;
   const lra = numArr(obj.lra);
-  const vcmArr = Array.isArray(obj.vcm) ? obj.vcm : [];
-  const vcmOn = flag(vcmArr[0]);
-  const vcmVal = num(vcmArr[1]);
-  let vcmHz: number | null = null;
-  if (vcmVal !== null) {
-    vcmHz = vcmUnits === 'hz' ? vcmVal : halfMsToHz(vcmVal);
+  const isV0 = 'vhz' in obj;
+  let vcm: { on: boolean; hz: number | null };
+  if (isV0) {
+    const hz = num(obj.vhz);
+    vcm = { on: (hz ?? 0) > 0, hz: hz !== null && hz > 0 ? hz : 0 };
+  } else {
+    const a = Array.isArray(obj.vcm) ? obj.vcm : [];
+    const ms = num(a[1]);
+    vcm = { on: flag(a[0]), hz: ms !== null ? halfMsToHz(ms) : null };
   }
+  const lpArr = Array.isArray(obj.lp) ? obj.lp : [];
   return {
+    format: isV0 ? 'v0' : 'legacy',
     t: num(obj.t),
     ppg,
     fsr: numArr(obj.fsr),
@@ -460,14 +467,13 @@ export function parseTelemetry(obj: Json, vcmUnits: 'hz' | 'halfMs'): Telemetry 
     acc: numArr(obj.acc),
     gyr: numArr(obj.gyr),
     lra: [lra[0] ?? 0, lra[1] ?? 0],
+    lp: [pair(lpArr[0]), pair(lpArr[1])],
     lraFreqHz: num(obj.f),
-    vcm: {
-      on: vcmOn && (vcmUnits === 'halfMs' || (vcmHz ?? 0) > 0),
-      hz: vcmHz,
-    },
+    vcm,
     auto: flag(obj.auto),
     estop: flag(obj.estop),
     ot: flag(obj.ot),
+    lb: 'lb' in obj ? flag(obj.lb) : null,
   };
 }
 
@@ -482,7 +488,7 @@ export type ParsedLine =
   | { kind: 'unknown'; text: string };
 
 /** Classify one reassembled TLM line: telemetry JSON, INFO JSON, OK/ERR reply, EVT. */
-export function parseLine(line: string, vcmUnits: 'hz' | 'halfMs'): ParsedLine {
+export function parseLine(line: string): ParsedLine {
   const text = line.trim();
   if (text.startsWith('{')) {
     let obj: unknown;
@@ -495,7 +501,7 @@ export function parseLine(line: string, vcmUnits: 'hz' | 'halfMs'): ParsedLine {
       return { kind: 'unknown', text };
     }
     if ('lra' in obj || 't' in obj) {
-      return { kind: 'tlm', tlm: parseTelemetry(obj, vcmUnits) };
+      return { kind: 'tlm', tlm: parseTelemetry(obj) };
     }
     const info = parseInfo(obj);
     return info ? { kind: 'info', info } : { kind: 'unknown', text };
@@ -509,14 +515,20 @@ export function parseLine(line: string, vcmUnits: 'hz' | 'halfMs'): ParsedLine {
     return { kind: 'err', text, args: parts.slice(1) };
   }
   if (head === 'EVT') {
-    return {
-      kind: 'evt',
-      name: (parts[1] || '').toUpperCase(),
-      args: parts.slice(2),
-      text,
-    };
+    return { kind: 'evt', name: (parts[1] || '').toUpperCase(), args: parts.slice(2), text };
   }
   return { kind: 'unknown', text };
+}
+
+/** Firmware safety rejections (§7.5), in firmware priority order. */
+export type SafetyErr = 'ESTOP' | 'OVERTEMP' | 'LOWBAT';
+
+export function safetyErrOf(p: ParsedLine): SafetyErr | null {
+  if (p.kind !== 'err') {
+    return null;
+  }
+  const a = (p.args[0] || '').toUpperCase();
+  return a === 'ESTOP' || a === 'OVERTEMP' || a === 'LOWBAT' ? a : null;
 }
 
 // ---------------------------------------------------------------- commands
@@ -527,15 +539,29 @@ function int(v: number): number {
   return Math.round(Number.isFinite(v) ? v : 0);
 }
 
-/**
- * `LRA t v`. Uses numeric targets `0`/`1` and `BOTH`, which mean the same on
- * legacy h11-demo-ble and on v0. NOTE: on legacy firmware the letter `B`
- * means BOTH, while v0 makes `B` = group B, so the app must never send `B`.
- */
+/** Target token: `0` / `1` / `BOTH` are valid on both H11 v1.0 and v0 (§7.1). */
+function targetToken(target: LraTarget): string {
+  return target === 'A' ? '0' : target === 'B' ? '1' : 'BOTH';
+}
+
+/** `LRA t v` — constant vibration; also cancels LPULSE rhythm on that group. */
 export function formatLra(target: LraTarget, value: number): string {
   const v = clamp(int(value), LRA_MIN, LRA_MAX);
-  const t = target === 'A' ? '0' : target === 'B' ? '1' : 'BOTH';
-  return `LRA ${t} ${v}`;
+  return `LRA ${targetToken(target)} ${v}`;
+}
+
+/** `LPULSE t v onMs offMs` (§7.7), on/off clamped to the INFO ch.lpulse range. */
+export function formatLpulse(
+  target: LraTarget,
+  value: number,
+  onMs: number,
+  offMs: number,
+  caps: LpulseCaps = LPULSE_FALLBACK,
+): string {
+  const v = clamp(int(value), LRA_MIN, LRA_MAX);
+  const lo = Math.ceil(caps.minMs);
+  const hi = Math.floor(caps.maxMs);
+  return `LPULSE ${targetToken(target)} ${v} ${clamp(int(onMs), lo, hi)} ${clamp(int(offMs), lo, hi)}`;
 }
 
 export function formatFreq(hz: number, range: { min: number; max: number } = LRA_FREQ_FALLBACK): string {
@@ -550,10 +576,7 @@ export function clampVcmHz(hz: number, caps: Pick<VcmCaps, 'minHz' | 'maxHz'>): 
   return clamp(int(hz), Math.ceil(caps.minHz), Math.floor(caps.maxHz));
 }
 
-const VCM_LEGACY_HZ_CAPS = {
-  minHz: VCM_LEGACY_HZ.min,
-  maxHz: VCM_LEGACY_HZ.max,
-};
+const VCM_LEGACY_HZ_CAPS = { minHz: VCM_LEGACY_HZ.min, maxHz: VCM_LEGACY_HZ.max };
 
 /** Legacy mapping: half-period ms = 500 / Hz, clamped to 25–250 ms and to caps. */
 export function vcmHzToHalfMs(
@@ -584,3 +607,8 @@ export function formatVcmHz(hz: number, caps: VcmCaps): string {
 export const formatStop = (): string => 'STOP';
 export const formatEstop = (on: boolean): string => (on ? 'ESTOP 1' : 'ESTOP 0');
 export const formatRate = (hz: number): string => `RATE ${clamp(int(hz), 0, 20)}`;
+
+/** Wire form: every command ends with `\n` (§7.4). */
+export function encodeCommand(line: string): number[] {
+  return encodeUtf8(`${line.replace(/[\r\n;]+$/g, '').trim()}\n`);
+}

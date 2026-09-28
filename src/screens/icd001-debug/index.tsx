@@ -103,7 +103,7 @@ export const Icd001DebugScreen = () => {
             <Text style={styles.h}>INFO</Text>
             <Text style={styles.kv}>
               prod {state.info.prod ?? '—'} · hw {state.info.hw ?? '—'} · fw {state.info.fw ?? '—'}
-              {state.info.hasChannelTable ? '' : '（旧固件，无 ch 通道表）'}
+              {state.info.legacy ? '（H11 v1.0 旧固件）' : ` · ${state.info.proto}`}
             </Text>
             <Text style={styles.kv}>
               翅膀：
@@ -181,6 +181,22 @@ export const Icd001DebugScreen = () => {
               }}
             />
           </View>
+        ) : null}
+
+        {wings?.lpulse ? (
+          <View style={styles.row}>
+            <Btn
+              label="A 组节奏 60% 300/300 ms"
+              disabled={disabled}
+              onPress={() => client.setLpulse('A', 60, 300, 300)}
+            />
+            <Btn label="A 组恢复常振" disabled={disabled} onPress={() => client.setLra('A', lra[0])} />
+          </View>
+        ) : null}
+        {t && (t.lp[0][0] || t.lp[1][0]) ? (
+          <Text style={styles.kv}>
+            节奏 A {t.lp[0].join('/')} · B {t.lp[1].join('/')} ms
+          </Text>
         ) : null}
 
         <View style={styles.row}>

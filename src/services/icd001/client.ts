@@ -9,18 +9,23 @@ import {
   LineAssembler,
   LraTarget,
   Telemetry,
+  SafetyErr,
   VBAT_LOW_CUT,
+  VBAT_LOW_RELEASE,
+  encodeCommand,
   formatEstop,
   formatFreq,
+  formatLpulse,
   formatLra,
   formatRate,
   formatStop,
   formatVcmHz,
   parseInfo,
   parseLine,
+  safetyErrOf,
 } from './protocol';
 import { CommandScheduler } from './throttle';
-import { decodeUtf8, encodeUtf8 } from './utf8';
+import { decodeUtf8 } from './utf8';
 
 import type { DiscoveredDevice, Icd001Transport } from './transport';
 
@@ -51,6 +56,8 @@ export interface Icd001State {
   locked: boolean;
   lockReasons: LockReason[];
   lastErr: { text: string; at: number } | null;
+  /** Last firmware safety rejection (ERR ESTOP / OVERTEMP / LOWBAT). */
+  lastSafetyErr: { reason: SafetyErr; at: number } | null;
   lastReply: string | null;
   reconnectAttempt: number;
   error: string | null;
@@ -79,7 +86,8 @@ export class Icd001Client {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private infoWaiters: Array<(i: DeviceInfo) => void> = [];
-  private evtLowBat = false;
+  /** Legacy firmware has no `lb`: app-side 3.40/3.60 V hysteresis on vbat. */
+  private legacyLowBat = false;
   private readonly opts: Required<Icd001ClientOptions>;
 
   constructor(readonly transport: Icd001Transport, opts: Icd001ClientOptions = {}) {
@@ -104,6 +112,7 @@ export class Icd001Client {
       locked: true,
       lockReasons: ['disconnected'],
       lastErr: null,
+      lastSafetyErr: null,
       lastReply: null,
       reconnectAttempt: 0,
       error: null,
@@ -226,8 +235,8 @@ export class Icd001Client {
       if (!info) {
         throw new Error('设备没有返回 INFO');
       }
-      this.set({ info, tlm: null, tlmAt: null, estop: false, overTemp: false });
-      this.evtLowBat = false;
+      this.set({ info, tlm: null, tlmAt: null, estop: false, overTemp: false, lowBattery: false });
+      this.legacyLowBat = false;
       await this.write(formatRate(this.opts.tlmHz), true);
       this.set({ status: 'connected', reconnectAttempt: 0 });
       this.startWatchdog();
@@ -352,21 +361,22 @@ export class Icd001Client {
 
   /** Exposed for tests / debug injection. */
   onLine(line: string): void {
-    const units = this.state.info?.vcmUnits ?? 'halfMs';
-    const p = parseLine(line, units);
+    const p = parseLine(line);
     switch (p.kind) {
       case 'tlm': {
         const t = p.tlm;
-        if (this.evtLowBat && t.vbat !== null && t.vbat >= VBAT_LOW_CUT + 0.05) {
-          this.evtLowBat = false;
+        let lowBattery: boolean;
+        if (t.lb !== null) {
+          lowBattery = t.lb; // v0: firmware latch is authoritative
+        } else {
+          if (t.vbat !== null && t.vbat < VBAT_LOW_CUT) {
+            this.legacyLowBat = true;
+          } else if (t.vbat === null || t.vbat > VBAT_LOW_RELEASE) {
+            this.legacyLowBat = false;
+          }
+          lowBattery = this.legacyLowBat;
         }
-        this.set({
-          tlm: t,
-          tlmAt: Date.now(),
-          estop: t.estop,
-          overTemp: t.ot,
-          lowBattery: this.evtLowBat || (t.vbat !== null && t.vbat < VBAT_LOW_CUT),
-        });
+        this.set({ tlm: t, tlmAt: Date.now(), estop: t.estop, overTemp: t.ot, lowBattery });
         return;
       }
       case 'info':
@@ -381,14 +391,29 @@ export class Icd001Client {
         this.set({ lastReply: line });
         this.pushLog(`< ${line}`);
         return;
-      case 'err':
-        // UI reverts sliders to tlm.lra / tlm.vcm; ask for a fresh frame now.
-        this.set({ lastErr: { text: line, at: Date.now() }, lastReply: line });
+      case 'err': {
+        // Firmware did not store the value; UI reverts sliders to tlm.lra /
+        // tlm.vcm. Safety rejections map straight onto lock reasons (§7.5).
+        const se = safetyErrOf(p);
+        const now = Date.now();
+        const patch: Partial<Icd001State> = { lastErr: { text: line, at: now }, lastReply: line };
+        if (se) {
+          patch.lastSafetyErr = { reason: se, at: now };
+          if (se === 'ESTOP') {
+            patch.estop = true;
+          } else if (se === 'OVERTEMP') {
+            patch.overTemp = true;
+          } else {
+            patch.lowBattery = true;
+          }
+        }
+        this.set(patch);
         this.pushLog(`< ${line}`);
         if (this.state.status === 'connected') {
           this.scheduler.enqueue('get', 'GET');
         }
         return;
+      }
       case 'evt':
         this.pushLog(`< ${line}`);
         if (p.name === 'ESTOP') {
@@ -396,8 +421,8 @@ export class Icd001Client {
         } else if (p.name === 'OVERTEMP') {
           this.set({ overTemp: p.args[0] !== '0' });
         } else if (p.name === 'LOWBAT') {
-          this.evtLowBat = true;
-          this.set({ lowBattery: true });
+          // v0: EVT LOWBAT 1 / EVT LOWBAT 0 (bare EVT LOWBAT treated as 1)
+          this.set({ lowBattery: p.args[0] !== '0' });
         }
         return;
       default:
@@ -413,7 +438,9 @@ export class Icd001Client {
       throw new Error('no device');
     }
     this.pushLog(`> ${line}`);
-    await this.transport.write(dev.id, encodeUtf8(line), urgent);
+    // v0 buffers until \n so a long command may span writes; legacy may not.
+    const allowSplit = this.state.info ? !this.state.info.legacy : false;
+    await this.transport.write(dev.id, encodeCommand(line), urgent, allowSplit);
   }
 
   private get linkUp(): boolean {
@@ -435,14 +462,37 @@ export class Icd001Client {
       return false;
     }
     if (target === 'ALL') {
-      // An ALL supersedes pending single-group values.
-      this.scheduler.drop('lra:A');
-      this.scheduler.drop('lra:B');
-      this.scheduler.enqueue('lra:ALL', formatLra('ALL', value));
+      this.enqueueWing('ALL', formatLra('ALL', value));
     } else {
-      this.scheduler.enqueue(`lra:${target}`, formatLra(target, value));
+      this.enqueueWing(target, formatLra(target, value));
     }
     return true;
+  }
+
+  /**
+   * Wing rhythm done in firmware: `LPULSE t v onMs offMs` (v0 only). A later
+   * setLra on the same group cancels the rhythm (firmware rule); both share one
+   * throttle key so only the latest intent per group is sent.
+   */
+  setLpulse(target: LraTarget, value: number, onMs: number, offMs: number): boolean {
+    const wings = this.state.info?.modules.wings;
+    if (!wings || !wings.lpulse || !this.canActuate(value)) {
+      return false;
+    }
+    if (target !== 'ALL' && !wings.groups.some(g => g.id === target)) {
+      return false;
+    }
+    this.enqueueWing(target, formatLpulse(target, value, onMs, offMs, wings.lpulse));
+    return true;
+  }
+
+  private enqueueWing(target: LraTarget, line: string): void {
+    if (target === 'ALL') {
+      // An ALL supersedes pending single-group values.
+      this.scheduler.drop('wing:A');
+      this.scheduler.drop('wing:B');
+    }
+    this.scheduler.enqueue(`wing:${target}`, line);
   }
 
   /** Shared LRA drive frequency (engineering only per protocol). */
