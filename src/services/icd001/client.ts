@@ -50,6 +50,8 @@ export interface Icd001State {
   tlm: Telemetry | null;
   tlmAt: number | null;
   estop: boolean;
+  /** Who engaged the E-stop: this app (ESTOP 1) or the device START key / unknown. */
+  estopSource: 'app' | 'device' | null;
   overTemp: boolean;
   lowBattery: boolean;
   /** Actuator controls must be disabled when true (see lockReasons). */
@@ -89,6 +91,17 @@ export class Icd001Client {
   /** Legacy firmware has no `lb`: app-side 3.40/3.60 V hysteresis on vbat. */
   private legacyLowBat = false;
   private readonly opts: Required<Icd001ClientOptions>;
+  /** STOP ALL pressed while offline: send STOP right after the next connect. */
+  private stopOnConnect = false;
+  private appEstopAt = -Infinity;
+
+  /** Source for an E-stop seen in TLM / OK / ERR (EVT ESTOP is always the key). */
+  private estopSrc(): 'app' | 'device' {
+    if (Date.now() - this.appEstopAt < 3000) {
+      return 'app';
+    }
+    return this.state.estopSource ?? 'device';
+  }
 
   constructor(readonly transport: Icd001Transport, opts: Icd001ClientOptions = {}) {
     this.opts = {
@@ -107,6 +120,7 @@ export class Icd001Client {
       tlm: null,
       tlmAt: null,
       estop: false,
+      estopSource: null,
       overTemp: false,
       lowBattery: false,
       locked: true,
@@ -238,6 +252,10 @@ export class Icd001Client {
       this.set({ info, tlm: null, tlmAt: null, estop: false, overTemp: false, lowBattery: false });
       this.legacyLowBat = false;
       await this.write(formatRate(this.opts.tlmHz), true);
+      if (this.stopOnConnect) {
+        this.stopOnConnect = false;
+        await this.write(formatStop(), true);
+      }
       this.set({ status: 'connected', reconnectAttempt: 0 });
       this.startWatchdog();
       return true;
@@ -376,7 +394,14 @@ export class Icd001Client {
           }
           lowBattery = this.legacyLowBat;
         }
-        this.set({ tlm: t, tlmAt: Date.now(), estop: t.estop, overTemp: t.ot, lowBattery });
+        this.set({
+          tlm: t,
+          tlmAt: Date.now(),
+          estop: t.estop,
+          estopSource: t.estop ? this.estopSrc() : null,
+          overTemp: t.ot,
+          lowBattery,
+        });
         return;
       }
       case 'info':
@@ -386,7 +411,8 @@ export class Icd001Client {
         return;
       case 'ok':
         if (p.args[0]?.toUpperCase() === 'ESTOP') {
-          this.set({ estop: p.args[1] === '1' });
+          const on = p.args[1] === '1';
+          this.set({ estop: on, estopSource: on ? this.estopSrc() : null });
         }
         this.set({ lastReply: line });
         this.pushLog(`< ${line}`);
@@ -401,6 +427,7 @@ export class Icd001Client {
           patch.lastSafetyErr = { reason: se, at: now };
           if (se === 'ESTOP') {
             patch.estop = true;
+            patch.estopSource = this.estopSrc();
           } else if (se === 'OVERTEMP') {
             patch.overTemp = true;
           } else {
@@ -417,7 +444,8 @@ export class Icd001Client {
       case 'evt':
         this.pushLog(`< ${line}`);
         if (p.name === 'ESTOP') {
-          this.set({ estop: p.args[0] === '1' });
+          const on = p.args[0] === '1';
+          this.set({ estop: on, estopSource: on ? 'device' : null });
         } else if (p.name === 'OVERTEMP') {
           this.set({ overTemp: p.args[0] !== '0' });
         } else if (p.name === 'LOWBAT') {
@@ -531,7 +559,19 @@ export class Icd001Client {
     if (!this.linkUp) {
       return;
     }
+    if (on) {
+      this.appEstopAt = Date.now();
+    }
     await this.scheduler.sendNow(formatEstop(on));
+  }
+
+  /**
+   * STOP ALL while offline: firmware already stopped on disconnect; make sure
+   * the first thing after the next connect is a STOP.
+   */
+  requestStopOnConnect(): void {
+    this.stopOnConnect = true;
+    this.pushLog('# STOP queued for next connect');
   }
 
   /** Call when leaving the control page or when the app goes to background. */

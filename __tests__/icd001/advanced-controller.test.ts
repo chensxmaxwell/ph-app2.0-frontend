@@ -1,0 +1,275 @@
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+
+import {
+  AdvancedControlController,
+  IntensityView,
+  RhythmView,
+  SensorView,
+} from '../../src/screens/advanced-control/controller';
+import { Icd001Client } from '../../src/services/icd001/client';
+import { MockIcd001Device, MockIcd001Transport } from '../../src/services/icd001/mock';
+
+const tick = async (ms: number) => {
+  for (let i = 0; i < ms; i += 10) {
+    await jest.advanceTimersByTimeAsync(10);
+  }
+};
+
+async function setup(variant: 'icd1' | 'h11' = 'icd1') {
+  const dev = new MockIcd001Device(variant, variant === 'icd1' ? 'ICD1-TEST' : 'H11-91B1');
+  dev.ntcOverride = 34.2;
+  dev.vbatOverride = 3.95;
+  const transport = new MockIcd001Transport([dev], { mtu: 185, connectDelayMs: 10 });
+  const client = new Icd001Client(transport, { reconnectDelaysMs: [100, 100] });
+  const ctl = new AdvancedControlController(client);
+  ctl.start();
+  const id = `sim-${dev.name}`;
+  const device = { id, name: dev.name, rssi: -50, kind: null, simulated: true };
+  const p = client.connect(device);
+  await tick(300);
+  expect(await p).toBe(true);
+  const v = () => ctl.getView();
+  const wing = () => v().cards.find(c => c.kind === 'intensity') as IntensityView;
+  const pulse = () => v().cards.find(c => c.kind === 'rhythm') as RhythmView;
+  const egg = () => v().cards.find(c => c.kind === 'sensor') as SensorView | undefined;
+  const done = () => {
+    ctl.dispose();
+    client.destroy();
+  };
+  return { dev, transport, client, ctl, id, device, v, wing, pulse, egg, done };
+}
+
+describe('AdvancedControlController (view-model) on the simulator', () => {
+  beforeEach(() => {
+    jest.useFakeTimers({ now: 9_000_000 });
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('normal state: three cards from INFO, device strip, egg read-only 待硬件', async () => {
+    const t = await setup();
+    expect(t.v().screen).toMatchObject({ kind: 'normal', controlsEnabled: true });
+    expect(t.v().banner).toBeNull();
+    expect(t.v().cards.map(c => c.kind)).toEqual(['intensity', 'rhythm', 'sensor']);
+    expect(t.v().device).toMatchObject({
+      connected: true,
+      name: 'ICD1-TEST',
+      tempText: '34.2°C',
+      batteryPct: 69,
+    });
+    expect(t.pulse().card.range).toEqual({ min: 10, max: 50, def: 10 });
+    expect(t.pulse().presets).toEqual({ soft: 14, medium: 30, strong: 46 });
+    expect(t.egg()).toMatchObject({ enabled: true, actuator: 'needs-hardware' });
+    expect(t.wing().summary).toBe('A 0 · B 0 · Steady');
+    t.done();
+  });
+
+  it('legacy H11: no bullet card, pulse uses VCM 2–20', async () => {
+    const t = await setup('h11');
+    expect(t.v().cards.map(c => c.kind)).toEqual(['intensity', 'rhythm']);
+    t.ctl.setPulseHz(10);
+    await tick(300);
+    expect(t.dev.commandLog).toContain('VCM 1 50');
+    t.done();
+  });
+
+  it('wing slider / link / switch map to LRA 0|1|BOTH and restore last values', async () => {
+    const t = await setup();
+    t.ctl.setWingValue('A', 60);
+    t.ctl.setWingValue('B', 40);
+    await tick(400);
+    expect(t.dev.snapshot().lra).toEqual([60, 40]);
+    expect(t.wing()).toMatchObject({ on: true, values: { A: 60, B: 40 }, summary: 'A 60 · B 40 · Steady' });
+    expect(t.v().running).toEqual({ A: true, B: true, head: false });
+
+    t.ctl.setWingOn(false);
+    await tick(300);
+    expect(t.dev.commandLog).toContain('LRA BOTH 0');
+    expect(t.dev.snapshot().lra).toEqual([0, 0]);
+    expect(t.wing().on).toBe(false);
+
+    t.ctl.setWingOn(true);
+    await tick(300);
+    expect(t.dev.snapshot().lra).toEqual([60, 40]);
+
+    t.ctl.toggleLink(); // aligns B to A
+    await tick(300);
+    expect(t.dev.snapshot().lra).toEqual([60, 60]);
+    t.dev.commandLog.length = 0;
+    t.ctl.setWingValue('B', 30);
+    await tick(300);
+    expect(t.dev.commandLog).toEqual(expect.arrayContaining(['LRA BOTH 30']));
+    expect(t.dev.snapshot().lra).toEqual([30, 30]);
+    t.done();
+  });
+
+  it('rhythm mode sends LPULSE; freq stepper sends FREQ ±5', async () => {
+    const t = await setup();
+    t.ctl.setWingValue('A', 50);
+    await tick(300);
+    t.ctl.setWingRhythm('fast');
+    await tick(300);
+    expect(t.dev.commandLog).toContain('LPULSE 0 50 150 150');
+    await tick(1000); // telemetry now reports lp -> summary follows the device
+    expect(t.wing().summary).toBe('A 50 · B 0 · Rhythm');
+    t.ctl.stepFreq(1);
+    await tick(300);
+    expect(t.dev.commandLog).toContain('FREQ 175');
+    expect(t.wing().freq).toBe(175);
+    t.done();
+  });
+
+  it('pulse slider, presets, switch -> VHZ; a fast drag is throttled, final value wins', async () => {
+    const t = await setup();
+    t.dev.commandLog.length = 0;
+    for (let hz = 10; hz <= 50; hz++) {
+      t.ctl.setPulseHz(hz);
+      await tick(10);
+    }
+    await tick(300);
+    const vhz = t.dev.commandLog.filter(c => c.startsWith('VHZ'));
+    expect(vhz.length).toBeLessThanOrEqual(6);
+    expect(vhz[vhz.length - 1]).toBe('VHZ 50');
+    expect(t.pulse()).toMatchObject({ on: true, hz: 50, beat: 'Strong', summary: '50 Hz · Strong' });
+    t.ctl.setPulseHz(30, true);
+    await tick(300);
+    t.ctl.setPulseOn(false);
+    await tick(300);
+    expect(t.dev.commandLog.slice(-1)[0]).toBe('VHZ 0');
+    expect(t.pulse()).toMatchObject({ on: false, hz: 30, summary: 'Off' });
+    t.ctl.setPulseOn(true);
+    await tick(300);
+    expect(t.dev.snapshot()).toMatchObject({ vcmOn: true, vcmHz: 30 });
+    t.done();
+  });
+
+  it('stage tap expands the matching card', async () => {
+    const t = await setup();
+    t.ctl.selectPart('head');
+    expect(t.v().expanded).toBe('vcm');
+    expect(t.pulse().expanded).toBe(true);
+    t.ctl.selectPart('B');
+    expect(t.v().expanded).toBe('wing');
+    t.ctl.toggleCard('wing');
+    expect(t.v().expanded).toBeNull();
+    t.done();
+  });
+
+  it('STOP ALL -> E-stop state; controls paused and ignored; hold 2 s to release', async () => {
+    const t = await setup();
+    t.ctl.setWingValue('A', 60);
+    await tick(300);
+    t.ctl.stopAll();
+    await tick(300);
+    expect(t.v().screen.kind).toBe('estop');
+    expect(t.v().banner?.title).toBe('Emergency stop is on');
+    expect(t.v().banner?.lines[0]).toBe('All outputs are off. Stopped from the app.');
+    expect(t.wing()).toMatchObject({ enabled: false, summary: 'Paused' });
+    expect(t.egg()?.enabled).toBe(true);
+
+    t.dev.commandLog.length = 0;
+    t.ctl.setWingValue('A', 80);
+    await tick(300);
+    expect(t.dev.commandLog.filter(c => c.startsWith('LRA'))).toEqual([]);
+
+    t.ctl.beginRelease();
+    await tick(1000);
+    expect(t.v().estop.holdProgress).toBeGreaterThan(0.4);
+    t.ctl.cancelRelease();
+    await tick(2000);
+    expect(t.v().screen.kind).toBe('estop');
+    expect(t.v().estop.holdProgress).toBe(0);
+
+    t.ctl.beginRelease();
+    await tick(2300);
+    expect(t.dev.commandLog).toContain('ESTOP 0');
+    expect(t.v().screen.kind).toBe('normal');
+    t.done();
+  });
+
+  it('device START key E-stop names the device button', async () => {
+    const t = await setup();
+    t.transport.pressStartKey(t.id);
+    await tick(200);
+    expect(t.v().banner?.lines[0]).toBe('All outputs are off. Stopped from the device button.');
+    t.done();
+  });
+
+  it('over-temp banner, then "Cooled down" for 4 s after release', async () => {
+    const t = await setup();
+    t.dev.ntcOverride = 42.3;
+    await tick(1500);
+    expect(t.v().screen.kind).toBe('overtemp');
+    expect(t.v().banner).toMatchObject({ tone: 'amber', title: 'Too warm · 42.3°C' });
+    expect(t.v().device.tempWarn).toBe(true);
+    t.dev.ntcOverride = 38.5;
+    await tick(1500);
+    expect(t.v().screen.kind).toBe('normal');
+    expect(t.v().banner?.title).toBe('Cooled down — turn modules back on');
+    await tick(4200);
+    expect(t.v().banner).toBeNull();
+    t.done();
+  });
+
+  it('priority with overlapping conditions: estop > overtemp > lowbat', async () => {
+    const t = await setup();
+    t.dev.vbatOverride = 3.38;
+    await tick(1500);
+    expect(t.v().screen.kind).toBe('lowbat');
+    expect(t.v().banner?.title).toBe('Battery low · 3.38 V');
+    expect(t.v().device).toMatchObject({ batteryPct: 0, batteryWarn: true });
+    t.dev.ntcOverride = 42.3;
+    await tick(1500);
+    expect(t.v().screen).toMatchObject({ kind: 'overtemp', also: ['lowbat'] });
+    t.ctl.stopAll();
+    await tick(300);
+    expect(t.v().screen).toMatchObject({ kind: 'estop', also: ['overtemp', 'lowbat'] });
+    expect(t.v().banner?.lines.slice(2)).toEqual([
+      'Also too warm (42.3°C).',
+      'Battery is also low (3.38 V).',
+    ]);
+    t.done();
+  });
+
+  it('link loss -> disconnected with last-seen cards; STOP ALL offline is sent after reconnect', async () => {
+    const t = await setup();
+    t.transport.simulateLinkLoss(t.id);
+    await tick(20);
+    expect(t.v().screen.kind).toBe('disconnected');
+    expect(t.v().cards).toEqual([]);
+    expect(t.v().lastSeen.map(c => c.summary)).toEqual(['—', '—', '—']);
+    expect(t.v().device).toMatchObject({ connected: false, lastName: 'ICD1-TEST' });
+    t.ctl.stopAll();
+    expect(t.v().stopQueued).toBe(true);
+    t.dev.commandLog.length = 0;
+    await tick(800); // auto-reconnect
+    expect(t.v().screen.kind).toBe('normal');
+    const i = t.dev.commandLog.findIndex(c => c.startsWith('RATE'));
+    expect(t.dev.commandLog[i + 1]).toBe('STOP');
+    expect(t.v().stopQueued).toBe(false);
+    t.done();
+  });
+
+  it('non-safety ERR after an input: toast + fall back to device values', async () => {
+    const t = await setup();
+    t.ctl.setWingValue('A', 70);
+    t.client.onLine('ERR ARG LRA');
+    expect(t.v().toast).toBe("Couldn't change Wings. Showing the device's current setting.");
+    await tick(3100);
+    expect(t.v().toast).toBeNull();
+    t.done();
+  });
+
+  it('leaving the page sends STOP', async () => {
+    const t = await setup();
+    t.ctl.setPulseHz(30);
+    await tick(300);
+    t.dev.commandLog.length = 0;
+    t.ctl.leave();
+    await tick(100);
+    expect(t.dev.commandLog).toContain('STOP');
+    expect(t.dev.snapshot()).toMatchObject({ vcmOn: false, lra: [0, 0] });
+    t.done();
+  });
+});

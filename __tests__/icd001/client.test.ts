@@ -317,4 +317,34 @@ describe('Icd001Client + simulator', () => {
     expect(writes).toContainEqual(encodeCommand('LRA 0 12'));
     client.destroy();
   });
+  it('estopSource: app for STOP ALL, device for the START key; cleared on release', async () => {
+    const { dev, transport, client, id } = setup('icd1', 185);
+    await connect(client, id, dev.name);
+    await client.setEstop(true);
+    await tick(300);
+    expect(client.getState()).toMatchObject({ estop: true, estopSource: 'app' });
+    await tick(4000); // later TLM frames keep the source
+    expect(client.getState().estopSource).toBe('app');
+    await client.setEstop(false);
+    await tick(200);
+    expect(client.getState()).toMatchObject({ estop: false, estopSource: null });
+    transport.pressStartKey(id);
+    await tick(200);
+    expect(client.getState()).toMatchObject({ estop: true, estopSource: 'device' });
+    client.destroy();
+  });
+
+  it('requestStopOnConnect sends STOP right after RATE on the next connect', async () => {
+    const { dev, client, id } = setup('icd1', 185);
+    client.requestStopOnConnect();
+    await connect(client, id, dev.name);
+    const i = dev.commandLog.findIndex(c => c.startsWith('RATE'));
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(dev.commandLog[i + 1]).toBe('STOP');
+    await client.disconnect();
+    dev.commandLog.length = 0;
+    await connect(client, id, dev.name); // one-shot
+    expect(dev.commandLog).not.toContain('STOP');
+    client.destroy();
+  });
 });

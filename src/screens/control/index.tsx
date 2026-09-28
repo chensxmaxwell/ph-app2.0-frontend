@@ -44,14 +44,17 @@ export const Control = () => {
           columnWrapperStyle={styles.columnWrapper}
         />
         <SessionLovePill style={{ top: s(80) }} />
-        {__DEV__ ? (
-          // Temporary engineering entry; the 高级控制 entry replaces it.
-          <TouchableOpacity
-            style={styles.bleDebugChip}
-            onPress={() => navigation.navigate(SCREENS.ICD001_DEBUG)}>
-            <BaseText style={styles.bleDebugText}>BLE</BaseText>
-          </TouchableOpacity>
-        ) : null}
+        {/* 高级控制 entry: always shown for now (design asks whether to show it only
+            after an ICD/H11 connected). Unstyled until design v2. Long-press opens the
+            BLE debug screen in __DEV__ builds only. */}
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Advanced control"
+          style={styles.advancedEntry}
+          onPress={() => navigation.navigate(SCREENS.ADVANCED_CONTROL)}
+          onLongPress={__DEV__ ? () => navigation.navigate(SCREENS.ICD001_DEBUG) : undefined}>
+          <BaseText style={styles.advancedEntryText}>高级控制</BaseText>
+        </TouchableOpacity>
       </View>
     </ScreenWrapper>
   );
@@ -85,7 +88,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: spacings.h16,
   },
-  bleDebugChip: {
+  advancedEntry: {
     position: 'absolute',
     top: s(8),
     right: s(16),
@@ -95,7 +98,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.white,
   },
-  bleDebugText: {
+  advancedEntryText: {
     color: colors.white,
     fontSize: fontSizes.smallX,
   },

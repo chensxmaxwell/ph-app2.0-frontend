@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { COMMON_HEADER_OPTIONS_CONFIG, SCREENS } from "../src/common/constant";
 import { NavBar } from "@common/components/nav-bar/nav-bar";
 import { Icd001DebugScreen } from "../src/screens/icd001-debug";
+import { AdvancedControlScreen } from "../src/screens/advanced-control";
 import { Manual } from "../src/screens/control/sub-screens/manual";
 import { Pattern } from "../src/screens/control/sub-screens/pattern";
 import { CreatePattern } from "../src/screens/control/sub-screens/pattern/sub-screens/create-pattern";
@@ -107,6 +108,7 @@ export const HomeStack = () => (
     <Stack.Screen name={SCREENS.FEED} component={FeedScreen} />
     <Stack.Screen name={SCREENS.PREMIUM} component={PremiumScreen} />
     <Stack.Screen name={SCREENS.ICD001_DEBUG} component={Icd001DebugScreen} />
+    <Stack.Screen name={SCREENS.ADVANCED_CONTROL} component={AdvancedControlScreen} />
   </Stack.Navigator>
 );
 
@@ -138,4 +140,5 @@ export type HomeStackScreenProps = {
   Feed: undefined;
   Premium: undefined;
   Icd001Debug: undefined;
+  AdvancedControl: undefined;
 };
