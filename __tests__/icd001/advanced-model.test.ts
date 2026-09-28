@@ -144,50 +144,75 @@ describe('state priority 未连接 > 急停 > 过温 > 低电', () => {
   });
 });
 
-describe('banners', () => {
-  it('estop names the source and asks to hold', () => {
+describe('notices (design v2 copy)', () => {
+  it('estop: neutral lock notice; copy depends on who stopped it', () => {
     const s = deriveScreenState(st({ estop: true }));
     expect(bannerFor(s, tlm(), 'app')).toEqual({
-      tone: 'red',
-      icon: 'hand',
+      tone: 'neutral',
+      icon: 'lock',
       title: 'Emergency stop is on',
-      lines: ['All outputs are off. Stopped from the app.', 'Hold the button below to release.'],
+      lines: ['All outputs are stopped and locked. Release below when you are ready.'],
     });
     expect(bannerFor(s, tlm(), 'device')?.lines[0]).toBe(
-      'All outputs are off. Stopped from the device button.',
+      'Stopped with the button on the device. Release below, or press that button again.',
     );
   });
 
-  it('overtemp shows the live temperature and the 39 °C release', () => {
-    const b = bannerFor(deriveScreenState(st({ overTemp: true })), tlm({ ntc: 42.3, ot: 1 }), null)!;
-    expect(b.tone).toBe('amber');
-    expect(b.title).toBe('Too warm · 42.3°C');
-    expect(b.lines[0]).toBe('Outputs paused to protect your skin. They can start again below 39°C.');
+  it('overtemp shows the live temperature and the 39 °C release (INFO fallback)', () => {
+    const b = bannerFor(deriveScreenState(st({ overTemp: true })), tlm({ ntc: 42.6, ot: 1 }), null)!;
+    expect(b).toMatchObject({ tone: 'warn', icon: 'thermometer', title: 'Too warm, paused' });
+    expect(b.lines[0]).toBe('Device at 42.6 °C. Outputs resume once it cools below 39 °C.');
   });
 
   it('overtemp release text follows INFO ch.ot.clear (no hard-coded 39)', () => {
     const b = bannerFor(deriveScreenState(st({ overTemp: true })), tlm({ ntc: 40.1, ot: 1 }), null, {
-      ot: { tripC: 40, clearC: 37 },
+      ot: { tripC: 40, clearC: 37.5 },
     })!;
-    expect(b.lines[0]).toBe('Outputs paused to protect your skin. They can start again below 37°C.');
+    expect(b.lines[0]).toBe('Device at 40.1 °C. Outputs resume once it cools below 37.5 °C.');
+    const n = bannerFor(deriveScreenState(st({ overTemp: true })), tlm({ ntc: -99, ot: 1 }), null)!;
+    expect(n.lines[0]).toBe('Outputs resume once the device cools below 39 °C.');
   });
 
   it('lowbat shows voltage; lower-priority conditions become extra lines', () => {
     const b = bannerFor(deriveScreenState(st({ lowBattery: true })), tlm({ vbat: 3.38, lb: 1 }), null)!;
-    expect(b.title).toBe('Battery low · 3.38 V');
-    expect(b.lines).toEqual(['Outputs paused. Charge ICD-001 to keep going.']);
+    expect(b).toMatchObject({ tone: 'warn', icon: 'battery', title: 'Battery low, paused' });
+    expect(b.lines).toEqual(['3.38 V. Charge the device to continue.']);
     const e = bannerFor(
       deriveScreenState(st({ estop: true, overTemp: true, lowBattery: true })),
       tlm({ ntc: 42.3, vbat: 3.38 }),
       'app',
     )!;
-    expect(e.lines.slice(2)).toEqual(['Also too warm (42.3°C).', 'Battery is also low (3.38 V).']);
+    expect(e.lines.slice(1)).toEqual(['Also too warm (42.3 °C).', 'Battery is also low (3.38 V).']);
   });
 
-  it('no banner when normal or disconnected; cooled-down toast copy', () => {
+  it('disconnected: Connection lost + Reconnect, or Not connected + Scan before any device', () => {
+    const d = deriveScreenState(st({ status: 'disconnected' }));
+    expect(bannerFor(d, null, null)).toMatchObject({
+      title: 'Connection lost',
+      action: 'reconnect',
+      icon: 'bluetooth',
+    });
+    expect(bannerFor(d, null, null, null, { hadDevice: false })).toMatchObject({
+      title: 'Not connected',
+      action: 'scan',
+    });
+    const c = deriveScreenState(st({ status: 'scanning' }));
+    expect(bannerFor(c, null, null, null, { hadDevice: false })?.title).toBe('Looking for your device');
+  });
+
+  it('no notice when normal; cooled-down copy; no em or en dashes anywhere', () => {
     expect(bannerFor(deriveScreenState(st({})), tlm(), null)).toBeNull();
-    expect(bannerFor(deriveScreenState(st({ status: 'disconnected' })), null, null)).toBeNull();
-    expect(COOLED_DOWN_BANNER.title).toBe('Cooled down — turn modules back on');
+    expect(COOLED_DOWN_BANNER.title).toBe('Cooled down');
+    const all = [
+      COOLED_DOWN_BANNER,
+      bannerFor(deriveScreenState(st({ estop: true, overTemp: true, lowBattery: true })), tlm(), 'device'),
+      bannerFor(deriveScreenState(st({ overTemp: true })), tlm(), null),
+      bannerFor(deriveScreenState(st({ lowBattery: true })), tlm(), null),
+      bannerFor(deriveScreenState(st({ status: 'disconnected' })), null, null),
+    ];
+    for (const b of all) {
+      expect(JSON.stringify(b)).not.toMatch(/[\u2013\u2014]/);
+    }
   });
 });
 
@@ -203,7 +228,7 @@ describe('device strip values', () => {
   });
   it('temperature text', () => {
     expect(tempText(34.2)).toBe('34.2°C');
-    expect(tempText(null)).toBe('—');
+    expect(tempText(null)).toBe('n/a');
   });
 });
 
@@ -217,6 +242,14 @@ describe('cards from INFO', () => {
     expect(p.range).toEqual({ min: 10, max: 50, def: 10 });
     expect(p.device).toEqual({ min: 2, max: 50 });
     expect(cards[2]).toMatchObject({ ppgIndex: 3, hasActuator: false });
+  });
+
+  it('rows carry design v2 app subtitles, never INFO labels', () => {
+    expect(buildCards(v0).map(c => [c.label, c.subtitle])).toEqual([
+      ['Wings', 'Upper and lower pairs'],
+      ['Pulse', 'Voice coil rhythm'],
+      ['Bullet', 'Sensor only'],
+    ]);
   });
 
   it('wing groups carry app copy + hotspot zone (§8.5), independent of INFO labels', () => {
@@ -332,6 +365,12 @@ describe('control -> command mapping (wire text per PROTOCOL §7)', () => {
     expect(wire({ t: 'wingMode', mode: 'steady' }, r)).toEqual(['LRA 0 60', 'LRA 1 40']);
     expect(wire({ t: 'wingMode', mode: 'rhythm' }, { ...wing, values: { A: 0, B: 0 } })).toEqual([]);
     expect(wire({ t: 'wingSlider', group: 'A', value: 0 }, r)).toEqual(['LRA 0 0']);
+  });
+
+  it('fine tune slider -> FREQ snapped to 5 Hz, clamped to INFO range', () => {
+    expect(wire({ t: 'freqSet', hz: 212 })).toEqual(['FREQ 210']);
+    expect(wire({ t: 'freqSet', hz: 40 })).toEqual(['FREQ 100']);
+    expect(wire({ t: 'freqSet', hz: 999 })).toEqual(['FREQ 300']);
   });
 
   it('freq stepper ±5 -> FREQ, clamped to INFO range', () => {

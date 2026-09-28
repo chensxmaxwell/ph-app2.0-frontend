@@ -67,8 +67,17 @@ export interface ClientLike extends ControlClient {
   stopForSafety(reason: string): void;
 }
 
+/** Value shown on the collapsed row (design v2 §6.3); hidden while expanded. */
+export type RowValue =
+  | { kind: 'off'; text: 'Off' | 'No data' }
+  | { kind: 'ab'; A: number; B: number }
+  | { kind: 'hz'; hz: number }
+  | { kind: 'bpm'; bpm: number }
+  | { kind: 'text'; text: string };
+
 export interface IntensityView {
   kind: 'intensity';
+  row: RowValue;
   card: IntensityCard;
   expanded: boolean;
   enabled: boolean;
@@ -85,6 +94,7 @@ export interface IntensityView {
 
 export interface RhythmView {
   kind: 'rhythm';
+  row: RowValue;
   card: RhythmCard;
   expanded: boolean;
   enabled: boolean;
@@ -97,6 +107,7 @@ export interface RhythmView {
 
 export interface SensorView {
   kind: 'sensor';
+  row: RowValue;
   card: SensorCard;
   expanded: boolean;
   /** Sensor cards never grey out (read-only). */
@@ -143,6 +154,16 @@ export interface AdvancedControlView {
   running: { upper: boolean; lower: boolean; head: boolean };
   /** Thresholds in use (INFO ch.ot / ch.lb, or fallback on legacy boards). */
   thresholds: SafetyThresholds | null;
+  /**
+   * Product stage: dim = disconnected / E-stop (grey product); compact = a row is
+   * expanded or outputs are paused; tint = per-part accent overlay opacity 0..1
+   * (upper = A, lower = B at intensity/100 × 0.6; head / egg while their row is open).
+   */
+  stage: {
+    dim: boolean;
+    compact: boolean;
+    tint: { upper: number; lower: number; head: number; egg: number };
+  };
   toast: string | null;
   /** STOP ALL pressed while offline; STOP goes out right after connecting. */
   stopQueued: boolean;
@@ -159,6 +180,7 @@ export class AdvancedControlController {
   private s: Icd001State;
   private lastInfo: DeviceInfo | null = null;
   private lastName: string | null = null;
+  private lastDevice: DiscoveredDevice | null = null;
 
   private expanded: CardId | null = null;
   private focusedGroup: LraGroupId | null = null;
@@ -309,8 +331,14 @@ export class AdvancedControlController {
       return;
     }
     const v = Math.round(Math.max(card.range.min, Math.min(card.range.max, hz)));
-    this.pulse.hz = v;
     this.pulse.restore = v;
+    if (!preset && !((this.pulse.hz ?? 0) > 0)) {
+      // Output is off (design v2: separate Output switch): only remember the
+      // rhythm; the switch turns it on at this value.
+      this.emit();
+      return;
+    }
+    this.pulse.hz = v;
     this.inputAt.vcm = this.now();
     this.dispatch('vcm', preset ? { t: 'pulsePreset', hz: v } : { t: 'pulseSlider', hz: v });
   }
@@ -372,6 +400,39 @@ export class AdvancedControlController {
     if (emit) {
       this.emit();
     }
+  }
+
+  /** Design v2: one tap on Release sends ESTOP 0 (no hold). */
+  release(): void {
+    if (this.s.estop && this.s.status === 'connected') {
+      this.cancelRelease(false);
+      runCalls(this.client, mapAction({ t: 'release' }, {}));
+    }
+    this.emit();
+  }
+
+  /** Reconnect to the last device (Connection lost notice); scans if there is none. */
+  reconnect(): void {
+    if (this.lastDevice) {
+      this.client.connect(this.lastDevice).catch(() => undefined);
+    } else {
+      this.scan();
+    }
+  }
+
+  /** Fine tune (FREQ 100-300 Hz, shared by A and B). */
+  setWingFreq(hz: number): void {
+    const w = this.wingCtx();
+    if (!w) {
+      return;
+    }
+    const calls = mapAction({ t: 'freqSet', hz }, { wing: w });
+    const c = calls[0];
+    if (c && c.fn === 'setFreq') {
+      this.wing.freq = c.hz;
+      this.inputAt.freq = this.now();
+    }
+    this.run('wing', calls);
   }
 
   scan(): void {
@@ -475,6 +536,7 @@ export class AdvancedControlController {
     }
     if (s.device) {
       this.lastName = s.device.name;
+      this.lastDevice = s.device;
     }
     const tlm = s.tlm;
     if (!tlm || s.status !== 'connected') {
@@ -526,6 +588,7 @@ export class AdvancedControlController {
         const sum = wingSummary(tlm, card.groups);
         return {
           kind: 'intensity',
+          row: enabled ? { kind: 'ab', A: values.A, B: values.B } : { kind: 'off', text: 'Off' },
           card,
           expanded,
           enabled,
@@ -551,6 +614,7 @@ export class AdvancedControlController {
         const beat = beatLabel(shown, presets);
         return {
           kind: 'rhythm',
+          row: enabled && hz > 0 ? { kind: 'hz', hz } : { kind: 'off', text: 'Off' },
           card,
           expanded,
           enabled,
@@ -569,8 +633,17 @@ export class AdvancedControlController {
       }
       const reading = sensorReading(tlm, card);
       const sum = sensorSummary(reading);
+      let row: RowValue;
+      if (!live || !reading.available) {
+        row = { kind: 'off', text: 'No data' };
+      } else if (!reading.contact) {
+        row = { kind: 'text', text: 'Not on skin' };
+      } else {
+        row = reading.hr ? { kind: 'bpm', bpm: reading.hr } : { kind: 'text', text: 'Measuring' };
+      }
       return {
         kind: 'sensor',
+        row,
         card,
         expanded,
         enabled: true,
@@ -581,12 +654,37 @@ export class AdvancedControlController {
     });
   }
 
+  private stageView(screen: ScreenState, live: boolean): AdvancedControlView['stage'] {
+    const active = live && screen.kind === 'normal';
+    const tint = { upper: 0, lower: 0, head: 0, egg: 0 };
+    if (active) {
+      const tlm = this.s.tlm;
+      const a = tlm ? tlm.lra[0] : 0;
+      const b = tlm ? tlm.lra[1] : 0;
+      // optimistic values while dragging, telemetry otherwise
+      const t = this.now();
+      const va = t - this.inputAt.A <= OPTIMISTIC_MS ? this.wing.values.A : a;
+      const vb = t - this.inputAt.B <= OPTIMISTIC_MS ? this.wing.values.B : b;
+      tint.upper = (Math.max(0, Math.min(100, va)) / 100) * 0.6;
+      tint.lower = (Math.max(0, Math.min(100, vb)) / 100) * 0.6;
+      tint.head = this.expanded === 'vcm' ? 0.6 : 0;
+      tint.egg = this.expanded === 'egg' ? 0.45 : 0;
+    }
+    return {
+      dim: screen.kind === 'disconnected' || screen.kind === 'estop',
+      compact: (live && this.expanded !== null) || screen.kind !== 'normal',
+      tint,
+    };
+  }
+
   private recompute(): void {
     const s = this.s;
     const t = this.now();
     const screen = deriveScreenState(s);
     const live = screen.kind !== 'disconnected';
-    let banner = bannerFor(screen, s.tlm, s.estopSource, s.info?.safety ?? null);
+    let banner = bannerFor(screen, s.tlm, s.estopSource, s.info?.safety ?? null, {
+      hadDevice: this.lastName !== null,
+    });
     if (!banner && live && t < this.releasedUntil) {
       banner = RELEASED_ON_DEVICE_BANNER;
     }
@@ -624,6 +722,7 @@ export class AdvancedControlController {
         head: !!tlm && tlm.vcm.on,
       },
       thresholds: (live ? s.info : this.lastInfo)?.safety ?? null,
+      stage: this.stageView(screen, live),
       toast: this.toast && t < this.toast.until ? this.toast.text : null,
       stopQueued: this.stopQueued,
     };

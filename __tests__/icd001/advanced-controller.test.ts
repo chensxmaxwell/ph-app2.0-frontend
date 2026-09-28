@@ -68,7 +68,10 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
   it('legacy H11: no bullet card, pulse uses VCM 2–20', async () => {
     const t = await setup('h11');
     expect(t.v().cards.map(c => c.kind)).toEqual(['intensity', 'rhythm']);
-    t.ctl.setPulseHz(10);
+    t.ctl.setPulseHz(10); // Output off: only remembered
+    await tick(300);
+    expect(t.dev.commandLog.filter(c => c.startsWith('VCM'))).toEqual([]);
+    t.ctl.setPulseOn(true);
     await tick(300);
     expect(t.dev.commandLog).toContain('VCM 1 50');
     t.done();
@@ -120,8 +123,23 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.done();
   });
 
+  it('pulse slider with Output off only remembers the rhythm; the switch sends it', async () => {
+    const t = await setup();
+    t.ctl.setPulseHz(36);
+    await tick(300);
+    expect(t.dev.commandLog.filter(c => c.startsWith('VHZ'))).toEqual([]);
+    expect(t.pulse()).toMatchObject({ on: false, hz: 36, row: { kind: 'off', text: 'Off' } });
+    t.ctl.setPulseOn(true);
+    await tick(300);
+    expect(t.dev.commandLog).toContain('VHZ 36');
+    expect(t.pulse().row).toEqual({ kind: 'hz', hz: 36 });
+    t.done();
+  });
+
   it('pulse slider, presets, switch -> VHZ; a fast drag is throttled, final value wins', async () => {
     const t = await setup();
+    t.ctl.setPulseOn(true);
+    await tick(300);
     t.dev.commandLog.length = 0;
     for (let hz = 10; hz <= 50; hz++) {
       t.ctl.setPulseHz(hz);
@@ -173,7 +191,9 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     await tick(300);
     expect(t.v().screen.kind).toBe('estop');
     expect(t.v().banner?.title).toBe('Emergency stop is on');
-    expect(t.v().banner?.lines[0]).toBe('All outputs are off. Stopped from the app.');
+    expect(t.v().banner?.lines[0]).toBe(
+      'All outputs are stopped and locked. Release below when you are ready.',
+    );
     expect(t.wing()).toMatchObject({ enabled: false, summary: 'Paused' });
     expect(t.egg()?.enabled).toBe(true);
 
@@ -197,11 +217,88 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.done();
   });
 
+  it('design v2: one tap on Release sends ESTOP 0', async () => {
+    const t = await setup();
+    t.ctl.stopAll();
+    await tick(300);
+    expect(t.v().estop.on).toBe(true);
+    t.ctl.release();
+    await tick(300);
+    expect(t.dev.commandLog).toContain('ESTOP 0');
+    expect(t.v().screen.kind).toBe('normal');
+    t.done();
+  });
+
+  it('rows + stage: values, Off / No data, tint from intensity, dim / compact per state', async () => {
+    const t = await setup();
+    t.ctl.setWingValue('A', 60);
+    t.ctl.setWingValue('B', 40);
+    t.ctl.setPulseOn(true);
+    await tick(3500); // heart rate warms up in the sim
+    expect(t.wing().row).toEqual({ kind: 'ab', A: 60, B: 40 });
+    expect(t.pulse().row).toEqual({ kind: 'hz', hz: 10 });
+    expect(t.egg()?.row.kind).toBe('bpm');
+    expect(t.v().stage).toEqual({
+      dim: false,
+      compact: false,
+      tint: { upper: 0.36, lower: 0.24, head: 0, egg: 0 },
+    });
+    t.ctl.selectPart('head');
+    expect(t.v().stage).toMatchObject({ compact: true, tint: { head: 0.6, egg: 0 } });
+    t.ctl.selectPart('bullet');
+    expect(t.v().stage.tint).toMatchObject({ head: 0, egg: 0.45 });
+    t.ctl.collapse();
+    t.ctl.stopAll();
+    await tick(300);
+    expect(t.v().stage).toEqual({ dim: true, compact: true, tint: { upper: 0, lower: 0, head: 0, egg: 0 } });
+    expect(t.wing().row).toEqual({ kind: 'off', text: 'Off' });
+    expect(t.pulse().row).toEqual({ kind: 'off', text: 'Off' });
+    expect(t.egg()?.row.kind).toBe('bpm'); // sensor keeps reading
+    t.ctl.release();
+    await tick(300);
+    t.dev.ntcOverride = 42.6;
+    await tick(500);
+    expect(t.v().stage).toMatchObject({ dim: false, compact: true });
+    t.transport.simulateLinkLoss(t.id);
+    await tick(20);
+    expect(t.v().stage.dim).toBe(true);
+    expect(t.v().lastSeen.map(c => c.row)).toEqual([
+      { kind: 'off', text: 'Off' },
+      { kind: 'off', text: 'Off' },
+      { kind: 'off', text: 'No data' },
+    ]);
+    expect(t.v().banner).toMatchObject({ title: 'Connection lost', action: 'reconnect' });
+    t.done();
+  });
+
+  it('Reconnect reconnects to the last device', async () => {
+    const t = await setup();
+    await t.client.disconnect();
+    await tick(50);
+    expect(t.v().screen.kind).toBe('disconnected');
+    t.ctl.reconnect();
+    await tick(300);
+    expect(t.v().screen.kind).toBe('normal');
+    expect(t.v().device.name).toBe('ICD1-TEST');
+    t.done();
+  });
+
+  it('fine tune slider sets FREQ (snapped to 5 Hz)', async () => {
+    const t = await setup();
+    t.ctl.setWingFreq(213);
+    await tick(300);
+    expect(t.dev.commandLog).toContain('FREQ 215');
+    expect(t.wing().freq).toBe(215);
+    t.done();
+  });
+
   it('device START key E-stop names the device button', async () => {
     const t = await setup();
     t.transport.pressStartKey(t.id);
     await tick(200);
-    expect(t.v().banner?.lines[0]).toBe('All outputs are off. Stopped from the device button.');
+    expect(t.v().banner?.lines[0]).toBe(
+      'Stopped with the button on the device. Release below, or press that button again.',
+    );
     t.done();
   });
 
@@ -219,7 +316,7 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
       holdProgress: 0,
       lastChange: { on: false, source: 'device' },
     });
-    expect(t.v().banner?.title).toBe('Emergency stop released on the device');
+    expect(t.v().banner?.title).toBe('Released on the device');
     expect(t.dev.commandLog).not.toContain('ESTOP 0');
     await tick(4200);
     expect(t.v().banner).toBeNull();
@@ -249,7 +346,7 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     });
     expect(ctl.getView().screen.kind).toBe('overtemp');
     expect(ctl.getView().banner?.lines[0]).toBe(
-      'Outputs paused to protect your skin. They can start again below 36.5°C.',
+      'Device at 40.4 °C. Outputs resume once it cools below 36.5 °C.',
     );
     ctl.dispose();
     client.destroy();
@@ -273,12 +370,12 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.dev.ntcOverride = 42.3;
     await tick(1500);
     expect(t.v().screen.kind).toBe('overtemp');
-    expect(t.v().banner).toMatchObject({ tone: 'amber', title: 'Too warm · 42.3°C' });
+    expect(t.v().banner).toMatchObject({ tone: 'warn', title: 'Too warm, paused' });
     expect(t.v().device.tempWarn).toBe(true);
     t.dev.ntcOverride = 38.5;
     await tick(1500);
     expect(t.v().screen.kind).toBe('normal');
-    expect(t.v().banner?.title).toBe('Cooled down — turn modules back on');
+    expect(t.v().banner?.title).toBe('Cooled down');
     await tick(4200);
     expect(t.v().banner).toBeNull();
     t.done();
@@ -289,7 +386,7 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.dev.vbatOverride = 3.38;
     await tick(1500);
     expect(t.v().screen.kind).toBe('lowbat');
-    expect(t.v().banner?.title).toBe('Battery low · 3.38 V');
+    expect(t.v().banner?.title).toBe('Battery low, paused');
     expect(t.v().device).toMatchObject({ batteryPct: 0, batteryWarn: true });
     t.dev.ntcOverride = 42.3;
     await tick(1500);
@@ -297,8 +394,8 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.ctl.stopAll();
     await tick(300);
     expect(t.v().screen).toMatchObject({ kind: 'estop', also: ['overtemp', 'lowbat'] });
-    expect(t.v().banner?.lines.slice(2)).toEqual([
-      'Also too warm (42.3°C).',
+    expect(t.v().banner?.lines.slice(1)).toEqual([
+      'Also too warm (42.3 °C).',
       'Battery is also low (3.38 V).',
     ]);
     t.done();

@@ -114,58 +114,96 @@ export function deriveScreenState(s: StateSlice): ScreenState {
   };
 }
 
+/**
+ * Page notice (design v2 §6.9: icon + one bold sentence + body, no box).
+ * tone 'warn' for heat / battery, 'neutral' for connection / E-stop / info.
+ * Copy follows design v2 (no em / en dashes).
+ */
 export interface BannerModel {
-  tone: 'red' | 'amber';
-  icon: 'hand' | 'therm' | 'bolt' | 'check';
+  tone: 'neutral' | 'warn';
+  icon: 'lock' | 'thermometer' | 'battery' | 'bluetooth' | 'info';
   title: string;
   lines: string[];
+  /** Optional action rendered as an outline button (Reconnect / Scan). */
+  action?: 'reconnect' | 'scan';
 }
+
+const fmtC = (c: number) => `${Number.isInteger(c) ? c : c.toFixed(1)} °C`;
 
 const ALSO_TEXT = (c: Condition, tlm: Telemetry | null): string => {
   switch (c) {
     case 'estop':
       return 'Emergency stop is also on.';
     case 'overtemp':
-      return `Also too warm${tlm?.ntcC != null ? ` (${tlm.ntcC.toFixed(1)}°C)` : ''}.`;
+      return `Also too warm${tlm?.ntcC != null ? ` (${fmtC(tlm.ntcC)})` : ''}.`;
     case 'lowbat':
       return `Battery is also low${tlm?.vbat != null ? ` (${tlm.vbat.toFixed(2)} V)` : ''}.`;
   }
 };
 
-/** Only the highest-priority banner is shown; others become extra lines. */
+/** Only the highest-priority notice is shown; lower ones become extra lines. */
 export function bannerFor(
   screen: ScreenState,
   tlm: Telemetry | null,
   estopSource: Icd001State['estopSource'],
   safety: Pick<SafetyThresholds, 'ot'> | null = null,
+  link: { hadDevice: boolean } = { hadDevice: true },
 ): BannerModel | null {
   const otClear = (safety ?? { ot: OT_FALLBACK }).ot.clearC;
   const also = screen.also.map(c => ALSO_TEXT(c, tlm));
   switch (screen.kind) {
+    case 'disconnected':
+      if (!link.hadDevice) {
+        return {
+          tone: 'neutral',
+          icon: 'bluetooth',
+          title: screen.connecting ? 'Looking for your device' : 'Not connected',
+          lines: ['Turn on ICD-001 and keep it close.'],
+          action: 'scan',
+        };
+      }
+      return {
+        tone: 'neutral',
+        icon: 'bluetooth',
+        title: 'Connection lost',
+        lines: ['The device stopped all outputs on its own. Reconnect to continue.'],
+        action: 'reconnect',
+      };
     case 'estop':
       return {
-        tone: 'red',
-        icon: 'hand',
+        tone: 'neutral',
+        icon: 'lock',
         title: 'Emergency stop is on',
         lines: [
-          `All outputs are off. Stopped from ${estopSource === 'device' ? 'the device button' : 'the app'}.`,
-          'Hold the button below to release.',
+          estopSource === 'device'
+            ? 'Stopped with the button on the device. Release below, or press that button again.'
+            : 'All outputs are stopped and locked. Release below when you are ready.',
           ...also,
         ],
       };
     case 'overtemp':
       return {
-        tone: 'amber',
-        icon: 'therm',
-        title: `Too warm${tlm?.ntcC != null ? ` · ${tlm.ntcC.toFixed(1)}°C` : ''}`,
-        lines: [`Outputs paused to protect your skin. They can start again below ${otClear}°C.`, ...also],
+        tone: 'warn',
+        icon: 'thermometer',
+        title: 'Too warm, paused',
+        lines: [
+          tlm?.ntcC != null
+            ? `Device at ${fmtC(tlm.ntcC)}. Outputs resume once it cools below ${fmtC(otClear)}.`
+            : `Outputs resume once the device cools below ${fmtC(otClear)}.`,
+          ...also,
+        ],
       };
     case 'lowbat':
       return {
-        tone: 'amber',
-        icon: 'bolt',
-        title: `Battery low${tlm?.vbat != null ? ` · ${tlm.vbat.toFixed(2)} V` : ''}`,
-        lines: ['Outputs paused. Charge ICD-001 to keep going.', ...also],
+        tone: 'warn',
+        icon: 'battery',
+        title: 'Battery low, paused',
+        lines: [
+          tlm?.vbat != null
+            ? `${tlm.vbat.toFixed(2)} V. Charge the device to continue.`
+            : 'Charge the device to continue.',
+          ...also,
+        ],
       };
     default:
       return null;
@@ -173,10 +211,10 @@ export function bannerFor(
 }
 
 export const COOLED_DOWN_BANNER: BannerModel = {
-  tone: 'amber',
-  icon: 'check',
-  title: 'Cooled down — turn modules back on',
-  lines: [],
+  tone: 'neutral',
+  icon: 'info',
+  title: 'Cooled down',
+  lines: ['Turn modules back on when you are ready.'],
 };
 export const COOLED_DOWN_MS = 4000;
 
@@ -193,15 +231,15 @@ export function displayBatteryPct(vbat: number | null): number | null {
 
 /** Device-button release (§8.3): shown briefly after EVT ESTOP 0 from the START key. */
 export const RELEASED_ON_DEVICE_BANNER: BannerModel = {
-  tone: 'amber',
-  icon: 'check',
-  title: 'Emergency stop released on the device',
-  lines: ['Outputs stay off. Turn modules back on.'],
+  tone: 'neutral',
+  icon: 'info',
+  title: 'Released on the device',
+  lines: ['Outputs stay off. Turn modules back on when you are ready.'],
 };
 export const RELEASED_NOTICE_MS = 4000;
 
 export function tempText(ntcC: number | null): string {
-  return ntcC === null ? '—' : `${ntcC.toFixed(1)}°C`;
+  return ntcC === null ? 'n/a' : `${ntcC.toFixed(1)}°C`;
 }
 
 // ------------------------------------------------------------ cards from INFO
@@ -218,6 +256,8 @@ export interface IntensityCard {
   id: 'wing';
   kind: 'intensity';
   label: string;
+  /** App copy (design v2), never INFO labels (Q10). */
+  subtitle: string;
   part: 'wings';
   groups: WingGroupView[];
   freq: { min: number; max: number; def: number };
@@ -228,6 +268,8 @@ export interface RhythmCard {
   id: 'vcm';
   kind: 'rhythm';
   label: string;
+  /** App copy (design v2), never INFO labels (Q10). */
+  subtitle: string;
   part: 'head';
   /** Slider range used by the app (INFO ch.vhz capped to 10–50; legacy 2–20). */
   range: { min: number; max: number; def: number };
@@ -240,6 +282,8 @@ export interface SensorCard {
   id: 'egg';
   kind: 'sensor';
   label: string;
+  /** App copy (design v2), never INFO labels (Q10). */
+  subtitle: string;
   part: 'bullet';
   ppgIndex: number;
   hasActuator: boolean;
@@ -295,6 +339,7 @@ export function buildCards(info: DeviceInfo | null): ModuleCard[] {
       id: 'wing',
       kind: 'intensity',
       label: 'Wings',
+      subtitle: 'Upper and lower pairs',
       part: 'wings',
       groups: w.groups.map(g => ({ ...g, ...WING_GROUP_COPY[g.id] })),
       freq: w.freq,
@@ -307,6 +352,7 @@ export function buildCards(info: DeviceInfo | null): ModuleCard[] {
       id: 'vcm',
       kind: 'rhythm',
       label: 'Pulse',
+      subtitle: 'Voice coil rhythm',
       part: 'head',
       range: rhythmRange(v),
       device: { min: v.minHz, max: v.maxHz },
@@ -319,6 +365,7 @@ export function buildCards(info: DeviceInfo | null): ModuleCard[] {
       id: 'egg',
       kind: 'sensor',
       label: 'Bullet',
+      subtitle: e.hasActuator ? 'Sensor and vibration' : 'Sensor only',
       part: 'bullet',
       ppgIndex: e.ppgIndex,
       hasActuator: e.hasActuator,
@@ -385,6 +432,8 @@ export type ControlAction =
   | { t: 'wingMode'; mode: 'steady' | 'rhythm' }
   | { t: 'wingRhythm'; preset: RhythmPresetId }
   | { t: 'freqStep'; delta: number }
+  /** Fine tune slider (design v2 Q5): absolute Hz, snapped to FREQ_STEP_HZ. */
+  | { t: 'freqSet'; hz: number }
   | { t: 'pulseSlider'; hz: number }
   | { t: 'pulsePreset'; hz: number }
   | { t: 'pulseSwitch'; on: boolean; lastHz: number }
@@ -447,6 +496,13 @@ export function mapAction(a: ControlAction, ctx: { wing?: WingCtx; pulse?: Rhyth
       return [
         { fn: 'setFreq', hz: clamp(ctx.wing.freq + a.delta, ctx.wing.freqRange.min, ctx.wing.freqRange.max) },
       ];
+    case 'freqSet': {
+      if (!ctx.wing) {
+        return [];
+      }
+      const snapped = Math.round(a.hz / FREQ_STEP_HZ) * FREQ_STEP_HZ;
+      return [{ fn: 'setFreq', hz: clamp(snapped, ctx.wing.freqRange.min, ctx.wing.freqRange.max) }];
+    }
     case 'pulseSlider':
     case 'pulsePreset': {
       if (!ctx.pulse) {

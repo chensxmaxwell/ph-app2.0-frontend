@@ -1,6 +1,7 @@
 /**
- * Smoke test: the placeholder screen renders through useAdvancedControl on the
- * simulator, and unmounting (leaving the page) sends STOP.
+ * Design v2 screen on the simulator: notices, module rows with live values,
+ * expanding a row, the Fine tune sheet, Stop all / Release, and STOP on leave.
+ * Also the Control-home entry (Q9: visible only while ICD1-/H11- connected).
  */
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
@@ -9,23 +10,66 @@ import renderer, { act } from 'react-test-renderer';
 jest.mock('react-native-ble-manager', () => ({}));
 jest.mock('@react-navigation/native', () => ({
   useFocusEffect: () => undefined,
-  useRoute: () => ({ name: 'AdvancedControl' }),
+  useRoute: () => ({ name: 'AdvancedControl', params: undefined }),
   useNavigation: () => ({ goBack: () => undefined, navigate: () => undefined }),
 }));
-jest.mock('@common/components/screen-wrapper', () => ({
-  ScreenWrapper: ({ children }: { children: React.ReactNode }) => children,
+jest.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 47, bottom: 34, left: 0, right: 0 }),
 }));
+jest.mock('react-native-linear-gradient', () => {
+  const { View } = jest.requireActual<typeof import('react-native')>('react-native');
+  return { __esModule: true, default: View };
+});
+jest.mock('react-native-svg', () => {
+  const { View } = jest.requireActual<typeof import('react-native')>('react-native');
+  return { __esModule: true, default: View, Path: View };
+});
 
 import { AdvancedControlScreen } from '../../src/screens/advanced-control';
+import { partAt } from '../../src/screens/advanced-control/components/Stage';
+import { AdvancedEntry, isAdvancedDevice } from '../../src/screens/control/advanced-entry';
 import { getIcd001Client, setIcd001Mode } from '../../src/services/icd001/useIcd001';
 
+const flat = (c: unknown): string =>
+  Array.isArray(c) ? c.map(flat).join('') : typeof c === 'string' || typeof c === 'number' ? String(c) : '';
 const texts = (r: renderer.ReactTestRenderer) =>
   r.root
     .findAll(n => (n.type as unknown) === 'Text')
-    .map(n => [].concat(n.props.children as never).join(''))
+    .map(n => flat(n.props.children))
     .join('\n');
+const byLabel = (r: renderer.ReactTestRenderer, label: string | RegExp) =>
+  r.root.findAll(
+    n =>
+      typeof n.props.onPress === 'function' &&
+      typeof n.props.accessibilityLabel === 'string' &&
+      (typeof label === 'string'
+        ? n.props.accessibilityLabel === label
+        : label.test(n.props.accessibilityLabel)),
+  )[0];
+const settle = async (ms = 1000) => {
+  for (let i = 0; i < ms / 10; i++) {
+    await jest.advanceTimersByTimeAsync(10);
+  }
+};
 
-describe('AdvancedControlScreen (placeholder) on the mock', () => {
+describe('isAdvancedDevice / partAt', () => {
+  it('shows the entry only for a connected ICD1- / H11- device', () => {
+    expect(isAdvancedDevice('connected', 'ICD1-91B1')).toBe(true);
+    expect(isAdvancedDevice('connected', 'H11-0001')).toBe(true);
+    expect(isAdvancedDevice('connected', 'Other')).toBe(false);
+    expect(isAdvancedDevice('connecting', 'ICD1-91B1')).toBe(false);
+    expect(isAdvancedDevice('connected', null)).toBe(false);
+  });
+  it('maps hero points to parts with head and bullet winning overlaps', () => {
+    expect(partAt(185, 80)).toBe('head');
+    expect(partAt(140, 80)).toBe('upper');
+    expect(partAt(60, 130)).toBe('lower');
+    expect(partAt(340, 25)).toBe('bullet');
+    expect(partAt(-5, -5)).toBeNull();
+  });
+});
+
+describe('AdvancedControlScreen v2 on the mock', () => {
   beforeAll(async () => {
     jest.useFakeTimers({ now: 11_000_000 });
     await setIcd001Mode('mock');
@@ -35,12 +79,16 @@ describe('AdvancedControlScreen (placeholder) on the mock', () => {
     jest.useRealTimers();
   });
 
-  it('renders disconnected, then connected cards; unmount sends STOP', async () => {
+  it('walks disconnected -> normal -> expand -> fine tune -> stop/release -> leave', async () => {
     let r!: renderer.ReactTestRenderer;
+    let entry!: renderer.ReactTestRenderer;
     await act(async () => {
       r = renderer.create(<AdvancedControlScreen />);
+      entry = renderer.create(<AdvancedEntry />);
     });
-    expect(texts(r)).toContain('State: disconnected');
+    expect(texts(r)).toContain('Not connected');
+    expect(entry.toJSON()).toBeNull();
+
     const client = getIcd001Client();
     await act(async () => {
       const p = client.connect({
@@ -50,16 +98,71 @@ describe('AdvancedControlScreen (placeholder) on the mock', () => {
         kind: null,
         simulated: true,
       });
-      for (let i = 0; i < 100; i++) {
-        await jest.advanceTimersByTimeAsync(10);
-      }
+      await settle();
       await p;
     });
-    const t = texts(r);
-    expect(t).toContain('State: normal');
-    expect(t).toContain('Wings · A 0 · B 0 · Steady');
-    expect(t).toContain('Pulse · Off');
+    let t = texts(r);
+    expect(t).toContain('ICD1-5A3C');
+    expect(t).toContain('Connected');
+    expect(t).toContain('Wings');
+    expect(t).toContain('Upper and lower pairs');
+    expect(t).toContain('Pulse');
+    expect(t).toContain('Voice coil rhythm');
     expect(t).toContain('Bullet');
+    expect(t).toContain('Leaving this page stops all outputs.');
+    expect(t).not.toContain('Not connected');
+    expect(entry.root.findAll(n => n.props.testID === 'advanced-entry').length).toBeGreaterThan(0);
+    expect(texts(entry)).toContain('Each part on its own');
+
+    // Expand Wings, raise upper wings through the a11y action, open Fine tune.
+    await act(async () => {
+      byLabel(r, /^Wings\. Upper and lower pairs\./).props.onPress();
+      await settle(100);
+    });
+    t = texts(r);
+    expect(t).toContain('Upper wings');
+    expect(t).toContain('Lower wings');
+    expect(t).toContain('Pattern');
+    expect(t).not.toContain('Leaving this page stops all outputs.');
+    const upper = r.root.find(
+      n => n.props.accessibilityLabel === 'Upper wings' && n.props.onAccessibilityAction,
+    );
+    await act(async () => {
+      upper.props.onAccessibilityAction({ nativeEvent: { actionName: 'increment' } });
+      await settle(300);
+    });
+    expect(client.getState().log.some(l => /LRA/.test(l))).toBe(true);
+    await act(async () => {
+      byLabel(r, /^Fine tune, vibration frequency/).props.onPress();
+      await settle(100);
+    });
+    expect(texts(r)).toContain('Vibration frequency, shared by upper and lower wings.');
+    await act(async () => {
+      r.root
+        .findAll(
+          n =>
+            n.props.accessibilityRole === 'button' &&
+            typeof n.props.onPress === 'function' &&
+            flat(n.findAll(x => (x.type as unknown) === 'Text').map(x => flat(x.props.children))) === 'Done',
+        )[0]
+        .props.onPress();
+      await settle(100);
+    });
+
+    // Stop all -> emergency stop notice + Release (single tap).
+    await act(async () => {
+      byLabel(r, 'Stop all outputs').props.onPress();
+      await settle(500);
+    });
+    t = texts(r);
+    expect(t).toContain('Emergency stop is on');
+    expect(t).toContain('Stopped');
+    await act(async () => {
+      byLabel(r, 'Release emergency stop').props.onPress();
+      await settle(500);
+    });
+    expect(texts(r)).not.toContain('Emergency stop is on');
+
     const sent: string[] = [];
     const unsub = client.subscribe(s => {
       const last = s.log[s.log.length - 1];
@@ -69,6 +172,7 @@ describe('AdvancedControlScreen (placeholder) on the mock', () => {
     });
     await act(async () => {
       r.unmount();
+      entry.unmount();
       await jest.advanceTimersByTimeAsync(50);
     });
     unsub();
