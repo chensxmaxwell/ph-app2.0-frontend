@@ -1,9 +1,11 @@
 /**
- * Slider (design v4 §1, §2, §5): label 13 left + fixed 78x28 value box right
- * (right-aligned, so digits never shift the layout), then the App SeekBar look
+ * Slider (design v4 §1, §2, §5; numbers removed per Maxwell 2026-10-01):
+ * label 13 on the left, no visible number or unit, then the App SeekBar look
  * at 32 pt: track grayLightest, fill #8C60B2 -> #CCA0DD, white thumb 24.
- * While dragging the thumb grows to 34 with a 3 px accent ring and the value
- * box fills accent with ink digits. Streams values while dragging; the client
+ * While dragging the thumb grows to 34 with a 3 px accent ring (the only
+ * drag marker now that the value box is gone). The value still maps to the
+ * same range under the hood and is exposed to screen readers via
+ * accessibilityValue only. Streams values while dragging; the client
  * throttles to ~10 Hz / <= 20 cmd/s and the release sends the final value.
  */
 import React, { useMemo, useRef, useState } from 'react';
@@ -38,24 +40,16 @@ export function valueAtX(x: number, min: number, max: number, step: number, widt
   return Math.max(min, Math.min(max, Math.round((min + p * (max - min)) / step) * step));
 }
 
-export const ValueBox = ({ value, unit, active }: { value: number; unit: string; active: boolean }) => (
-  <View style={[styles.box, active && styles.boxOn]} testID={active ? 'value-box-active' : 'value-box'}>
-    <Text style={[styles.num, active && styles.numOn]} numberOfLines={1}>
-      {value}
-    </Text>
-    <Text style={[styles.num, styles.unit, active && styles.numOn]}>{unit}</Text>
-  </View>
-);
-
 export interface ValueSliderProps {
   label: string;
   value: number;
   min: number;
   max: number;
   step?: number;
+  /** Screen-reader value text only (never drawn). */
   unit: string;
   disabled?: boolean;
-  /** Output off (Pulse): track and thumb only, no fill; the value stays shown. */
+  /** Output off (Pulse): track and thumb only, no fill. */
   idle?: boolean;
   first?: boolean;
   onChange?: (v: number) => void;
@@ -137,9 +131,9 @@ export const ValueSlider = ({
 
   return (
     <View style={first ? styles.first : styles.next} testID={testID}>
+      {/* Label only: no visible number or unit on this page (Maxwell, 2026-10-01). */}
       <View style={styles.row}>
         <Text style={styles.label}>{label}</Text>
-        <ValueBox value={shown} unit={unit} active={active} />
       </View>
       <View
         style={styles.track}
@@ -191,25 +185,9 @@ const styles = StyleSheet.create({
     height: 24,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     marginBottom: 8,
   },
   label: text(13, v4.white, 17),
-  box: {
-    width: 78,
-    height: 28,
-    borderRadius: 14,
-    paddingRight: 9,
-    marginRight: -9,
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    alignItems: 'baseline',
-  },
-  boxOn: { backgroundColor: v4.accent },
-  num: { ...text(20, v4.white, 28), textAlign: 'right' },
-  /** design: <small> 14 pt, margin-left 2 */
-  unit: { fontSize: 14, marginLeft: 2 },
-  numOn: { color: v4.ink },
   track: { height: TRACK_H, borderRadius: TRACK_H / 2, backgroundColor: v4.pill },
   fill: { position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: TRACK_H / 2 },
   /** App RadialButton without its glow: radial #FFFFFF -> #FFF0F2 (flat mid tone here). */

@@ -29,7 +29,7 @@ jest.mock('react-native-svg', () => {
 
 import { AdvancedControlScreen } from '../../src/screens/advanced-control';
 import {
-  ValueBox,
+  ValueSlider,
   sliderGeometry,
   valueAtX,
 } from '../../src/screens/advanced-control/components/ValueSlider';
@@ -71,6 +71,12 @@ const fontsOf = (r: renderer.ReactTestRenderer) =>
         );
       }),
   );
+/** Text inside the Wings and Pulse cards (control rows): must carry no numbers / units. */
+const controlRowText = (r: renderer.ReactTestRenderer) =>
+  ['card-wing', 'card-vcm']
+    .flatMap(id => r.root.findAll(n => n.props.testID === id).slice(0, 1))
+    .flatMap(c => c.findAll(n => (n.type as unknown) === 'Text').map(n => flat(n.props.children)))
+    .join('\n');
 const settle = async (ms = 1000) => {
   for (let i = 0; i < ms / 10; i++) {
     await jest.advanceTimersByTimeAsync(10);
@@ -95,12 +101,17 @@ describe('isAdvancedDevice / slider geometry', () => {
     expect(valueAtX(155, 10, 50, 1, 310)).toBe(30);
     expect(valueAtX(-50, 10, 50, 1, 310)).toBe(10);
   });
-  it('value box: fixed 78 pt, right-aligned, accent fill while dragging', () => {
-    const idle = renderer.create(<ValueBox value={40} unit="%" active={false} />);
-    const active = renderer.create(<ValueBox value={70} unit="%" active />);
-    expect(byTestID(idle, 'value-box').length).toBeGreaterThan(0);
-    expect(byTestID(active, 'value-box-active').length).toBeGreaterThan(0);
-    expect(texts(active)).toContain('70');
+  it('slider draws only its label: no number, no unit', () => {
+    const r = renderer.create(<ValueSlider label="Upper wings" value={40} min={0} max={100} unit="%" />);
+    expect(texts(r)).toBe('Upper wings');
+    expect(byTestID(r, 'value-box').length + byTestID(r, 'value-box-active').length).toBe(0);
+    // the value is still there for screen readers
+    expect(
+      r.root.find(n => n.props.accessibilityRole === 'adjustable').props.accessibilityValue,
+    ).toMatchObject({
+      now: 40,
+      text: '40%',
+    });
   });
 });
 
@@ -143,6 +154,10 @@ describe('AdvancedControlScreen v4 on the mock', () => {
     for (const s of ['Connected', 'Wings', 'Upper wings', 'Lower wings', 'Pulse', 'Pulse speed', 'Bullet']) {
       expect(t).toContain(s);
     }
+    // Sliders only: no number, %, or Hz in the Wings / Pulse cards (control values).
+    expect(controlRowText(r)).toContain('Upper wings');
+    expect(controlRowText(r)).not.toMatch(/\d|%|Hz/);
+    expect(t).not.toMatch(/\bHz\b/);
     expect(t).not.toContain('Not connected');
     expect(t).not.toContain('Fine tune'); // 170 Hz fixed, no frequency UI
     expect(t).not.toContain('Leaving this page stops all outputs.');
@@ -171,6 +186,7 @@ describe('AdvancedControlScreen v4 on the mock', () => {
       await settle(300);
     });
     expect(dev.commandLog.some((l: string) => /^VHZ [1-9]/.test(l))).toBe(true);
+    expect(controlRowText(r)).not.toMatch(/\d|%|Hz/); // pulse on: still no speed readout
     expect(
       r.root.find(n => n.props.testID === 'pulse-switch' && n.props.onPress).props.accessibilityState,
     ).toMatchObject({ checked: true });
@@ -184,7 +200,8 @@ describe('AdvancedControlScreen v4 on the mock', () => {
     expect(dev.commandLog).toContain('ESTOP 1');
     t = texts(r);
     expect(t).toContain('Everything is stopped');
-    expect(t).toContain('All outputs are at 0.');
+    expect(t).toContain('All outputs are off.');
+    expect(controlRowText(r)).not.toMatch(/\d|%|Hz/);
     expect(t).toContain('Stopped');
     expect(byTestID(r, 'stop-all').length).toBe(0);
     expect(
@@ -217,6 +234,7 @@ describe('AdvancedControlScreen v4 on the mock', () => {
     expect(t).toMatch(/Reconnect|Connecting…/); // notice button (busy while the auto-reconnect runs)
     expect(t).toMatch(/Disconnected|Connecting…/);
     expect(t).toContain('No signal');
+    expect(controlRowText(r)).not.toMatch(/\d|%|Hz/);
     expect(opacityOf(byTestID(r, 'controls-wing')[0].props.style)).toBe(0.4);
     expect(opacityOf(byTestID(r, 'controls-vcm')[0].props.style)).toBe(0.4);
     const stop = byLabel(r, 'Stop all outputs');

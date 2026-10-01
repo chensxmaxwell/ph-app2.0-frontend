@@ -50,7 +50,7 @@ export const StopDock = ({
         accessibilityLiveRegion="assertive"
         testID="stopped"
       >
-        <View style={styles.heldLeft} accessible accessibilityLabel="Stopped. All outputs are at 0">
+        <View style={styles.heldLeft} accessible accessibilityLabel="Stopped. All outputs are off">
           <View style={styles.dot} />
           <Text style={styles.heldText}>Stopped</Text>
         </View>

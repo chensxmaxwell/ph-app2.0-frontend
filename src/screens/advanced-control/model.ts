@@ -203,7 +203,7 @@ export function bannerFor(
         icon: 'lock',
         title: 'Everything is stopped',
         lines: [
-          estopSource === 'device' ? 'Stopped with the button on the device.' : 'All outputs are at 0.',
+          estopSource === 'device' ? 'Stopped with the button on the device.' : 'All outputs are off.',
           estopSource === 'device'
             ? 'Tap Unlock or press that button again.'
             : 'Tap Unlock when you are ready.',

@@ -35,7 +35,7 @@ Maxwell, 2026-09-29.
 ## Rule 3: e-stop, Unlock and the offline Stop all
 Design v4 §5–§6; checked against `firmware/PROTOCOL-ICD001.md` §5, §7.5, §9.
 
-1. **Stop all (connected)** sends `ESTOP 1`. The page shows the notice "Everything is stopped" and every value reads 0 at once (optimistic, before TLM). The dock becomes "● Stopped" + Unlock.
+1. **Stop all (connected)** sends `ESTOP 1`. The page shows the notice "Everything is stopped" and every slider drops to 0 at once (optimistic, before TLM; the page shows no numbers, only slider positions). The dock becomes "● Stopped" + Unlock.
 2. **Unlock** sends `ESTOP 0`. The firmware keeps no set values while latched (§7.5), so everything stays at 0; nothing is resumed by the app. The device START key also toggles the latch (§8.3); the page follows `EVT ESTOP n`.
 3. **Disconnected:** the firmware has already stopped everything (§5). Controls are dimmed (0.4) and not pressable; Stop all stays fully pressable. Pressing it queues an e-stop: on the next connect `ESTOP 1` is written right after INFO, before `RATE` and before the page reports connected, so the device comes back latched ("Stays stopped after reconnect." is shown while queued).
 4. **Leaving the page** with a queued e-stop downgrades it to a plain `STOP` on connect. A latch applied after the user left would lock the device behind another page with no Unlock in sight. Leaving always sends `STOP` when connected (unchanged).

@@ -159,7 +159,7 @@ describe('notices (design v4 copy)', () => {
       tone: 'neutral',
       icon: 'lock',
       title: 'Everything is stopped',
-      lines: ['All outputs are at 0.', 'Tap Unlock when you are ready.'],
+      lines: ['All outputs are off.', 'Tap Unlock when you are ready.'],
     });
     expect(bannerFor(s, tlm(), 'device')?.lines).toEqual([
       'Stopped with the button on the device.',

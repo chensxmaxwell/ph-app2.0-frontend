@@ -189,7 +189,7 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     await tick(300);
     expect(t.v().screen.kind).toBe('estop');
     expect(t.v().banner?.title).toBe('Everything is stopped');
-    expect(t.v().banner?.lines).toEqual(['All outputs are at 0.', 'Tap Unlock when you are ready.']);
+    expect(t.v().banner?.lines).toEqual(['All outputs are off.', 'Tap Unlock when you are ready.']);
     expect(t.wing().values).toEqual({ A: 0, B: 0 });
     expect(t.wing()).toMatchObject({ enabled: false, summary: 'Paused' });
     expect(t.egg()?.enabled).toBe(true);
