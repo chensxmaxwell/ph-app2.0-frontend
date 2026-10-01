@@ -1,5 +1,5 @@
 /**
- * SAFETY RULE (design v2 sign-off): while a sheet/overlay is open on the
+ * SAFETY RULE (design sign-off, v4 §6): while a sheet/overlay is open on the
  * advanced-control page (OverlayHost), Stop all stays visible, tappable and undimmed above the
  * scrim and the sheet; tapping it closes the sheet and sends ESTOP 1.
  * See src/screens/advanced-control/components/OverlayHost.tsx.
@@ -12,7 +12,7 @@ import renderer, { act, ReactTestInstance } from 'react-test-renderer';
 jest.mock('react-native-ble-manager', () => ({}));
 jest.mock('@react-navigation/native', () => ({
   useFocusEffect: () => undefined,
-  useRoute: () => ({ name: 'AdvancedControl', params: { expanded: 'wing' } }),
+  useRoute: () => ({ name: 'AdvancedControl', params: undefined }),
   useNavigation: () => ({ goBack: () => undefined, navigate: () => undefined }),
 }));
 jest.mock('react-native-safe-area-context', () => ({
@@ -131,6 +131,6 @@ describe('Stop-all safety rule with a sheet open (OverlayHost)', () => {
         .slice(before)
         .some(l => /ESTOP 1/.test(l)),
     ).toBe(true);
-    expect(byTestId(r, 'stop-all')).toHaveLength(0); // dock now shows Stopped + Release
+    expect(byTestId(r, 'stop-all')).toHaveLength(0); // dock now shows Stopped + Unlock
   });
 });

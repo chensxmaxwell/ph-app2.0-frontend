@@ -1,6 +1,10 @@
 /**
- * Phosphor Icons, regular weight (MIT, github.com/phosphor-icons/core), the raw
- * paths the design package ships in design-v2/src/icons.js. 256 viewBox.
+ * Icons for design v4, drawn with react-native-svg (no .svg imports, so they
+ * work in Jest too):
+ *  - Phosphor Icons, regular weight (MIT, github.com/phosphor-icons/core), the
+ *    raw paths the design package ships in design-v4/src/icons.js. 256 viewBox.
+ *  - App line icons copied from assets/images: chevron-left-white.svg /
+ *    chevron-right (24 viewBox, 2 px stroke) and icons/stop-circle.svg (32).
  */
 import React from 'react';
 import SvgRoot, { Path } from 'react-native-svg';
@@ -42,6 +46,12 @@ const PATHS = {
   'arrows-clockwise': [
     'M224,48V96a8,8,0,0,1-8,8H168a8,8,0,0,1,0-16h28.69L182.06,73.37a79.56,79.56,0,0,0-56.13-23.43h-.45A79.52,79.52,0,0,0,69.59,72.71,8,8,0,0,1,58.41,61.27a96,96,0,0,1,135,.79L208,76.69V48a8,8,0,0,1,16,0ZM186.41,183.29a80,80,0,0,1-112.47-.66L59.31,168H88a8,8,0,0,0,0-16H40a8,8,0,0,0-8,8v48a8,8,0,0,0,16,0V179.31l14.63,14.63A95.43,95.43,0,0,0,130,222.06h.53a95.36,95.36,0,0,0,67.07-27.33,8,8,0,0,0-11.18-11.44Z',
   ],
+  heart: [
+    'M178,40c-20.65,0-38.73,8.88-50,23.89C116.73,48.88,98.65,40,78,40a62.07,62.07,0,0,0-62,62c0,70,103.79,126.66,108.21,129a8,8,0,0,0,7.58,0C136.21,228.66,240,172,240,102A62.07,62.07,0,0,0,178,40ZM128,214.8C109.74,204.16,32,155.69,32,102A46.06,46.06,0,0,1,78,56c19.45,0,35.78,10.36,42.6,27a8,8,0,0,0,14.8,0c6.82-16.67,23.15-27,42.6-27a46.06,46.06,0,0,1,46,46C224,155.61,146.24,204.15,128,214.8Z',
+  ],
+  'sliders-horizontal': [
+    'M40,88H73a32,32,0,0,0,62,0h81a8,8,0,0,0,0-16H135a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16Zm64-24A16,16,0,1,1,88,80,16,16,0,0,1,104,64ZM216,168H199a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16h97a32,32,0,0,0,62,0h17a8,8,0,0,0,0-16Zm-48,24a16,16,0,1,1,16-16A16,16,0,0,1,168,192Z',
+  ],
   info: [
     'M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm16-40a8,8,0,0,1-8,8,16,16,0,0,1-16-16V128a8,8,0,0,1,0-16,16,16,0,0,1,16,16v40A8,8,0,0,1,144,176ZM112,84a12,12,0,1,1,12,12A12,12,0,0,1,112,84Z',
   ],
@@ -61,5 +71,47 @@ export const Icon = ({ name, size = 20, color }: { name: IconName; size?: number
     {PATHS[name].map((d, i) => (
       <Path key={i} d={d} />
     ))}
+  </SvgRoot>
+);
+
+/** App chevrons (assets/images/chevron-left-white.svg geometry): 24 viewBox, 2 px round stroke. */
+export const Chevron = ({
+  dir,
+  size = 24,
+  color,
+}: {
+  dir: 'left' | 'right';
+  size?: number;
+  color: string;
+}) => (
+  <SvgRoot
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    accessibilityElementsHidden
+    importantForAccessibility="no-hide-descendants"
+  >
+    <Path
+      d={dir === 'left' ? 'M15 18L9 12L15 6' : 'M9 18L15 12L9 6'}
+      stroke={color}
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </SvgRoot>
+);
+
+/** App assets/images/icons/stop-circle.svg (32 viewBox). */
+export const StopCircle = ({ size = 32, color }: { size?: number; color: string }) => (
+  <SvgRoot
+    width={size}
+    height={size}
+    viewBox="0 0 32 32"
+    fill={color}
+    accessibilityElementsHidden
+    importantForAccessibility="no-hide-descendants"
+  >
+    <Path d="M16 3C13.4288 3 10.9154 3.76244 8.77759 5.1909C6.63975 6.61935 4.97351 8.64968 3.98957 11.0251C3.00563 13.4006 2.74819 16.0144 3.2498 18.5362C3.75141 21.0579 4.98953 23.3743 6.80762 25.1924C8.6257 27.0105 10.9421 28.2486 13.4638 28.7502C15.9856 29.2518 18.5995 28.9944 20.9749 28.0104C23.3503 27.0265 25.3807 25.3603 26.8091 23.2224C28.2376 21.0846 29 18.5712 29 16C28.9964 12.5533 27.6256 9.24882 25.1884 6.81163C22.7512 4.37445 19.4467 3.00364 16 3ZM16 27C13.8244 27 11.6977 26.3549 9.88873 25.1462C8.07979 23.9375 6.66989 22.2195 5.83733 20.2095C5.00477 18.1995 4.78693 15.9878 5.21137 13.854C5.63581 11.7202 6.68345 9.7602 8.22183 8.22183C9.76021 6.68345 11.7202 5.6358 13.854 5.21136C15.9878 4.78692 18.1995 5.00476 20.2095 5.83733C22.2195 6.66989 23.9375 8.07979 25.1462 9.88873C26.3549 11.6977 27 13.8244 27 16C26.9967 18.9164 25.8367 21.7123 23.7745 23.7745C21.7123 25.8367 18.9164 26.9967 16 27ZM20 11H12C11.7348 11 11.4804 11.1054 11.2929 11.2929C11.1054 11.4804 11 11.7348 11 12V20C11 20.2652 11.1054 20.5196 11.2929 20.7071C11.4804 20.8946 11.7348 21 12 21H20C20.2652 21 20.5196 20.8946 20.7071 20.7071C20.8946 20.5196 21 20.2652 21 20V12C21 11.7348 20.8946 11.4804 20.7071 11.2929C20.5196 11.1054 20.2652 11 20 11ZM19 19H13V13H19V19Z" />
   </SvgRoot>
 );

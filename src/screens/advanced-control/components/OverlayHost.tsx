@@ -5,7 +5,7 @@
  * Stop all).
  *
  * ┌──────────────────────────────────────────────────────────────────────────┐
- * │ SAFETY RULE: Stop all is never hidden (design v2 sign-off, 2026-09-29)   │
+ * │ SAFETY RULE: Stop all is never hidden (design sign-off 2026-09-29, v4 §6)│
  * │                                                                          │
  * │ While any sheet or overlay on this page is open:                         │
  * │  1. Stop all stays visible and tappable, and is NOT dimmed by the scrim. │
@@ -16,7 +16,7 @@
  * │     normal position and style. Never move it into a sheet. The page      │
  * │     renders <StopDock> after this host so it is the topmost layer.       │
  * │  4. Tapping Stop all while a sheet is open closes the sheet and enters   │
- * │     the e-stop state (ESTOP 1).                                          │
+ * │     the e-stop state (ESTOP 1 -> Stopped + Unlock).                      │
  * │                                                                          │
  * │ Documented in docs/advanced-control-safety.md; covered by                │
  * │ __tests__/icd001/advanced-screen.test.tsx.                               │
@@ -26,7 +26,7 @@ import React, { useEffect, useRef } from 'react';
 import { Animated, BackHandler, Easing, Pressable, StyleSheet, View } from 'react-native';
 
 import { reduceMotion } from '../motion';
-import { nocturne as N } from '../theme';
+import { v4 } from '../theme';
 
 /** Gap between the sheet's bottom edge and the top of Stop all. */
 export const STOP_ZONE_GAP = 12;
@@ -108,18 +108,17 @@ export const OverlayHost = ({
 };
 
 const styles = StyleSheet.create({
-  scrimWrap: { position: 'absolute', left: 0, right: 0, top: 0, backgroundColor: 'rgba(8,6,7,0.6)' },
+  scrimWrap: { position: 'absolute', left: 0, right: 0, top: 0, backgroundColor: 'rgba(42,38,89,0.6)' },
   fill: { flex: 1 },
+  /** No sheet is drawn in design v4; App surfaces: gradient-bottom base, card radius, no border/shadow. */
   sheet: {
     position: 'absolute',
-    left: 8,
-    right: 8,
-    backgroundColor: '#1B1618',
-    borderRadius: N.radius.l,
-    borderWidth: 1,
-    borderColor: N.line,
-    paddingHorizontal: N.pad - 8,
-    paddingTop: 10,
-    paddingBottom: 18,
+    left: 24,
+    right: 24,
+    backgroundColor: v4.ink,
+    borderRadius: v4.radius,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 16,
   },
 });

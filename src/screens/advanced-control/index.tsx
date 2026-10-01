@@ -1,185 +1,194 @@
 /**
- * 高级控制 (Advanced control), design v2 "Nocturne" (design-v2/spec.md).
+ * 高级控制 (Advanced control), design v4 (design-v4/spec.md): the App's own
+ * style (STYLE-DIGEST): ScreenWrapper gradient, Playground/Sync stack header,
+ * glass module cards, Quicksand-Bold only, light-pink accent. Stack screen, so
+ * no tab bar; the bottom 108 pt are reserved for Stop all.
  * Rendering only: state, priorities, command mapping and auto-STOP live in
  * useAdvancedControl / controller.ts / model.ts.
  */
-import { useNavigation, useRoute } from '@react-navigation/native';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  Image,
-  LayoutAnimation,
-  Platform,
-  Pressable,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  UIManager,
-  View,
-  useWindowDimensions,
-} from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import React, { useCallback, useState } from 'react';
+import { Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import Gradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { GLOW_PT, IMG } from './assets';
-import { DeviceLine } from './components/DeviceLine';
-import { ModuleRow } from './components/ModuleRow';
+import { useScreenWrapper } from '../../common/components/screen-wrapper/hooks';
+
+import { BLOB } from './assets';
 import { Notice } from './components/Notice';
 import { OverlayHost, stopZoneHeight } from './components/OverlayHost';
-import { Stage } from './components/Stage';
 import { StopDock } from './components/StopDock';
-import { BulletBody, PulseBody, WingsBody } from './components/bodies';
-import { Icon } from './icons';
-import { reduceMotion } from './motion';
-import { nocturne as N, qs, text } from './theme';
+import { ValueSlider } from './components/ValueSlider';
+import { LinkPill, ModuleCard, PulseSwitch } from './components/parts';
+import { Chevron, Icon } from './icons';
+import { text, v4 } from './theme';
 import { useAdvancedControl } from './useAdvancedControl';
 
-import type { CardId, CardView, StagePart } from './controller';
+import type { CardId, CardView, IntensityView, RhythmView, SensorView } from './controller';
 
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
-
-const EXPAND = LayoutAnimation.create(200, LayoutAnimation.Types.easeOut, LayoutAnimation.Properties.opacity);
-
+/** Kept for deep links from older builds / the QA harness; v4 has no collapsible rows. */
 export type AdvancedControlParams = { expanded?: CardId } | undefined;
+
+type Dragging = 'A' | 'B' | 'vcm' | null;
 
 export const AdvancedControlScreen = ({ initialOverlay }: { initialOverlay?: React.ReactNode } = {}) => {
   const { view, ctl } = useAdvancedControl();
   const navigation = useNavigation();
-  const route = useRoute();
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const bg = useScreenWrapper().getBackgroundTypeConfig(undefined);
   /**
    * Open sheet/overlay content, if any. Every overlay on this page goes through
-   * <OverlayHost> (Stop-all safety rule). No overlay is used right now (Fine tune
-   * was removed); `initialOverlay` exists for previews and the safety tests.
+   * <OverlayHost> (Stop-all safety rule). No overlay is used in design v4;
+   * `initialOverlay` exists for previews and the safety tests.
    */
   const [sheet, setSheet] = useState<React.ReactNode | null>(initialOverlay ?? null);
   const closeSheet = useCallback(() => setSheet(null), []);
+  const [dragging, setDragging] = useState<Dragging>(null);
+  const dragProps = (key: Exclude<Dragging, null>) => ({
+    onDragChange: (on: boolean) => setDragging(on ? key : null),
+  });
 
-  // Deep link / QA harness: open a row on arrival.
-  const initial = (route.params as AdvancedControlParams)?.expanded;
-  const opened = useRef(false);
-  useEffect(() => {
-    if (initial && !opened.current && view.cards.some(c => c.card.id === initial)) {
-      opened.current = true;
-      ctl.toggleCard(initial);
-    }
-  }, [ctl, initial, view.cards]);
-
-  const toggle = useCallback(
-    (id: CardId) => {
-      if (!reduceMotion()) {
-        LayoutAnimation.configureNext(EXPAND);
-      }
-      ctl.toggleCard(id);
-    },
-    [ctl],
-  );
-  const select = useCallback(
-    (p: StagePart) => {
-      if (!reduceMotion()) {
-        LayoutAnimation.configureNext(EXPAND);
-      }
-      ctl.selectPart(p);
-    },
-    [ctl],
-  );
-
-  const { screen, banner, device, stage } = view;
+  const { screen, banner, device } = view;
   const live = screen.kind !== 'disconnected';
-  const rows: CardView[] = live ? view.cards : view.lastSeen;
+  const cards: CardView[] = live ? view.cards : view.lastSeen;
   const stopBottom = Math.max(insets.bottom + 4, 16);
-  const showLeave = live && screen.kind === 'normal' && view.expanded === null;
+  const zone = stopZoneHeight(stopBottom);
 
-  const renderRow = (c: CardView) => {
-    const dimmed = !live || (c.kind !== 'sensor' && !c.enabled);
-    const common = {
-      key: c.card.id,
-      testID: `row-${c.card.id}`,
-      title: c.card.label,
-      subtitle: c.card.subtitle,
-      value: c.row,
-      expanded: c.expanded,
-      dimmed,
-      onToggle: live ? () => toggle(c.card.id) : undefined,
-    };
-    switch (c.kind) {
-      case 'intensity':
-        return (
-          <ModuleRow {...common}>
-            <WingsBody v={c} ctl={ctl} />
-          </ModuleRow>
-        );
-      case 'rhythm':
-        return (
-          <ModuleRow {...common}>
-            <PulseBody v={c} ctl={ctl} />
-          </ModuleRow>
-        );
-      case 'sensor':
-        return (
-          <ModuleRow {...common}>
-            <BulletBody v={c} />
-          </ModuleRow>
-        );
-    }
+  const wings = (c: IntensityView) => {
+    const off = !c.enabled;
+    return (
+      <ModuleCard key="wing" blob={BLOB.wings} title={c.card.label} testID="card-wing">
+        <View style={off && styles.dim} testID="controls-wing" pointerEvents={off ? 'none' : 'auto'}>
+          {c.card.groups.map((g, i) => (
+            <ValueSlider
+              key={g.id}
+              first={i === 0}
+              label={g.name}
+              value={c.values[g.id]}
+              min={0}
+              max={100}
+              unit="%"
+              disabled={off}
+              onChange={v => ctl.setWingValue(g.id, v)}
+              onRelease={v => ctl.setWingValue(g.id, v)}
+              testID={`slider-${g.id}`}
+              {...dragProps(g.id)}
+            />
+          ))}
+        </View>
+      </ModuleCard>
+    );
+  };
+
+  const pulse = (c: RhythmView) => {
+    const off = !c.enabled;
+    return (
+      <ModuleCard
+        key="vcm"
+        blob={BLOB.pulse}
+        title={c.card.label}
+        testID="card-vcm"
+        right={
+          <View style={off && styles.dim} pointerEvents={off ? 'none' : 'auto'}>
+            <PulseSwitch value={c.on} onChange={on => ctl.setPulseOn(on)} disabled={off} label="Pulse" />
+          </View>
+        }
+      >
+        <View style={off && styles.dim} testID="controls-vcm" pointerEvents={off ? 'none' : 'auto'}>
+          <ValueSlider
+            first
+            label="Pulse speed"
+            value={c.hz}
+            min={c.card.range.min}
+            max={c.card.range.max}
+            unit=" Hz"
+            idle={!c.on && dragging !== 'vcm'}
+            disabled={off}
+            onChange={hz => ctl.setPulseHz(hz)}
+            onRelease={hz => ctl.setPulseHz(hz)}
+            testID="slider-vcm"
+            {...dragProps('vcm')}
+          />
+        </View>
+      </ModuleCard>
+    );
+  };
+
+  const bullet = (c: SensorView) => {
+    const r = c.reading;
+    const signal = live && r.available;
+    return (
+      <ModuleCard
+        key="egg"
+        blob={BLOB.bullet}
+        title={c.card.label}
+        testID="card-egg"
+        right={
+          signal ? (
+            <View style={styles.readouts} accessible accessibilityLabel={bulletA11y(r.contact, r.hr)}>
+              <Text style={styles.ro}>{r.contact ? 'On skin' : 'Not on skin'}</Text>
+              <View style={styles.hr}>
+                <Icon name="heart" size={16} color={v4.white} />
+                <Text style={[styles.ro, styles.bpm]}>{r.contact && r.hr ? `${r.hr} bpm` : '-- bpm'}</Text>
+              </View>
+            </View>
+          ) : (
+            <Text style={[styles.ro, styles.dim]}>No signal</Text>
+          )
+        }
+      />
+    );
   };
 
   return (
     <View style={styles.root} testID="advanced-control">
       <StatusBar barStyle="light-content" />
-      <Gradient
-        colors={[N.bgTop, N.bg, N.bgBottom]}
-        locations={[0, 0.4, 1]}
-        style={StyleSheet.absoluteFill}
-        pointerEvents="none"
-      />
-      <View style={styles.glowWrap} pointerEvents="none">
-        <Image source={IMG.glow} style={{ width, height: (width * GLOW_PT.h) / GLOW_PT.w }} />
-      </View>
-      <View style={[styles.nav, { marginTop: insets.top }]}>
-        <Pressable
-          onPress={() => navigation.goBack()}
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-          style={styles.back}
-          hitSlop={4}
-        >
-          <Icon name="caret-left" size={24} color={N.ink} />
-        </Pressable>
-        <Text style={styles.h1} accessibilityRole="header">
-          Advanced control
-        </Text>
-      </View>
+      <Gradient {...bg} style={StyleSheet.absoluteFill} pointerEvents="none" />
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={{ paddingBottom: stopBottom + 112 }}
+        contentContainerStyle={{ paddingBottom: zone + 12 }}
         showsVerticalScrollIndicator={false}
+        scrollEnabled={dragging === null}
       >
-        <Stage stage={stage} width={width} onSelect={select} />
-        <DeviceLine device={device} connecting={view.scan.connecting} />
-        {banner ? (
-          <Notice
-            model={banner}
-            busy={view.scan.connecting}
-            onAction={a => (a === 'reconnect' ? ctl.reconnect() : ctl.scan())}
-          />
-        ) : null}
-        {view.toast ? (
-          <Notice model={{ tone: 'neutral', icon: 'info', title: view.toast, lines: [] }} />
-        ) : null}
-        <View style={styles.mods}>{rows.map(renderRow)}</View>
-      </ScrollView>
-      {/* Above the dock scrim, like the design (.leave z-index 4). */}
-      {showLeave && !sheet ? (
-        <View style={[styles.leaveWrap, { bottom: stopBottom + 74 }]} pointerEvents="none">
-          <Text style={styles.leave}>Leaving this page stops all outputs.</Text>
+        {/* Stack header (playground/index.tsx header + backIcon): paddingTop 60, chevron 35 at left 20. */}
+        <View style={styles.header}>
+          <Text style={styles.h1} accessibilityRole="header">
+            Advanced control
+          </Text>
+          <Pressable
+            onPress={() => navigation.goBack()}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+            hitSlop={6}
+            style={styles.back}
+          >
+            <Chevron dir="left" size={35} color={v4.white} />
+          </Pressable>
         </View>
-      ) : null}
+        <View style={styles.pillRow}>
+          <LinkPill
+            connected={live}
+            connecting={screen.connecting}
+            batteryPct={device.batteryPct}
+            onPress={() => ctl.reconnect()}
+          />
+        </View>
+        <View style={styles.stack}>
+          {banner ? (
+            <Notice
+              model={banner}
+              busy={view.scan.connecting}
+              onAction={a => (a === 'reconnect' ? ctl.reconnect() : ctl.scan())}
+            />
+          ) : null}
+          {view.toast ? (
+            <Notice model={{ tone: 'neutral', icon: 'info', title: view.toast, lines: [] }} />
+          ) : null}
+          {cards.map(c => (c.kind === 'intensity' ? wings(c) : c.kind === 'rhythm' ? pulse(c) : bullet(c)))}
+        </View>
+      </ScrollView>
       {/* Sheets: laid out above the reserved Stop-all zone. See the SAFETY RULE in OverlayHost. */}
-      <OverlayHost visible={sheet !== null} onClose={closeSheet} reserveBottom={stopZoneHeight(stopBottom)}>
+      <OverlayHost visible={sheet !== null} onClose={closeSheet} reserveBottom={zone}>
         {sheet}
       </OverlayHost>
       {/* Stop all: rendered LAST so it is the topmost layer, above any scrim or sheet. */}
@@ -197,22 +206,21 @@ export const AdvancedControlScreen = ({ initialOverlay }: { initialOverlay?: Rea
   );
 };
 
+function bulletA11y(contact: boolean, hr: number | null): string {
+  return contact ? `On skin, heart rate ${hr ? `${hr} bpm` : 'measuring'}` : 'Not on skin';
+}
+
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: N.bg },
-  glowWrap: { position: 'absolute', top: 0, left: 0 },
-  nav: { height: 48, alignItems: 'center', justifyContent: 'center' },
-  back: {
-    position: 'absolute',
-    left: 8,
-    top: 2,
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  h1: { ...text(qs.bold, 17, N.ink), letterSpacing: 0.1 },
+  root: { flex: 1, backgroundColor: v4.ink },
   scroll: { flex: 1 },
-  mods: { borderBottomWidth: 1, borderBottomColor: N.line },
-  leaveWrap: { position: 'absolute', left: 0, right: 0 },
-  leave: { textAlign: 'center', ...text(qs.medium, 13, N.ink3) },
+  header: { marginTop: 60, height: 35, alignItems: 'center' },
+  h1: text(20, v4.white, 25),
+  back: { position: 'absolute', left: 20, top: 0, width: 35, height: 35 },
+  pillRow: { marginTop: 20, alignItems: 'center' },
+  stack: { marginTop: 24, marginHorizontal: 24, gap: 12 },
+  dim: { opacity: v4.dimOpacity },
+  readouts: { flexDirection: 'row', alignItems: 'center' },
+  ro: text(14, v4.white, 18),
+  hr: { flexDirection: 'row', alignItems: 'center', marginLeft: 14 },
+  bpm: { marginLeft: 6, minWidth: 54, textAlign: 'right' },
 });

@@ -1,73 +1,87 @@
-/** Borderless notice (design v2 §6.9): 22 icon + bold line + body, hairline above. */
+/**
+ * Notice card (design v4 §1, §5): the module-card surface, first in the stack.
+ * Icon 32 + title 14 + body 13 (all full white, no grey on cards), optional
+ * PillButton-style action on the right (Reconnect / Scan). Used for e-stop,
+ * connection lost, over-temp, low battery and short info messages.
+ */
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Icon, IconName } from '../icons';
-import { nocturne as N, qs, text } from '../theme';
+import { Icon, StopCircle } from '../icons';
+import { BannerModel } from '../model';
+import { text, v4 } from '../theme';
 
-import { OutlineButton } from './controls';
-
-import type { BannerModel } from '../model';
-
-const ICON: Record<BannerModel['icon'], IconName> = {
-  lock: 'lock-simple',
-  thermometer: 'thermometer-simple',
-  battery: 'battery-low',
-  bluetooth: 'bluetooth-slash',
-  info: 'info',
+const ICON: Record<BannerModel['icon'], React.ReactNode> = {
+  lock: <StopCircle size={32} color={v4.white} />,
+  bluetooth: <Icon name="bluetooth-slash" size={30} color={v4.white} />,
+  thermometer: <Icon name="thermometer-simple" size={30} color={v4.white} />,
+  battery: <Icon name="battery-low" size={30} color={v4.white} />,
+  info: <Icon name="info" size={30} color={v4.white} />,
 };
 
 export const Notice = ({
   model,
-  onAction,
   busy,
+  onAction,
 }: {
   model: BannerModel;
-  onAction?: (a: NonNullable<BannerModel['action']>) => void;
   busy?: boolean;
+  onAction?: (a: NonNullable<BannerModel['action']>) => void;
 }) => {
-  const warn = model.tone === 'warn';
+  const label = model.action === 'reconnect' ? 'Reconnect' : 'Scan';
   return (
-    <View style={styles.notice} accessibilityRole="alert" accessibilityLiveRegion="polite">
-      <View style={styles.icon}>
-        <Icon name={ICON[model.icon]} size={22} color={warn ? N.warn : N.ink} />
+    <View
+      style={styles.card}
+      testID="notice"
+      accessible={!model.action}
+      accessibilityRole={model.action ? undefined : 'alert'}
+      accessibilityLabel={model.action ? undefined : [model.title, ...model.lines].join('. ')}
+    >
+      <View style={styles.icon}>{ICON[model.icon]}</View>
+      <View style={styles.texts}>
+        <Text style={styles.title}>{model.title}</Text>
+        {model.lines.length ? <Text style={styles.body}>{model.lines.join('\n')}</Text> : null}
       </View>
-      <View style={styles.body}>
-        <Text style={[styles.title, warn && styles.warn]}>{model.title}</Text>
-        {model.lines.length ? <Text style={styles.p}>{model.lines.join(' ')}</Text> : null}
-        {model.action && onAction ? (
-          <OutlineButton
-            icon="arrows-clockwise"
-            label={
-              busy
-                ? model.action === 'reconnect'
-                  ? 'Reconnecting'
-                  : 'Searching'
-                : model.action === 'reconnect'
-                ? 'Reconnect'
-                : 'Scan'
-            }
-            busy={busy}
-            onPress={() => onAction(model.action!)}
-          />
-        ) : null}
-      </View>
+      {model.action ? (
+        <Pressable
+          onPress={() => onAction?.(model.action!)}
+          disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel={label}
+          accessibilityState={{ busy: !!busy, disabled: !!busy }}
+          style={({ pressed }) => [styles.btn, (pressed || busy) && styles.pressed]}
+        >
+          <Text style={styles.btnText}>{busy ? 'Connecting…' : label}</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  notice: {
+  card: {
+    backgroundColor: v4.card,
+    borderRadius: v4.radius,
+    minHeight: 64,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     flexDirection: 'row',
-    paddingTop: 16,
-    paddingBottom: 18,
-    paddingHorizontal: N.pad,
-    borderTopWidth: 1,
-    borderTopColor: N.line,
+    alignItems: 'center',
   },
-  icon: { marginTop: 1, marginRight: 12 },
-  body: { flex: 1 },
-  title: text(qs.bold, 16, N.ink, 21),
-  warn: { color: N.warn },
-  p: { ...text(qs.medium, 14, N.ink2, 20), marginTop: 4 },
+  icon: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  texts: { flex: 1 },
+  title: text(14, v4.white, 18),
+  body: { ...text(13, v4.white, 17), marginTop: 3 },
+  btn: {
+    marginLeft: 12,
+    height: 40,
+    paddingHorizontal: 18,
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: v4.white,
+    backgroundColor: v4.pill,
+    justifyContent: 'center',
+  },
+  btnText: text(14),
+  pressed: { opacity: 0.7 },
 });

@@ -1,12 +1,12 @@
 /**
- * Advanced control entry on the Control home (design v2 png 01, decision Q9).
+ * Advanced control entry on the Control home (design v4 entry-row.png, spec §7).
  *
  * Shown only while an ICD1- / H11- device is connected. Everything about the
  * entry lives here so switching placement is a one-line change:
- *   ADVANCED_ENTRY_VARIANT = 'row'    full-width row with product thumb under the
- *                                     connection pill (design v2, current)
- *   ADVANCED_ENTRY_VARIANT = 'corner' small chip at the top-right corner (the
- *                                     original ask), no layout shift for the grid
+ *   ADVANCED_ENTRY_VARIANT = 'row'    full-width 90 pt glass row under the
+ *                                     connection pill (design v4 (a), current)
+ *   ADVANCED_ENTRY_VARIANT = 'corner' sliders icon at the top-right corner
+ *                                     (design v4 (b)), no layout shift for the grid
  * Long-press opens the BLE debug screen in __DEV__ builds only.
  */
 import { useNavigation } from '@react-navigation/native';
@@ -15,16 +15,17 @@ import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { SCREENS } from '@common/constant';
 
+import { colors } from '../../common/styles/colors';
 import { classifyDeviceName, useIcd001 } from '../../services/icd001';
-import { IMG } from '../advanced-control/assets';
-import { Icon } from '../advanced-control/icons';
-import { nocturne as N, qs, text } from '../advanced-control/theme';
+import { BLOB } from '../advanced-control/assets';
+import { Chevron, Icon } from '../advanced-control/icons';
+import { text, v4 } from '../advanced-control/theme';
 
 export type AdvancedEntryVariant = 'row' | 'corner';
 export const ADVANCED_ENTRY_VARIANT: AdvancedEntryVariant = 'row';
 
-/** png 01: pill bottom 97 -> row 112..172 -> card grid 188. */
-const ROW = { above: 15, height: 60, gridGap: 16 };
+/** entry-row.png: pill bottom 98 -> row 114..204 (x 27..363) -> card grid 220. */
+const ROW = { above: 16, height: 90, side: 27, gridGap: 16 };
 
 export function isAdvancedDevice(status: string, name: string | null | undefined): boolean {
   return status === 'connected' && classifyDeviceName(name) !== null;
@@ -61,9 +62,10 @@ export const AdvancedEntry = ({ variant = ADVANCED_ENTRY_VARIANT }: { variant?: 
         accessibilityLabel="Advanced control"
         onPress={open}
         onLongPress={debug}
+        hitSlop={6}
         style={styles.corner}
       >
-        <Text style={styles.cornerText}>Advanced</Text>
+        <Icon name="sliders-horizontal" size={30} color={v4.white} />
       </Pressable>
     );
   }
@@ -76,12 +78,12 @@ export const AdvancedEntry = ({ variant = ADVANCED_ENTRY_VARIANT }: { variant?: 
       onLongPress={debug}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}
     >
-      <Image source={IMG.heroThumb} style={styles.thumb} resizeMode="contain" />
+      <Image source={BLOB.wings} style={styles.blob} />
       <View style={styles.titles}>
         <Text style={styles.t}>Advanced control</Text>
         <Text style={styles.s}>Each part on its own</Text>
       </View>
-      <Icon name="caret-right" size={18} color={N.ink} />
+      <Chevron dir="right" size={24} color={v4.white} />
     </Pressable>
   );
 };
@@ -89,32 +91,28 @@ export const AdvancedEntry = ({ variant = ADVANCED_ENTRY_VARIANT }: { variant?: 
 const styles = StyleSheet.create({
   row: {
     alignSelf: 'stretch',
-    marginHorizontal: 23,
+    marginHorizontal: ROW.side,
     height: ROW.height,
     marginTop: ROW.above,
     borderRadius: 10,
-    backgroundColor: 'rgba(19,16,18,0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(243,243,243,0.12)',
+    backgroundColor: colors.grayLight,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingLeft: 8,
+    paddingLeft: 16,
     paddingRight: 14,
   },
-  pressed: { backgroundColor: 'rgba(19,16,18,0.7)' },
-  thumb: { width: 96, height: 45 },
-  titles: { flex: 1, marginLeft: 10 },
-  t: text(qs.bold, 15, N.ink, 19),
-  s: { ...text(qs.medium, 13, 'rgba(243,243,243,0.72)', 16), marginTop: 2 },
+  pressed: { opacity: 0.85 },
+  blob: { width: 60, height: 60, marginRight: 16 },
+  titles: { flex: 1 },
+  t: text(14, v4.white, 18),
+  s: { ...text(13, colors.grayLighter, 17), marginTop: 4 },
   corner: {
     position: 'absolute',
-    top: 8,
-    right: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(243,243,243,0.9)',
+    top: 0,
+    right: 20,
+    width: 35,
+    height: 35,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  cornerText: text(qs.semiBold, 13, N.ink),
 });

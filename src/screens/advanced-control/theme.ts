@@ -1,64 +1,37 @@
 /**
- * Design v2 "Nocturne" tokens (design-v2/spec.md §5). Scoped to the advanced
- * control page and its entry row; the rest of the App keeps its own palette.
+ * Design v4 tokens (design-v4/spec.md §2). Every value is an existing App token
+ * (src/common/styles/colors.ts, screen-wrapper gradient, fonts.ts) unless noted.
+ * No page-specific dark theme and no second typeface: Quicksand-Bold only.
  */
 import { TextStyle } from 'react-native';
 
-export const nocturne = {
-  bg: '#131012',
-  bgTop: '#161214',
-  bgBottom: '#100D0F',
-  ink: '#F3EEF0',
-  ink2: '#B9AEB4',
-  ink3: '#978C93',
-  line: 'rgba(243,238,240,0.10)',
-  rail: 'rgba(243,238,240,0.16)',
-  accent: '#CCA0DD',
-  accentTint: 'rgba(204,160,221,0.14)',
-  accentLine: 'rgba(204,160,221,0.55)',
-  accentInk: '#1E1420',
-  stop: '#B8323F',
-  stop2: '#A42C38',
-  stopEngBg: '#2A1518',
-  stopEngRing: 'rgba(214,86,98,0.55)',
-  stopEngInk: '#F2B8BE',
-  warn: '#E9B872',
-  ok: '#7FD69B',
-  knobOn: '#FBF8FA',
-  radius: { s: 10, l: 16 },
-  pad: 20,
-  /** Disabled rows (spec §5: 38 %, always paired with a notice). */
-  disabledOpacity: 0.38,
+import { colors } from '../../common/styles/colors';
+
+export const v4 = {
+  white: colors.white,
+  /** 60 % white: secondary text off-card only (entry row detail). */
+  white60: colors.grayLighter,
+  /** Card / row surface. */
+  card: colors.grayLight,
+  /** Pills, slider track, switch off. */
+  pill: colors.grayLightest,
+  /** Sole accent: switch on, value box while dragging, dragged-thumb ring. */
+  accent: colors.accentLightPink,
+  /** SeekBar fill start (seek-bar/index.tsx). */
+  accentDeep: '#8C60B2',
+  green: colors.neonGreen,
+  red: 'red',
+  /** ScreenWrapper gradient bottom, reused as ink on white / accent (NEW use). */
+  ink: '#2A2659',
+  radius: 10,
+  /** Controls dimmed while paused / disconnected (spec §5). */
+  dimOpacity: 0.4,
 } as const;
 
-/** Quicksand is the App face (text); weights map to the bundled static files. */
-export const qs = {
-  medium: 'Quicksand-Medium',
-  semiBold: 'Quicksand-SemiBold',
-  bold: 'Quicksand-Bold',
-} as const;
+export const QB = 'Quicksand-Bold';
 
-/**
- * Live numbers: Outfit Medium (OFL, assets/fonts/Outfit-Medium.ttf) with
- * tabular figures so values don't shift while a slider streams at ~10 Hz.
- */
-export const NUM_FONT = 'Outfit-Medium';
-export const num = (size: number, color: string = nocturne.ink): TextStyle => ({
-  fontFamily: NUM_FONT,
-  fontSize: size,
-  /** CSS `line-height: 1` like the design's Outfit values. */
-  lineHeight: size,
-  color,
-  fontVariant: ['tabular-nums'],
-});
-
-export const text = (
-  family: string,
-  size: number,
-  color: string = nocturne.ink,
-  lineHeight?: number,
-): TextStyle => ({
-  fontFamily: family,
+export const text = (size: number, color: string = v4.white, lineHeight?: number): TextStyle => ({
+  fontFamily: QB,
   fontSize: size,
   color,
   ...(lineHeight ? { lineHeight } : {}),
