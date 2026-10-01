@@ -42,8 +42,8 @@ export const ValueBox = ({ value, unit, active }: { value: number; unit: string;
   <View style={[styles.box, active && styles.boxOn]} testID={active ? 'value-box-active' : 'value-box'}>
     <Text style={[styles.num, active && styles.numOn]} numberOfLines={1}>
       {value}
-      <Text style={[styles.unit, active && styles.numOn]}>{unit}</Text>
     </Text>
+    <Text style={[styles.num, styles.unit, active && styles.numOn]}>{unit}</Text>
   </View>
 );
 
@@ -201,11 +201,14 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingRight: 9,
     marginRight: -9,
-    justifyContent: 'center',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'baseline',
   },
   boxOn: { backgroundColor: v4.accent },
   num: { ...text(20, v4.white, 28), textAlign: 'right' },
-  unit: { fontSize: 14 },
+  /** design: <small> 14 pt, margin-left 2 */
+  unit: { fontSize: 14, marginLeft: 2 },
   numOn: { color: v4.ink },
   track: { height: TRACK_H, borderRadius: TRACK_H / 2, backgroundColor: v4.pill },
   fill: { position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: TRACK_H / 2 },
