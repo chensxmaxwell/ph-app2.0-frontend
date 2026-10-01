@@ -32,6 +32,12 @@ const V0_INFO =
   '"vhz":{"min":2,"max":50,"def":10},"lpulse":{"min":50,"max":2000},"ppg":["J13","J22","J23","EGG"],' +
   '"egg":{"ppg":3,"act":0}}}';
 const v0 = parseInfo(V0_INFO) as DeviceInfo;
+/** INFO safety with ch.ot trip 42 / clear 39 from the device (fixture V0_INFO has no ch.ot). */
+const safetyWithOt = (trip = 42, clear = 39) => {
+  const raw = JSON.parse(V0_INFO);
+  raw.ch.ot = { trip, clear };
+  return parseInfo(raw)!.safety;
+};
 const legacy = parseInfo(LEGACY_INFO) as DeviceInfo;
 
 type Slice = Pick<Icd001State, 'status' | 'estop' | 'overTemp' | 'lowBattery' | 'info' | 'lockReasons'>;
@@ -161,19 +167,76 @@ describe('notices (design v4 copy)', () => {
     ]);
   });
 
-  it('overtemp shows the live temperature and the 39 °C release (INFO fallback)', () => {
-    const b = bannerFor(deriveScreenState(st({ overTemp: true })), tlm({ ntc: 42.6, ot: 1 }), null)!;
+  it('overtemp shows the live temperature and the device 39 °C release (INFO ch.ot)', () => {
+    const b = bannerFor(
+      deriveScreenState(st({ overTemp: true })),
+      tlm({ ntc: 42.6, ot: 1 }),
+      null,
+      safetyWithOt(),
+    )!;
     expect(b).toMatchObject({ tone: 'warn', icon: 'thermometer', title: 'Too warm, paused' });
     expect(b.lines[0]).toBe('Device at 42.6 °C. Outputs resume once it cools below 39 °C.');
   });
 
   it('overtemp release text follows INFO ch.ot.clear (no hard-coded 39)', () => {
-    const b = bannerFor(deriveScreenState(st({ overTemp: true })), tlm({ ntc: 40.1, ot: 1 }), null, {
-      ot: { tripC: 40, clearC: 37.5 },
-    })!;
+    const raw = JSON.parse(V0_INFO);
+    raw.ch.ot = { trip: 40, clear: 37.5 };
+    const safety = parseInfo(raw)!.safety;
+    const b = bannerFor(deriveScreenState(st({ overTemp: true })), tlm({ ntc: 40.1, ot: 1 }), null, safety)!;
     expect(b.lines[0]).toBe('Device at 40.1 °C. Outputs resume once it cools below 37.5 °C.');
-    const n = bannerFor(deriveScreenState(st({ overTemp: true })), tlm({ ntc: -99, ot: 1 }), null)!;
-    expect(n.lines[0]).toBe('Outputs resume once the device cools below 39 °C.');
+  });
+
+  describe('over-temp numbers come only from the device (no placeholders)', () => {
+    const ot = deriveScreenState(st({ overTemp: true }));
+    const noOt = (() => {
+      const raw = JSON.parse(V0_INFO);
+      delete raw.ch.ot;
+      return parseInfo(raw)!.safety;
+    })();
+    it('INFO with ch.ot -> shows the device clear value', () => {
+      const raw = JSON.parse(V0_INFO);
+      raw.ch.ot = { trip: 41, clear: 36 };
+      const b = bannerFor(ot, tlm({ ntc: 41.2, ot: 1 }), null, parseInfo(raw)!.safety)!;
+      expect(b.lines[0]).toBe('Device at 41.2 °C. Outputs resume once it cools below 36 °C.');
+    });
+    it('INFO without ch.ot -> generic line, the fallback 39 is never shown', () => {
+      expect(noOt.fromInfo.ot).toBe(false);
+      expect(noOt.ot.clearC).toBe(39); // fallback still exists for the client's legacy trip logic
+      const b = bannerFor(ot, tlm({ ntc: 43, ot: 1 }), null, noOt)!;
+      expect(b.lines[0]).toBe('Device at 43 °C. Outputs resume once it cools down.');
+      expect(b.lines[0]).not.toMatch(/39/);
+      // legacy INFO (no ch at all) and no INFO at all behave the same
+      expect(bannerFor(ot, tlm({ ntc: 43, ot: 1 }), null, legacy.safety)!.lines[0]).toBe(
+        'Device at 43 °C. Outputs resume once it cools down.',
+      );
+      expect(bannerFor(ot, tlm({ ntc: 43, ot: 1 }), null, null)!.lines[0]).toBe(
+        'Device at 43 °C. Outputs resume once it cools down.',
+      );
+    });
+    it('telemetry without ntcC -> no reading', () => {
+      const noNtc = parseTelemetry({ t: 1, ppg: [], ot: 1 });
+      expect(noNtc.ntcC).toBeNull();
+      expect(bannerFor(ot, noNtc, null, safetyWithOt())!.lines[0]).toBe(
+        'Outputs resume once the device cools below 39 °C.',
+      );
+      expect(bannerFor(ot, tlm({ ntc: -99, ot: 1 }), null, safetyWithOt())!.lines[0]).toBe(
+        'Outputs resume once the device cools below 39 °C.',
+      );
+      // neither reading nor device threshold: exactly the generic line, no number at all
+      const g = bannerFor(ot, noNtc, null, noOt)!.lines[0];
+      expect(g).toBe('Outputs resume once it cools down.');
+      expect(g).not.toMatch(/\d/);
+      expect(bannerFor(ot, null, null, null)!.lines[0]).toBe('Outputs resume once it cools down.');
+    });
+    it('low battery shows only the live TLM voltage, never a threshold or fallback', () => {
+      const lb = deriveScreenState(st({ lowBattery: true }));
+      expect(bannerFor(lb, tlm({ vbat: 3.38, lb: 1 }), null, noOt)!.lines).toEqual([
+        '3.38 V. Charge the device to continue.',
+      ]);
+      const noV = bannerFor(lb, parseTelemetry({ t: 1, ppg: [], lb: 1 }), null, noOt)!;
+      expect(noV.lines).toEqual(['Charge the device to continue.']);
+      expect(JSON.stringify(noV)).not.toMatch(/3\.[47]|60 s/);
+    });
   });
 
   it('lowbat shows voltage; lower-priority conditions become extra lines', () => {

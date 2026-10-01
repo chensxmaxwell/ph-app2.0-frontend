@@ -10,7 +10,6 @@ import {
   LpulseCaps,
   LraGroup,
   LraTarget,
-  OT_FALLBACK,
   SafetyThresholds,
   Telemetry,
   VcmCaps,
@@ -32,6 +31,10 @@ import type { Icd001State } from '../../services/icd001/client';
  * Over-temp / low-battery thresholds are NOT constants here (§8.4): they come
  * from INFO `ch.ot` / `ch.lb` via `info.safety` (protocol.ts falls back to
  * OT_FALLBACK / LB_FALLBACK only when INFO lacks them, i.e. legacy boards).
+ * Display rule (design review 2026-10-01): a number is shown only if it came
+ * from the device: a threshold only when `safety.fromInfo` says INFO carried
+ * it, a reading only when telemetry has it. Fallbacks feed the client-side
+ * legacy trip logic only and are never displayed.
  */
 
 /**
@@ -147,15 +150,30 @@ const ALSO_TEXT = (c: Condition, tlm: Telemetry | null): string => {
   }
 };
 
+/**
+ * Over-temp notice body. Reading = TLM `ntc` (ntcC), clear = INFO `ch.ot.clear`;
+ * each part is omitted when the device did not provide it.
+ */
+export function overTempLine(ntcC: number | null, clearC: number | null): string {
+  const reading = ntcC !== null ? `Device at ${fmtC(ntcC)}. ` : '';
+  if (clearC === null) {
+    return `${reading}Outputs resume once it cools down.`;
+  }
+  return ntcC !== null
+    ? `${reading}Outputs resume once it cools below ${fmtC(clearC)}.`
+    : `Outputs resume once the device cools below ${fmtC(clearC)}.`;
+}
+
 /** Only the highest-priority notice is shown; lower ones become extra lines. */
 export function bannerFor(
   screen: ScreenState,
   tlm: Telemetry | null,
   estopSource: Icd001State['estopSource'],
-  safety: Pick<SafetyThresholds, 'ot'> | null = null,
+  safety: Pick<SafetyThresholds, 'ot' | 'fromInfo'> | null = null,
   link: { hadDevice: boolean; stopQueued?: boolean } = { hadDevice: true },
 ): BannerModel | null {
-  const otClear = (safety ?? { ot: OT_FALLBACK }).ot.clearC;
+  // Clear threshold only if INFO `ch.ot` carried it (never OT_FALLBACK).
+  const otClear = safety?.fromInfo.ot ? safety.ot.clearC : null;
   const also = screen.also.map(c => ALSO_TEXT(c, tlm));
   switch (screen.kind) {
     case 'disconnected':
@@ -197,12 +215,7 @@ export function bannerFor(
         tone: 'warn',
         icon: 'thermometer',
         title: 'Too warm, paused',
-        lines: [
-          tlm?.ntcC != null
-            ? `Device at ${fmtC(tlm.ntcC)}. Outputs resume once it cools below ${fmtC(otClear)}.`
-            : `Outputs resume once the device cools below ${fmtC(otClear)}.`,
-          ...also,
-        ],
+        lines: [overTempLine(tlm?.ntcC ?? null, otClear), ...also],
       };
     case 'lowbat':
       return {
