@@ -64,6 +64,8 @@ export interface ClientLike extends ControlClient {
   startScan(): Promise<void>;
   connect(d: DiscoveredDevice): Promise<boolean>;
   requestStopOnConnect(): void;
+  requestEstopOnConnect(): void;
+  downgradeQueuedEstop(): void;
   stopForSafety(reason: string): void;
 }
 
@@ -164,7 +166,7 @@ export interface AdvancedControlView {
     tint: { upper: number; lower: number; head: number; egg: number };
   };
   toast: string | null;
-  /** STOP ALL pressed while offline; STOP goes out right after connecting. */
+  /** Stop all pressed while offline; ESTOP 1 goes out first on the next connect. */
   stopQueued: boolean;
 }
 
@@ -352,12 +354,22 @@ export class AdvancedControlController {
     this.run('vcm', calls);
   }
 
-  /** STOP ALL: ESTOP 1 when connected; offline -> STOP right after the next connect. */
+  /**
+   * Stop all: ESTOP 1 when connected. Offline (design v4 §5, PROTOCOL §5/§9):
+   * the firmware already stopped on BLE drop; record the e-stop and send
+   * ESTOP 1 as the first command on the next connect, so the page comes back
+   * Stopped + Unlock. Shown values drop to 0 right away (Speed is kept).
+   */
   stopAll(): void {
+    this.wing.values = { A: 0, B: 0 };
+    this.pulse.hz = 0;
+    // optimistic 0 until telemetry reflects the stop (OPTIMISTIC_MS)
+    const t = this.now();
+    this.inputAt = { A: t, B: t, vcm: t };
     if (this.s.status === 'connected') {
       runCalls(this.client, mapAction({ t: 'stopAll' }, {}));
     } else {
-      this.client.requestStopOnConnect();
+      this.client.requestEstopOnConnect();
       this.stopQueued = true;
     }
     this.emit();
@@ -420,9 +432,17 @@ export class AdvancedControlController {
     this.client.connect(d).catch(() => undefined);
   }
 
-  /** Leaving the page (blur/unmount): STOP all outputs. */
+  /**
+   * Leaving the page (blur/unmount): STOP all outputs. An e-stop queued while
+   * offline becomes a plain STOP: without this page there is no Unlock on
+   * screen, so the device must not reconnect latched behind another page.
+   */
   leave(): void {
     this.cancelRelease(false);
+    if (this.stopQueued) {
+      this.client.downgradeQueuedEstop();
+      this.stopQueued = false;
+    }
     this.client.stopForSafety('leave advanced control');
   }
 
@@ -575,7 +595,8 @@ export class AdvancedControlController {
       const expanded = live && this.expanded === card.id;
       if (card.kind === 'intensity') {
         const enabled = live && screen.controlsEnabled;
-        const values = { ...this.wing.values };
+        // Disconnected / e-stopped: firmware has stopped everything (§5, §7.5).
+        const values = live && screen.kind !== 'estop' ? { ...this.wing.values } : { A: 0, B: 0 };
         const sum = wingSummary(tlm, card.groups);
         return {
           kind: 'intensity',
@@ -598,7 +619,7 @@ export class AdvancedControlController {
       }
       if (card.kind === 'rhythm') {
         const enabled = live && screen.controlsEnabled;
-        const hz = this.pulse.hz ?? 0;
+        const hz = live && screen.kind !== 'estop' ? this.pulse.hz ?? 0 : 0;
         const presets = rhythmPresets(card.range);
         const shown = hz > 0 ? hz : this.pulse.restore || card.range.def;
         const beat = beatLabel(shown, presets);
@@ -674,6 +695,7 @@ export class AdvancedControlController {
     const live = screen.kind !== 'disconnected';
     let banner = bannerFor(screen, s.tlm, s.estopSource, s.info?.safety ?? null, {
       hadDevice: this.lastName !== null,
+      stopQueued: this.stopQueued,
     });
     if (!banner && live && t < this.releasedUntil) {
       banner = RELEASED_ON_DEVICE_BANNER;

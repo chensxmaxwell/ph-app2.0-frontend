@@ -141,13 +141,13 @@ describe('AdvancedControlScreen v2 on the mock', () => {
       await settle(500);
     });
     t = texts(r);
-    expect(t).toContain('Emergency stop is on');
+    expect(t).toContain('Everything is stopped');
     expect(t).toContain('Stopped');
     await act(async () => {
       byLabel(r, 'Release emergency stop').props.onPress();
       await settle(500);
     });
-    expect(texts(r)).not.toContain('Emergency stop is on');
+    expect(texts(r)).not.toContain('Everything is stopped');
 
     const sent: string[] = [];
     const unsub = client.subscribe(s => {

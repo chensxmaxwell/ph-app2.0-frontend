@@ -487,4 +487,34 @@ describe('Icd001Client + simulator', () => {
     expect(dev.commandLog).not.toContain('STOP');
     client.destroy();
   });
+
+  it('requestEstopOnConnect: ESTOP 1 is the first command on the next connect; OK ESTOP 1 -> estop (app)', async () => {
+    const { dev, client, id } = setup('icd1', 185);
+    client.requestEstopOnConnect();
+    client.requestStopOnConnect(); // does not downgrade a queued e-stop
+    expect(client.queuedOnConnect).toBe('estop');
+    await connect(client, id, dev.name);
+    expect(dev.commandLog[0]).toBe('ESTOP 1');
+    expect(dev.commandLog.findIndex(c => c.startsWith('RATE'))).toBe(1);
+    expect(dev.commandLog).not.toContain('STOP');
+    await tick(100);
+    expect(client.getState()).toMatchObject({ estop: true, estopSource: 'app', locked: true });
+    expect(client.getState().log.some(l => l.includes('EVT ESTOP'))).toBe(false); // §9: OK only
+    expect(client.queuedOnConnect).toBeNull();
+    client.destroy();
+  });
+
+  it('downgradeQueuedEstop turns a queued ESTOP 1 into STOP', async () => {
+    const { dev, client, id } = setup('icd1', 185);
+    client.downgradeQueuedEstop(); // nothing queued: no-op
+    expect(client.queuedOnConnect).toBeNull();
+    client.requestEstopOnConnect();
+    client.downgradeQueuedEstop();
+    expect(client.queuedOnConnect).toBe('stop');
+    await connect(client, id, dev.name);
+    expect(dev.commandLog).not.toContain('ESTOP 1');
+    const i = dev.commandLog.findIndex(c => c.startsWith('RATE'));
+    expect(dev.commandLog[i + 1]).toBe('STOP');
+    client.destroy();
+  });
 });

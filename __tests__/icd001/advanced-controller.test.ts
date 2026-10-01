@@ -188,10 +188,9 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.ctl.stopAll();
     await tick(300);
     expect(t.v().screen.kind).toBe('estop');
-    expect(t.v().banner?.title).toBe('Emergency stop is on');
-    expect(t.v().banner?.lines[0]).toBe(
-      'All outputs are stopped and locked. Release below when you are ready.',
-    );
+    expect(t.v().banner?.title).toBe('Everything is stopped');
+    expect(t.v().banner?.lines).toEqual(['All outputs are at 0.', 'Tap Unlock when you are ready.']);
+    expect(t.wing().values).toEqual({ A: 0, B: 0 });
     expect(t.wing()).toMatchObject({ enabled: false, summary: 'Paused' });
     expect(t.egg()?.enabled).toBe(true);
 
@@ -306,9 +305,7 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     const t = await setup();
     t.transport.pressStartKey(t.id);
     await tick(200);
-    expect(t.v().banner?.lines[0]).toBe(
-      'Stopped with the button on the device. Release below, or press that button again.',
-    );
+    expect(t.v().banner?.lines[0]).toBe('Stopped with the button on the device.');
     t.done();
   });
 
@@ -404,29 +401,88 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.ctl.stopAll();
     await tick(300);
     expect(t.v().screen).toMatchObject({ kind: 'estop', also: ['overtemp', 'lowbat'] });
-    expect(t.v().banner?.lines.slice(1)).toEqual([
+    expect(t.v().banner?.lines.slice(2)).toEqual([
       'Also too warm (42.3 °C).',
       'Battery is also low (3.38 V).',
     ]);
     t.done();
   });
 
-  it('link loss -> disconnected with last-seen cards; STOP ALL offline is sent after reconnect', async () => {
+  it('link loss -> disconnected; Stop all offline is queued and ESTOP 1 goes out first on reconnect (v4 §5)', async () => {
     const t = await setup();
+    t.ctl.setWingValue('B', 70);
+    await tick(300);
     t.transport.simulateLinkLoss(t.id);
     await tick(20);
     expect(t.v().screen.kind).toBe('disconnected');
     expect(t.v().cards).toEqual([]);
     expect(t.v().lastSeen.map(c => c.summary)).toEqual(['—', '—', '—']);
+    expect((t.v().lastSeen[0] as IntensityView).values).toEqual({ A: 0, B: 0 });
     expect(t.v().device).toMatchObject({ connected: false, lastName: 'ICD1-TEST' });
-    t.ctl.stopAll();
+    expect(t.v().banner?.lines).toEqual(['Everything stopped.']);
+    t.ctl.stopAll(); // still pressable offline
     expect(t.v().stopQueued).toBe(true);
+    expect(t.client.queuedOnConnect).toBe('estop');
+    expect(t.v().banner?.lines).toEqual(['Everything stopped.', 'Stays stopped after reconnect.']);
     t.dev.commandLog.length = 0;
     await tick(800); // auto-reconnect
+    // first command on the new link is ESTOP 1, before RATE and any actuator command
+    expect(t.dev.commandLog[0]).toBe('ESTOP 1');
+    expect(t.dev.commandLog.findIndex(c => c.startsWith('RATE'))).toBeGreaterThan(0);
+    expect(t.dev.commandLog.filter(c => /^(LRA|LPULSE|VHZ|VCM)/.test(c))).toEqual([]);
+    // comes back Stopped (app source, OK ESTOP 1 only per §9), values 0
+    expect(t.v().screen.kind).toBe('estop');
+    expect(t.v().estop).toMatchObject({ on: true, source: 'app' });
+    expect(t.v().banner?.title).toBe('Everything is stopped');
+    expect(t.wing().values).toEqual({ A: 0, B: 0 });
+    expect(t.v().stopQueued).toBe(false);
+    expect(t.client.queuedOnConnect).toBeNull();
+    // Unlock: ESTOP 0, everything stays at 0 (firmware keeps no set values, §7.5)
+    t.dev.commandLog.length = 0;
+    t.ctl.release();
+    await tick(500);
+    expect(t.dev.commandLog).toEqual(expect.arrayContaining(['ESTOP 0']));
     expect(t.v().screen.kind).toBe('normal');
+    expect(t.wing().values).toEqual({ A: 0, B: 0 });
+    expect(t.pulse().on).toBe(false);
+    expect(t.dev.snapshot()).toMatchObject({ lra: [0, 0], vcmOn: false });
+    t.done();
+  });
+
+  it('leaving the page while an offline e-stop is queued downgrades it to STOP (no hidden latch)', async () => {
+    const t = await setup();
+    t.transport.simulateLinkLoss(t.id);
+    await tick(20);
+    t.ctl.stopAll();
+    expect(t.client.queuedOnConnect).toBe('estop');
+    t.ctl.leave();
+    expect(t.client.queuedOnConnect).toBe('stop');
+    expect(t.v().stopQueued).toBe(false);
+    t.dev.commandLog.length = 0;
+    await tick(800);
+    expect(t.dev.commandLog).not.toContain('ESTOP 1');
     const i = t.dev.commandLog.findIndex(c => c.startsWith('RATE'));
     expect(t.dev.commandLog[i + 1]).toBe('STOP');
-    expect(t.v().stopQueued).toBe(false);
+    expect(t.v().screen.kind).toBe('normal');
+    t.done();
+  });
+
+  it('e-stop while connected: values drop to 0 at once, Unlock keeps them at 0, pulse speed kept', async () => {
+    const t = await setup();
+    t.ctl.setWingValue('A', 40);
+    t.ctl.setPulseOn(true);
+    t.ctl.setPulseHz(24);
+    await tick(300);
+    t.ctl.stopAll();
+    expect(t.wing().values).toEqual({ A: 0, B: 0 });
+    await tick(300);
+    expect(t.v().screen.kind).toBe('estop');
+    expect(t.pulse()).toMatchObject({ on: false, hz: 24 });
+    t.ctl.release();
+    await tick(1500);
+    expect(t.v().screen.kind).toBe('normal');
+    expect(t.wing().values).toEqual({ A: 0, B: 0 });
+    expect(t.pulse()).toMatchObject({ on: false, hz: 24 });
     t.done();
   });
 

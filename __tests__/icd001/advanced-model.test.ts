@@ -146,18 +146,19 @@ describe('state priority 未连接 > 急停 > 过温 > 低电', () => {
   });
 });
 
-describe('notices (design v2 copy)', () => {
-  it('estop: neutral lock notice; copy depends on who stopped it', () => {
+describe('notices (design v4 copy)', () => {
+  it('estop: neutral notice card; copy depends on who stopped it', () => {
     const s = deriveScreenState(st({ estop: true }));
     expect(bannerFor(s, tlm(), 'app')).toEqual({
       tone: 'neutral',
       icon: 'lock',
-      title: 'Emergency stop is on',
-      lines: ['All outputs are stopped and locked. Release below when you are ready.'],
+      title: 'Everything is stopped',
+      lines: ['All outputs are at 0.', 'Tap Unlock when you are ready.'],
     });
-    expect(bannerFor(s, tlm(), 'device')?.lines[0]).toBe(
-      'Stopped with the button on the device. Release below, or press that button again.',
-    );
+    expect(bannerFor(s, tlm(), 'device')?.lines).toEqual([
+      'Stopped with the button on the device.',
+      'Tap Unlock or press that button again.',
+    ]);
   });
 
   it('overtemp shows the live temperature and the 39 °C release (INFO fallback)', () => {
@@ -184,16 +185,22 @@ describe('notices (design v2 copy)', () => {
       tlm({ ntc: 42.3, vbat: 3.38 }),
       'app',
     )!;
-    expect(e.lines.slice(1)).toEqual(['Also too warm (42.3 °C).', 'Battery is also low (3.38 V).']);
+    expect(e.lines.slice(2)).toEqual(['Also too warm (42.3 °C).', 'Battery is also low (3.38 V).']);
   });
 
   it('disconnected: Connection lost + Reconnect, or Not connected + Scan before any device', () => {
     const d = deriveScreenState(st({ status: 'disconnected' }));
     expect(bannerFor(d, null, null)).toMatchObject({
       title: 'Connection lost',
+      lines: ['Everything stopped.'],
       action: 'reconnect',
       icon: 'bluetooth',
     });
+    // Stop all pressed while offline: the notice says it stays stopped.
+    expect(bannerFor(d, null, null, null, { hadDevice: true, stopQueued: true })?.lines).toEqual([
+      'Everything stopped.',
+      'Stays stopped after reconnect.',
+    ]);
     expect(bannerFor(d, null, null, null, { hadDevice: false })).toMatchObject({
       title: 'Not connected',
       action: 'scan',

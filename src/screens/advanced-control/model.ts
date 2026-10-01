@@ -120,9 +120,10 @@ export function deriveScreenState(s: StateSlice): ScreenState {
 }
 
 /**
- * Page notice (design v2 §6.9: icon + one bold sentence + body, no box).
- * tone 'warn' for heat / battery, 'neutral' for connection / E-stop / info.
- * Copy follows design v2 (no em / en dashes).
+ * Page notice (design v4 §1/§5: notice card = title + short body, same card
+ * surface as the modules, full-white text). tone 'warn' for heat / battery,
+ * 'neutral' for connection / E-stop / info. Copy follows design v4 (no em / en
+ * dashes). Each string in `lines` renders as its own line.
  */
 export interface BannerModel {
   tone: 'neutral' | 'warn';
@@ -138,7 +139,7 @@ const fmtC = (c: number) => `${Number.isInteger(c) ? c : c.toFixed(1)} °C`;
 const ALSO_TEXT = (c: Condition, tlm: Telemetry | null): string => {
   switch (c) {
     case 'estop':
-      return 'Emergency stop is also on.';
+      return 'Stop all is also on.';
     case 'overtemp':
       return `Also too warm${tlm?.ntcC != null ? ` (${fmtC(tlm.ntcC)})` : ''}.`;
     case 'lowbat':
@@ -152,7 +153,7 @@ export function bannerFor(
   tlm: Telemetry | null,
   estopSource: Icd001State['estopSource'],
   safety: Pick<SafetyThresholds, 'ot'> | null = null,
-  link: { hadDevice: boolean } = { hadDevice: true },
+  link: { hadDevice: boolean; stopQueued?: boolean } = { hadDevice: true },
 ): BannerModel | null {
   const otClear = (safety ?? { ot: OT_FALLBACK }).ot.clearC;
   const also = screen.also.map(c => ALSO_TEXT(c, tlm));
@@ -171,18 +172,23 @@ export function bannerFor(
         tone: 'neutral',
         icon: 'bluetooth',
         title: 'Connection lost',
-        lines: ['The device stopped all outputs on its own. Reconnect to continue.'],
+        // Firmware stops everything on BLE drop (§5). Stop all pressed offline
+        // is sent as ESTOP 1 first on reconnect (controller.stopAll).
+        lines: link.stopQueued
+          ? ['Everything stopped.', 'Stays stopped after reconnect.']
+          : ['Everything stopped.'],
         action: 'reconnect',
       };
     case 'estop':
       return {
         tone: 'neutral',
         icon: 'lock',
-        title: 'Emergency stop is on',
+        title: 'Everything is stopped',
         lines: [
+          estopSource === 'device' ? 'Stopped with the button on the device.' : 'All outputs are at 0.',
           estopSource === 'device'
-            ? 'Stopped with the button on the device. Release below, or press that button again.'
-            : 'All outputs are stopped and locked. Release below when you are ready.',
+            ? 'Tap Unlock or press that button again.'
+            : 'Tap Unlock when you are ready.',
           ...also,
         ],
       };

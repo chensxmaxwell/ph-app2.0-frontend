@@ -101,8 +101,16 @@ export class Icd001Client {
   private legacyLbAboveSince: number | null = null;
   private legacyOt = false;
   private readonly opts: Required<Icd001ClientOptions>;
-  /** STOP ALL pressed while offline: send STOP right after the next connect. */
-  private stopOnConnect = false;
+  /**
+   * What to send first on the next connect (one-shot):
+   *  - 'estop': Stop all pressed on the advanced-control page while offline
+   *    (design v4 §5). `ESTOP 1` goes out right after INFO, before RATE and
+   *    before the link is reported connected, so the page reconnects latched
+   *    (Stopped + Unlock) and no actuator command can precede it.
+   *  - 'stop':  plain STOP (the page was left while an e-stop was queued; the
+   *    firmware already stopped on BLE drop, §5, so this is belt and braces).
+   */
+  private onConnectAction: 'estop' | 'stop' | null = null;
   /**
    * Single place E-stop state changes. The message type tells who caused it
    * (PROTOCOL §9, hardware-confirmed; no time windows):
@@ -294,9 +302,14 @@ export class Icd001Client {
       this.legacyLowBat = false;
       this.legacyLbAboveSince = null;
       this.legacyOt = false;
+      const first = this.onConnectAction;
+      this.onConnectAction = null;
+      if (first === 'estop') {
+        // State/source follow the `OK ESTOP 1` reply (§9), like setEstop().
+        await this.write(formatEstop(true), true);
+      }
       await this.write(formatRate(this.opts.tlmHz), true);
-      if (this.stopOnConnect) {
-        this.stopOnConnect = false;
+      if (first === 'stop') {
         await this.write(formatStop(), true);
       }
       this.set({ status: 'connected', reconnectAttempt: 0 });
@@ -611,12 +624,42 @@ export class Icd001Client {
   }
 
   /**
-   * STOP ALL while offline: firmware already stopped on disconnect; make sure
-   * the first thing after the next connect is a STOP.
+   * STOP while offline: firmware already stopped on disconnect (§5); make sure
+   * a STOP follows RATE on the next connect. Does not downgrade a queued ESTOP.
    */
   requestStopOnConnect(): void {
-    this.stopOnConnect = true;
+    if (this.onConnectAction !== 'estop') {
+      this.onConnectAction = 'stop';
+    }
     this.pushLog('# STOP queued for next connect');
+  }
+
+  /**
+   * Stop all while offline (advanced control, design v4): the firmware already
+   * stopped everything when the link dropped (§5); on the next connect the
+   * first command is `ESTOP 1`, so outputs stay locked until the user taps
+   * Unlock (ESTOP 0) or presses the START key (§8.3).
+   */
+  requestEstopOnConnect(): void {
+    this.onConnectAction = 'estop';
+    this.pushLog('# ESTOP 1 queued for next connect');
+  }
+
+  /**
+   * The page that queued the e-stop is gone (no Unlock UI left on screen):
+   * downgrade the queued ESTOP 1 to a plain STOP so the device does not come
+   * back latched behind another page.
+   */
+  downgradeQueuedEstop(): void {
+    if (this.onConnectAction === 'estop') {
+      this.onConnectAction = 'stop';
+      this.pushLog('# queued ESTOP 1 -> STOP (left advanced control)');
+    }
+  }
+
+  /** Pending one-shot action for the next connect (UI hint / tests). */
+  get queuedOnConnect(): 'estop' | 'stop' | null {
+    return this.onConnectAction;
   }
 
   /** Legacy-only low-battery latch: trip < tripV; clear > clearV held holdS (§8.2). */
