@@ -396,6 +396,48 @@ describe('Icd001Client + simulator', () => {
     client.destroy();
   });
 
+  it('§9: ESTOP n is acknowledged only by OK ESTOP n (no EVT echo); app source comes from the reply', async () => {
+    const { dev, client, id } = setup('icd1', 185);
+    await connect(client, id, dev.name);
+    const before = client.getState().log.length;
+    await client.setEstop(true);
+    await tick(300);
+    const rx = client
+      .getState()
+      .log.slice(before)
+      .filter(l => l.startsWith('<'));
+    expect(rx.some(l => l.includes('OK ESTOP 1'))).toBe(true);
+    expect(rx.some(l => l.includes('EVT ESTOP'))).toBe(false);
+    expect(client.getState()).toMatchObject({ estop: true, estopSource: 'app' });
+    // extra STOP while latched: OK STOP, latch unchanged, source unchanged
+    await client.stop();
+    await tick(300);
+    expect(dev.snapshot().estop).toBe(true);
+    expect(client.getState()).toMatchObject({ estop: true, estopSource: 'app' });
+    expect(client.getState().log.some(l => l.includes('OK STOP'))).toBe(true);
+    client.destroy();
+  });
+
+  it('§9: every EVT ESTOP is device-originated, even right after the app sent ESTOP (no 3 s window)', async () => {
+    const { dev, client, id } = setup('icd1', 185);
+    await connect(client, id, dev.name);
+    await client.setEstop(true);
+    await tick(50);
+    expect(client.getState().estopChange).toMatchObject({ on: true, source: 'app' });
+    // START key releases within 50 ms of the app's ESTOP 1 -> still the device
+    client.onLine('EVT ESTOP 0');
+    expect(client.getState()).toMatchObject({ estop: false, estopSource: null });
+    expect(client.getState().estopChange).toMatchObject({ on: false, source: 'device' });
+    // the app releases, then an EVT ESTOP 1 arrives immediately -> device
+    client.onLine('EVT ESTOP 1');
+    expect(client.getState()).toMatchObject({ estop: true, estopSource: 'device' });
+    expect(client.getState().estopChange).toMatchObject({ on: true, source: 'device' });
+    // a raw OK ESTOP 0 is our release
+    client.onLine('OK ESTOP 0');
+    expect(client.getState().estopChange).toMatchObject({ on: false, source: 'app' });
+    client.destroy();
+  });
+
   it('§8.3 START key releases an app E-stop without ESTOP 0 (EVT ESTOP 0 + TLM are the truth)', async () => {
     const { dev, transport, client, id } = setup('icd1', 185);
     await connect(client, id, dev.name);

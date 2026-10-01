@@ -100,39 +100,37 @@ export class Icd001Client {
   private legacyLowBat = false;
   private legacyLbAboveSince: number | null = null;
   private legacyOt = false;
-  private appReleaseAt = -Infinity;
   private readonly opts: Required<Icd001ClientOptions>;
   /** STOP ALL pressed while offline: send STOP right after the next connect. */
   private stopOnConnect = false;
-  private appEstopAt = -Infinity;
-
-  /** Who caused an E-stop engage seen now: app if it sent ESTOP 1 in the last 3 s. */
-  private estopSrc(): 'app' | 'device' {
-    if (Date.now() - this.appEstopAt < 3000) {
-      return 'app';
-    }
-    return this.state.estopSource ?? 'device';
-  }
-
   /**
-   * Single place E-stop state changes (§8.3: EVT ESTOP n + TLM `estop` are the
-   * source of truth; the START key toggles and may release without ESTOP 0).
+   * Single place E-stop state changes. The message type tells who caused it
+   * (PROTOCOL §9, hardware-confirmed; no time windows):
+   *  - `OK ESTOP n`  only ever answers the app's own `ESTOP n`   -> 'app'
+   *  - `EVT ESTOP n` is sent only when the device START key is pressed
+   *                  (never as an echo of `ESTOP n`)              -> 'device'
+   *  - TLM `estop`   carries no origin: an already-engaged stop keeps its source;
+   *                  a change seen only in TLM (reply/EVT lost)   -> 'device'
+   * An extra STOP while latched is harmless (`OK STOP`, latch unchanged).
    */
-  private applyEstop(on: boolean, patch: Partial<Icd001State> = {}): Partial<Icd001State> {
-    const now = Date.now();
-    patch.estop = on;
-    if (on) {
-      patch.estopSource = this.state.estop ? this.state.estopSource ?? this.estopSrc() : this.estopSrc();
-    } else {
-      patch.estopSource = null;
-    }
-    if (on !== this.state.estop) {
-      const source: 'app' | 'device' = on
-        ? patch.estopSource ?? 'device'
-        : now - this.appReleaseAt < 3000
+  private applyEstop(
+    on: boolean,
+    via: 'ok' | 'evt' | 'tlm',
+    patch: Partial<Icd001State> = {},
+  ): Partial<Icd001State> {
+    const changed = on !== this.state.estop;
+    const source: 'app' | 'device' =
+      via === 'ok'
         ? 'app'
-        : 'device';
-      patch.estopChange = { on, source, at: now };
+        : via === 'evt'
+        ? 'device'
+        : changed
+        ? 'device'
+        : this.state.estopSource ?? 'device';
+    patch.estop = on;
+    patch.estopSource = on ? source : null;
+    if (changed) {
+      patch.estopChange = { on, source, at: Date.now() };
     }
     return patch;
   }
@@ -448,7 +446,7 @@ export class Icd001Client {
         const tripped =
           t.format === 'legacy' &&
           ((overTemp && !this.state.overTemp) || (lowBattery && !this.state.lowBattery));
-        this.set(this.applyEstop(t.estop, { tlm: t, tlmAt: now, overTemp, lowBattery }));
+        this.set(this.applyEstop(t.estop, 'tlm', { tlm: t, tlmAt: now, overTemp, lowBattery }));
         if (tripped) {
           this.stopForSafety('legacy app-side latch');
         }
@@ -461,8 +459,8 @@ export class Icd001Client {
         return;
       case 'ok':
         if (p.args[0]?.toUpperCase() === 'ESTOP') {
-          // direct reply to our ESTOP n: the firmware state now
-          this.set(this.applyEstop(p.args[1] === '1'));
+          // direct reply to our ESTOP n (the only ESTOP acknowledgement, §9)
+          this.set(this.applyEstop(p.args[1] === '1', 'ok'));
         }
         this.set({ lastReply: line });
         this.pushLog(`< ${line}`);
@@ -493,8 +491,8 @@ export class Icd001Client {
       case 'evt':
         this.pushLog(`< ${line}`);
         if (p.name === 'ESTOP') {
-          // START key toggles (or firmware echo of our ESTOP n): authoritative
-          this.set(this.applyEstop(p.args[0] === '1'));
+          // START key only (§9: never an echo of our ESTOP n): authoritative, device-originated
+          this.set(this.applyEstop(p.args[0] === '1', 'evt'));
         } else if (p.name === 'OVERTEMP') {
           this.set({ overTemp: p.args[0] !== '0' });
         } else if (p.name === 'LOWBAT') {
@@ -608,11 +606,7 @@ export class Icd001Client {
     if (!this.linkUp) {
       return;
     }
-    if (on) {
-      this.appEstopAt = Date.now();
-    } else {
-      this.appReleaseAt = Date.now();
-    }
+    // State and source follow the `OK ESTOP n` reply (§9), not the send.
     await this.scheduler.sendNow(formatEstop(on));
   }
 
