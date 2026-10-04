@@ -22,6 +22,26 @@ module.exports = {
         },
       },
     },
+    overrides: [
+      {
+        // ICD-001 BLE layer: the repo has no .prettierrc, so pin a style here
+        // (single quotes, matching @react-native's `quotes` rule) instead of
+        // letting prettier defaults and `quotes` fight each other.
+        files: [
+          'src/services/icd001/**',
+          'src/screens/icd001-debug/**',
+          'src/screens/advanced-control/**',
+          'src/screens/control/advanced-entry.tsx',
+          '__tests__/icd001/**',
+        ],
+        rules: {
+          'prettier/prettier': [
+            'error',
+            { singleQuote: true, trailingComma: 'all', arrowParens: 'avoid', printWidth: 110 },
+          ],
+        },
+      },
+    ],
     rules: {
       'import/no-duplicates': 'error',
       'import/order': [

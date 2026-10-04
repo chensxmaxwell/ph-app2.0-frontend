@@ -6,6 +6,8 @@ import { GlobalMessageCallPill } from "../src/screens/chat/call-pill";
 import { GlobalSessionLovePill } from "../src/screens/love/pill";
 import { bindHomeStackNavigation } from "../src/screens/love/overlay";
 import { NavBar } from "@common/components/nav-bar/nav-bar";
+import { Icd001DebugScreen } from "../src/screens/icd001-debug";
+import { AdvancedControlScreen } from "../src/screens/advanced-control";
 import { Manual } from "../src/screens/control/sub-screens/manual";
 import { Pattern } from "../src/screens/control/sub-screens/pattern";
 import { CreatePattern } from "../src/screens/control/sub-screens/pattern/sub-screens/create-pattern";
@@ -112,6 +114,8 @@ export const HomeStack = () => (
       component={PerformancePlayScreen}
     />
     <Stack.Screen name={SCREENS.PREMIUM} component={PremiumScreen} />
+    <Stack.Screen name={SCREENS.ICD001_DEBUG} component={Icd001DebugScreen} />
+    <Stack.Screen name={SCREENS.ADVANCED_CONTROL} component={AdvancedControlScreen} />
     </Stack.Navigator>
     <GlobalSessionLovePill />
     <GlobalMessageCallPill />
@@ -160,4 +164,6 @@ export type HomeStackScreenProps = {
   Performance: undefined;
   PerformancePlay: { title?: string } | undefined;
   Premium: undefined;
+  Icd001Debug: undefined;
+  AdvancedControl: undefined;
 };

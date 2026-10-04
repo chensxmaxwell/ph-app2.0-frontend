@@ -17,6 +17,8 @@ import { BaseText } from "@common/components/base-text";
 import { spacings } from "@common/styles/spacings";
 import { ConnectionPill } from "@common/components/connection-pill";
 
+import { AdvancedEntry, useAdvancedEntryGridPaddingTop } from "./advanced-entry";
+
 const CARD_ICON_SIZE = 72;
 const CARD_TITLE_GAP = 20;
 
@@ -69,6 +71,7 @@ const AutoRing = ({ active }: { active: boolean }) => {
 
 export const Control = () => {
   const { controls, autoOn, autoIntensity, setAutoIntensity } = useControl();
+  const gridPaddingTop = useAdvancedEntryGridPaddingTop();
 
   const renderControls: ListRenderItem<ControlType> = ({ item }) => {
     const { title, Icon, onPress, active, id } = item;
@@ -112,13 +115,15 @@ export const Control = () => {
     <ScreenWrapper disableScrolling>
       <View style={styles.container}>
         <ConnectionPill />
+        {/* Advanced control entry: placement/visibility isolated in ./advanced-entry (Q9). */}
+        <AdvancedEntry />
         <FlatList
           data={controls}
           renderItem={renderControls}
           keyExtractor={(item) => item.id}
           extraData={`${autoOn}-${autoIntensity}`}
           numColumns={2}
-          contentContainerStyle={styles.cardContainer}
+          contentContainerStyle={[styles.cardContainer, gridPaddingTop !== null && { paddingTop: gridPaddingTop }]}
           columnWrapperStyle={styles.columnWrapper}
         />
       </View>
