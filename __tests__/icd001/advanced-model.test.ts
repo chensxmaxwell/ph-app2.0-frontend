@@ -86,7 +86,7 @@ function tlm(p: Record<string, unknown> = {}): Telemetry {
       [0, 0],
       [0, 0],
     ],
-    lra_f: 170,
+    f: 170,
     vhz: 30,
     estop: 0,
     ot: 0,

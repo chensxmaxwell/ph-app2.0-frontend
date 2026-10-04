@@ -8,6 +8,11 @@
  * - One write in flight at a time; each write carries exactly one command so a
  *   command is never split across BLE writes.
  * - `sendNow` (STOP / ESTOP) drops everything pending and goes out immediately.
+ * - Optional per-key de-duplication (`enqueue(key, line, true)`): a line equal
+ *   to the last one written for that key within `dedupeMs` is not written again
+ *   (e.g. a slider release repeating the last streamed value). `sendNow`,
+ *   `clear`, `forget` and a failed write reset it, so after STOP / ESTOP / ERR /
+ *   disconnect the same value is always sent again. Safety lines never dedupe.
  */
 
 export interface SchedulerClock {
@@ -25,6 +30,8 @@ const defaultClock: SchedulerClock = {
 export interface SchedulerOptions {
   perKeyIntervalMs?: number;
   minGapMs?: number;
+  /** Window for per-key de-duplication (default 1000 ms). */
+  dedupeMs?: number;
   clock?: SchedulerClock;
   onError?: (line: string, err: unknown) => void;
 }
@@ -34,12 +41,16 @@ export type SendFn = (line: string, urgent: boolean) => Promise<void>;
 export class CommandScheduler {
   private readonly perKey: number;
   private readonly minGap: number;
+  private readonly dedupeMs: number;
   private readonly clock: SchedulerClock;
   private readonly onError?: (line: string, err: unknown) => void;
 
   /** key -> latest line, insertion order = fairness order. */
   private pending = new Map<string, string>();
   private lastKeySent = new Map<string, number>();
+  /** key -> last line written (dedupe keys only), cleared by sendNow/clear/forget/error. */
+  private lastLine = new Map<string, { line: string; at: number }>();
+  private dedupeKeys = new Set<string>();
   private lastSent = -Infinity;
   private inFlight = false;
   private timer: unknown = null;
@@ -47,17 +58,42 @@ export class CommandScheduler {
   constructor(private readonly send: SendFn, opts: SchedulerOptions = {}) {
     this.perKey = opts.perKeyIntervalMs ?? 100;
     this.minGap = opts.minGapMs ?? 50;
+    this.dedupeMs = opts.dedupeMs ?? 1000;
     this.clock = opts.clock ?? defaultClock;
     this.onError = opts.onError;
   }
 
-  /** Queue a coalescable command. Replaces any not-yet-sent value for the key. */
-  enqueue(key: string, line: string): void {
+  /**
+   * Queue a coalescable command. Replaces any not-yet-sent value for the key.
+   * With `dedupe`, a line identical to the last one written for this key (and
+   * not reset since, within `dedupeMs`) is dropped: the device already has it.
+   */
+  enqueue(key: string, line: string, dedupe = false): void {
+    if (dedupe) {
+      this.dedupeKeys.add(key);
+      const last = this.lastLine.get(key);
+      if (last && last.line === line && this.clock.now() - last.at < this.dedupeMs) {
+        // latest intent == what was already written: drop any older pending value too
+        this.pending.delete(key);
+        return;
+      }
+    } else {
+      this.dedupeKeys.delete(key);
+    }
     this.pending.set(key, line);
     this.pump();
   }
 
-  /** Safety path: clear pending and send right away (bypasses throttle). */
+  /** Forget what was last written for these keys (all keys when none given). */
+  forget(...keys: string[]): void {
+    if (keys.length === 0) {
+      this.lastLine.clear();
+      return;
+    }
+    keys.forEach(k => this.lastLine.delete(k));
+  }
+
+  /** Safety path: clear pending and send right away (bypasses throttle and dedupe). */
   async sendNow(line: string): Promise<void> {
     this.clear();
     this.lastSent = this.clock.now();
@@ -77,6 +113,7 @@ export class CommandScheduler {
   /** Drop all pending commands (disconnect, safety lock, leaving page). */
   clear(): void {
     this.pending.clear();
+    this.lastLine.clear();
     if (this.timer !== null) {
       this.clock.clearTimeout(this.timer);
       this.timer = null;
@@ -120,9 +157,18 @@ export class CommandScheduler {
     this.pending.delete(bestKey);
     this.lastKeySent.set(bestKey, now);
     this.lastSent = now;
+    if (this.dedupeKeys.has(bestKey)) {
+      this.lastLine.set(bestKey, { line, at: now });
+    }
     this.inFlight = true;
+    const key = bestKey;
     this.send(line, false)
-      .catch(e => this.onError?.(line, e))
+      .catch(e => {
+        if (this.lastLine.get(key)?.line === line) {
+          this.lastLine.delete(key);
+        }
+        this.onError?.(line, e);
+      })
       .finally(() => {
         this.inFlight = false;
         this.pump();

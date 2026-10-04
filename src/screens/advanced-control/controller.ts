@@ -2,7 +2,7 @@
  * Presentation-agnostic view-model for the 高级控制 page.
  *
  * Owns the UI-local state that is not on the device (expanded card, wing
- * link / mode / rhythm preset, last non-zero values to restore, optimistic
+ * link, last non-zero values to restore, remembered Pulse speed, optimistic
  * slider values, E-stop hold progress, transient messages) and turns
  * user intents into client calls via `mapAction` (throttled by the client's
  * CommandScheduler: ~10 Hz per key, latest value wins, ≤20 cmd/s).
@@ -23,7 +23,6 @@ import {
   IntensityCard,
   ModuleCard,
   RhythmCard,
-  RhythmPresetId,
   ScreenState,
   SensorCard,
   SensorReading,
@@ -42,6 +41,7 @@ import {
   tempText,
   wingSummary,
 } from './model';
+import { PulseSpeedStore, memoryPulseSpeedStore } from './pulseMemory';
 
 import type { Icd001State } from '../../services/icd001/client';
 import type { DeviceInfo, LraGroupId, SafetyThresholds } from '../../services/icd001/protocol';
@@ -87,9 +87,6 @@ export interface IntensityView {
   on: boolean;
   values: Record<LraGroupId, number>;
   link: boolean;
-  mode: 'steady' | 'rhythm';
-  rhythm: RhythmPresetId;
-  rhythmAvailable: boolean;
   summary: string;
 }
 
@@ -194,16 +191,24 @@ export class AdvancedControlController {
   private focusedGroup: LraGroupId | null = null;
   private seenEstopChangeAt: number | null = null;
   private releasedUntil = 0;
+  /**
+   * Wings are always steady on this page (audit F1, PROTOCOL §10.8): sliders
+   * send `LRA <grp> <pct>` only. No rhythm mode, and telemetry `lp` never
+   * switches the page to LPULSE.
+   */
   private wing = {
     link: false,
-    mode: 'steady' as 'steady' | 'rhythm',
-    rhythm: 'medium' as RhythmPresetId,
     values: { A: 0, B: 0 } as Record<LraGroupId, number>,
     restore: { A: 50, B: 50 } as Record<LraGroupId, number>,
   };
   /** FREQ 170 correction done (or not needed) for the current connection. */
   private freqChecked = false;
   private pulse = { hz: null as number | null, restore: 0 };
+  /** Device the remembered Pulse speed belongs to (name), and whether it was set this connection. */
+  private pulseKey: string | null = null;
+  private pulseTouched = false;
+  /** leave() already sent STOP for this visit (blur + unmount = one STOP, audit F10). */
+  private left = false;
   private inputAt: Record<'A' | 'B' | 'vcm', number> = {
     A: -1e12,
     B: -1e12,
@@ -219,7 +224,11 @@ export class AdvancedControlController {
   private holdTimer: ReturnType<typeof setInterval> | null = null;
   private msgTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(readonly client: ClientLike, private readonly now: () => number = Date.now) {
+  constructor(
+    readonly client: ClientLike,
+    private readonly now: () => number = Date.now,
+    private readonly pulseStore: PulseSpeedStore = memoryPulseSpeedStore,
+  ) {
     this.s = client.getState();
     this.seenErrAt = this.s.lastErr?.at ?? null;
     this.seenEstopChangeAt = this.s.estopChange?.at ?? null;
@@ -308,24 +317,13 @@ export class AdvancedControlController {
     this.emit();
   }
 
-  setWingMode(mode: 'steady' | 'rhythm'): void {
-    this.wing.mode = mode;
-    this.dispatch('wing', { t: 'wingMode', mode });
-  }
-
-  setWingRhythm(preset: RhythmPresetId): void {
-    this.wing.mode = 'rhythm';
-    this.wing.rhythm = preset;
-    this.dispatch('wing', { t: 'wingRhythm', preset });
-  }
-
   setPulseHz(hz: number, preset = false): void {
     const card = this.card('vcm') as RhythmCard | undefined;
     if (!card) {
       return;
     }
     const v = Math.round(Math.max(card.range.min, Math.min(card.range.max, hz)));
-    this.pulse.restore = v;
+    this.rememberPulse(v);
     if (!preset && !((this.pulse.hz ?? 0) > 0)) {
       // Output is off (design v2: separate Output switch): only remember the
       // rhythm; the switch turns it on at this value.
@@ -347,7 +345,7 @@ export class AdvancedControlController {
     if (c && c.fn === 'setVcmHz') {
       this.pulse.hz = c.hz;
       if (c.hz > 0) {
-        this.pulse.restore = c.hz;
+        this.rememberPulse(c.hz);
       }
     }
     this.inputAt.vcm = this.now();
@@ -432,12 +430,23 @@ export class AdvancedControlController {
     this.client.connect(d).catch(() => undefined);
   }
 
+  /** Page focused (again): re-arm leave() so the next blur/unmount sends STOP. */
+  enter(): void {
+    this.left = false;
+  }
+
   /**
-   * Leaving the page (blur/unmount): STOP all outputs. An e-stop queued while
+   * Leaving the page (blur/unmount): STOP all outputs, once per visit (blur
+   * followed by unmount sends a single STOP; audit F10). An e-stop queued while
    * offline becomes a plain STOP: without this page there is no Unlock on
    * screen, so the device must not reconnect latched behind another page.
    */
   leave(): void {
+    this.pulseStore.flush();
+    if (this.left) {
+      return;
+    }
+    this.left = true;
     this.cancelRelease(false);
     if (this.stopQueued) {
       this.client.downgradeQueuedEstop();
@@ -459,8 +468,8 @@ export class AdvancedControlController {
     }
     return {
       link: this.wing.link,
-      mode: this.wing.mode,
-      rhythm: this.wing.rhythm,
+      mode: 'steady', // audit F1: never LPULSE from this page
+      rhythm: 'medium',
       values: { ...this.wing.values },
       groups: c.groups.map(g => g.id),
     };
@@ -551,6 +560,7 @@ export class AdvancedControlController {
     if (s.device) {
       this.lastName = s.device.name;
       this.lastDevice = s.device;
+      this.loadPulse(s.device.name ?? s.device.id);
     }
     const tlm = s.tlm;
     if (!tlm || s.status !== 'connected') {
@@ -568,12 +578,42 @@ export class AdvancedControlController {
     if (t - this.inputAt.vcm > OPTIMISTIC_MS) {
       this.pulse.hz = tlm.vcm.on ? tlm.vcm.hz : 0;
       if (tlm.vcm.on && tlm.vcm.hz) {
-        this.pulse.restore = tlm.vcm.hz;
+        this.rememberPulse(tlm.vcm.hz);
       }
     }
-    if (tlm.lp.some(p => p[0] > 0) && t - this.inputAt.A > OPTIMISTIC_MS) {
-      this.wing.mode = 'rhythm';
+    // Telemetry `lp` is deliberately ignored here (audit F1): wings stay steady.
+  }
+
+  /** Last Pulse speed the user chose (or the device ran): kept by the app, §10.7. */
+  private rememberPulse(hz: number): void {
+    this.pulse.restore = hz;
+    this.pulseTouched = true;
+    if (this.pulseKey) {
+      this.pulseStore.set(this.pulseKey, hz);
     }
+  }
+
+  /** New device: restore its remembered Pulse speed (cache now, storage async). */
+  private loadPulse(name: string): void {
+    if (this.pulseKey === name) {
+      return;
+    }
+    this.pulseKey = name;
+    this.pulseTouched = false;
+    const cached = this.pulseStore.get(name);
+    if (cached !== null) {
+      this.pulse.restore = cached;
+      return;
+    }
+    this.pulseStore
+      .load(name)
+      .then(v => {
+        if (v !== null && this.pulseKey === name && !this.pulseTouched) {
+          this.pulse.restore = v;
+          this.emit();
+        }
+      })
+      .catch(() => undefined);
   }
 
   private schedule(ms: number): void {
@@ -607,9 +647,6 @@ export class AdvancedControlController {
           on: live && (values.A > 0 || values.B > 0),
           values,
           link: this.wing.link,
-          mode: this.wing.mode,
-          rhythm: this.wing.rhythm,
-          rhythmAvailable: !!card.lpulse,
           summary: !live
             ? '—'
             : !enabled && screen.kind !== 'normal'
@@ -621,7 +658,10 @@ export class AdvancedControlController {
         const enabled = live && screen.controlsEnabled;
         const hz = live && screen.kind !== 'estop' ? this.pulse.hz ?? 0 : 0;
         const presets = rhythmPresets(card.range);
-        const shown = hz > 0 ? hz : this.pulse.restore || card.range.def;
+        const remembered = this.pulse.restore
+          ? Math.max(card.range.min, Math.min(card.range.max, this.pulse.restore))
+          : card.range.def;
+        const shown = hz > 0 ? hz : remembered;
         const beat = beatLabel(shown, presets);
         return {
           kind: 'rhythm',

@@ -554,7 +554,7 @@ export function parseTelemetry(obj: Json): Telemetry {
 export type ParsedLine =
   | { kind: 'tlm'; tlm: Telemetry }
   | { kind: 'info'; info: DeviceInfo }
-  | { kind: 'ok'; text: string; args: string[] }
+  | { kind: 'ok'; text: string; args: string[]; ack: OkReply | null }
   | { kind: 'err'; text: string; args: string[] }
   | { kind: 'evt'; name: string; args: string[]; text: string }
   | { kind: 'unknown'; text: string };
@@ -581,7 +581,8 @@ export function parseLine(line: string): ParsedLine {
   const parts = text.split(/\s+/);
   const head = parts[0].toUpperCase();
   if (head === 'OK') {
-    return { kind: 'ok', text, args: parts.slice(1) };
+    const args = parts.slice(1);
+    return { kind: 'ok', text, args, ack: parseOkReply(args) };
   }
   if (head === 'ERR') {
     return { kind: 'err', text, args: parts.slice(1) };
@@ -590,6 +591,59 @@ export function parseLine(line: string): ParsedLine {
     return { kind: 'evt', name: (parts[1] || '').toUpperCase(), args: parts.slice(2), text };
   }
   return { kind: 'unknown', text };
+}
+
+/**
+ * Success replies, verbatim per PROTOCOL §10.5 (v0; the same text on H11 1.0.4
+ * for LRA / FREQ / ESTOP / STOP / RATE):
+ *   `OK LRA <A> <B>` (both groups' current values) · `OK VHZ <hz>` · `OK FREQ <f>`
+ *   `OK LPULSE t v on off` (§7.7) · `OK ESTOP n` · `OK STOP` · `OK RATE n`
+ * Anything else after `OK` (PONG, VCM, AUTO, TEST, …) is `other`. A known verb
+ * with the wrong arity / non-numeric values yields null (malformed ack).
+ */
+export type OkReply =
+  | { cmd: 'LRA'; a: number; b: number }
+  | { cmd: 'VHZ'; hz: number }
+  | { cmd: 'FREQ'; f: number }
+  | { cmd: 'LPULSE'; target: string; v: number; onMs: number; offMs: number }
+  | { cmd: 'ESTOP'; on: boolean }
+  | { cmd: 'STOP' }
+  | { cmd: 'RATE'; n: number }
+  | { cmd: 'other'; verb: string; args: string[] };
+
+const intTok = (t: string | undefined): number | null =>
+  t !== undefined && /^\d+$/.test(t) ? parseInt(t, 10) : null;
+
+/** Parse the words after `OK` (see OkReply). */
+export function parseOkReply(args: string[]): OkReply | null {
+  const verb = (args[0] || '').toUpperCase();
+  const rest = args.slice(1);
+  const ints = rest.map(intTok);
+  const allInts = (n: number) => rest.length === n && ints.every(v => v !== null);
+  switch (verb) {
+    case 'LRA':
+      return allInts(2) ? { cmd: 'LRA', a: ints[0] as number, b: ints[1] as number } : null;
+    case 'VHZ':
+      return allInts(1) ? { cmd: 'VHZ', hz: ints[0] as number } : null;
+    case 'FREQ':
+      return allInts(1) ? { cmd: 'FREQ', f: ints[0] as number } : null;
+    case 'LPULSE': {
+      const [v, on, off] = [ints[1], ints[2], ints[3]];
+      return rest.length === 4 && v !== null && on !== null && off !== null
+        ? { cmd: 'LPULSE', target: rest[0].toUpperCase(), v, onMs: on, offMs: off }
+        : null;
+    }
+    case 'ESTOP':
+      return rest.length === 1 && (rest[0] === '0' || rest[0] === '1')
+        ? { cmd: 'ESTOP', on: rest[0] === '1' }
+        : null;
+    case 'STOP':
+      return rest.length === 0 ? { cmd: 'STOP' } : null;
+    case 'RATE':
+      return allInts(1) ? { cmd: 'RATE', n: ints[0] as number } : null;
+    default:
+      return { cmd: 'other', verb, args: rest };
+  }
 }
 
 /** Firmware safety rejections (§7.5), in firmware priority order. */

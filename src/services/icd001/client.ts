@@ -8,6 +8,7 @@ import {
   ICD001_DEFAULT_TLM_HZ,
   LineAssembler,
   LraTarget,
+  OkReply,
   Telemetry,
   SafetyErr,
   encodeCommand,
@@ -48,13 +49,17 @@ export interface Icd001State {
   tlm: Telemetry | null;
   tlmAt: number | null;
   estop: boolean;
-  /** Who engaged the E-stop: this app (ESTOP 1) or the device START key / unknown. */
-  estopSource: 'app' | 'device' | null;
+  /**
+   * Who engaged the E-stop: this app (`OK ESTOP 1`), the device START key
+   * (`EVT ESTOP 1` received on this connection), or 'unknown' (seen only in
+   * TLM, e.g. a latch that survived a disconnect, §10.1, not set by this app).
+   */
+  estopSource: EstopSource | null;
   /**
    * Last E-stop transition, incl. who caused it. `{on:false, source:'device'}` =
    * released with the START key on the device (§8.3), no ESTOP 0 from the app.
    */
-  estopChange: { on: boolean; source: 'app' | 'device'; at: number } | null;
+  estopChange: { on: boolean; source: EstopSource; at: number } | null;
   overTemp: boolean;
   lowBattery: boolean;
   /** Actuator controls must be disabled when true (see lockReasons). */
@@ -64,11 +69,15 @@ export interface Icd001State {
   /** Last firmware safety rejection (ERR ESTOP / OVERTEMP / LOWBAT). */
   lastSafetyErr: { reason: SafetyErr; at: number } | null;
   lastReply: string | null;
+  /** Last parsed success reply (§10.5), e.g. `{cmd:'LRA', a:40, b:0}` for `OK LRA 40 0`. */
+  lastAck: (OkReply & { at: number }) | null;
   reconnectAttempt: number;
   error: string | null;
   /** Last ~40 raw lines in/out, for the debug screen. */
   log: string[];
 }
+
+export type EstopSource = 'app' | 'device' | 'unknown';
 
 export interface Icd001ClientOptions {
   tlmHz?: number;
@@ -112,13 +121,25 @@ export class Icd001Client {
    */
   private onConnectAction: 'estop' | 'stop' | null = null;
   /**
+   * Device id whose E-stop this app engaged (`OK ESTOP 1`), kept across
+   * disconnects: the firmware keeps the latch over a BLE drop (§10.1), so the
+   * first `estop:1` frame after reconnect is still shown as the app's stop.
+   * Cleared when the latch is seen released (OK/EVT ESTOP 0, TLM estop 0).
+   */
+  private appEstopDevice: string | null = null;
+  /**
    * Single place E-stop state changes. The message type tells who caused it
    * (PROTOCOL §9, hardware-confirmed; no time windows):
    *  - `OK ESTOP n`  only ever answers the app's own `ESTOP n`   -> 'app'
    *  - `EVT ESTOP n` is sent only when the device START key is pressed
    *                  (never as an echo of `ESTOP n`)              -> 'device'
-   *  - TLM `estop`   carries no origin: an already-engaged stop keeps its source;
-   *                  a change seen only in TLM (reply/EVT lost)   -> 'device'
+   *  - TLM `estop`   carries no origin: an already-engaged stop keeps its source.
+   *                  Engaged seen only in TLM (latch kept over a disconnect,
+   *                  §10.1, or reply/EVT lost) -> 'app' if this app engaged it on
+   *                  this device before the drop, else 'unknown'; never 'device'
+   *                  without an `EVT ESTOP` on this connection (audit F2).
+   *                  Released seen only in TLM while connected -> 'device'
+   *                  (only the START key can do that, §8.3).
    * An extra STOP while latched is harmless (`OK STOP`, latch unchanged).
    */
   private applyEstop(
@@ -127,14 +148,26 @@ export class Icd001Client {
     patch: Partial<Icd001State> = {},
   ): Partial<Icd001State> {
     const changed = on !== this.state.estop;
-    const source: 'app' | 'device' =
-      via === 'ok'
-        ? 'app'
-        : via === 'evt'
-        ? 'device'
-        : changed
-        ? 'device'
-        : this.state.estopSource ?? 'device';
+    const devId = this.state.device?.id ?? null;
+    let source: EstopSource;
+    if (via === 'ok') {
+      source = 'app';
+    } else if (via === 'evt') {
+      source = 'device';
+    } else if (!changed) {
+      source = this.state.estopSource ?? 'unknown';
+    } else if (on) {
+      source = devId !== null && this.appEstopDevice === devId ? 'app' : 'unknown';
+    } else {
+      source = 'device';
+    }
+    if (!on) {
+      this.appEstopDevice = null;
+    } else if (source === 'app') {
+      this.appEstopDevice = devId;
+    } else if (changed) {
+      this.appEstopDevice = null;
+    }
     patch.estop = on;
     patch.estopSource = on ? source : null;
     if (changed) {
@@ -169,6 +202,7 @@ export class Icd001Client {
       lastErr: null,
       lastSafetyErr: null,
       lastReply: null,
+      lastAck: null,
       reconnectAttempt: 0,
       error: null,
       log: [],
@@ -470,19 +504,23 @@ export class Icd001Client {
         this.infoWaiters.splice(0).forEach(w => w(p.info));
         this.pushLog(`< ${line}`);
         return;
-      case 'ok':
-        if (p.args[0]?.toUpperCase() === 'ESTOP') {
+      case 'ok': {
+        const ack = p.ack;
+        if (ack?.cmd === 'ESTOP') {
           // direct reply to our ESTOP n (the only ESTOP acknowledgement, §9)
-          this.set(this.applyEstop(p.args[1] === '1', 'ok'));
+          this.set(this.applyEstop(ack.on, 'ok'));
         }
-        this.set({ lastReply: line });
-        this.pushLog(`< ${line}`);
+        this.set({ lastReply: line, lastAck: ack ? { ...ack, at: Date.now() } : this.state.lastAck });
+        this.pushLog(ack ? `< ${line}` : `< ${line}   # malformed OK (§10.5)`);
         return;
+      }
       case 'err': {
         // Firmware did not store the value; UI reverts sliders to tlm.lra /
         // tlm.vcm. Safety rejections map straight onto lock reasons (§7.5).
         const se = safetyErrOf(p);
         const now = Date.now();
+        // value not stored: the same value must be sendable again (dedupe reset)
+        this.scheduler.forget();
         const patch: Partial<Icd001State> = { lastErr: { text: line, at: now }, lastReply: line };
         if (se) {
           patch.lastSafetyErr = { reason: se, at: now };
@@ -503,6 +541,8 @@ export class Icd001Client {
       }
       case 'evt':
         this.pushLog(`< ${line}`);
+        // device changed outputs on its own (START key, latch): resend on next input
+        this.scheduler.forget();
         if (p.name === 'ESTOP') {
           // START key only (§9: never an echo of our ESTOP n): authoritative, device-originated
           this.set(this.applyEstop(p.args[0] === '1', 'evt'));
@@ -579,8 +619,12 @@ export class Icd001Client {
       // An ALL supersedes pending single-group values.
       this.scheduler.drop('wing:A');
       this.scheduler.drop('wing:B');
+      this.scheduler.forget('wing:A', 'wing:B');
+    } else {
+      this.scheduler.forget('wing:ALL');
     }
-    this.scheduler.enqueue(`wing:${target}`, line);
+    // dedupe: a slider release repeating the last streamed value is not resent (audit F10)
+    this.scheduler.enqueue(`wing:${target}`, line, true);
   }
 
   /** Shared LRA drive frequency (engineering only per protocol). */
@@ -602,7 +646,7 @@ export class Icd001Client {
     if (!caps || !this.canActuate(hz)) {
       return false;
     }
-    this.scheduler.enqueue('vcm', formatVcmHz(hz, caps));
+    this.scheduler.enqueue('vcm', formatVcmHz(hz, caps), true);
     return true;
   }
 

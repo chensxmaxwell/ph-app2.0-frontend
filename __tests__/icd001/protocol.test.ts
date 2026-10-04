@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 
 import {
+  parseOkReply,
   ICD001_MIN_WRITE_BYTES,
   acceptScanResult,
   encodeCommand,
@@ -313,7 +314,12 @@ describe('parseLine', () => {
     expect(parseLine(V0_TLM).kind).toBe('tlm');
     expect(parseLine(LEGACY_INFO).kind).toBe('info');
     expect(parseLine(V0_INFO).kind).toBe('info');
-    expect(parseLine('OK LRA 40 0')).toEqual({ kind: 'ok', text: 'OK LRA 40 0', args: ['LRA', '40', '0'] });
+    expect(parseLine('OK LRA 40 0')).toEqual({
+      kind: 'ok',
+      text: 'OK LRA 40 0',
+      args: ['LRA', '40', '0'],
+      ack: { cmd: 'LRA', a: 40, b: 0 },
+    });
     expect(parseLine('ERR ESTOP')).toMatchObject({ kind: 'err', args: ['ESTOP'] });
     expect(parseLine('EVT OVERTEMP 1')).toMatchObject({ kind: 'evt', name: 'OVERTEMP', args: ['1'] });
     expect(parseLine('EVT LOWBAT 0')).toMatchObject({ kind: 'evt', name: 'LOWBAT', args: ['0'] });
@@ -426,5 +432,44 @@ describe('voice coil Hz mapping / clamp', () => {
     }
     expect(halfMsToHz(50)).toBe(10);
     expect(halfMsToHz(167)).toBe(3);
+  });
+});
+
+describe('OK replies, verbatim per §10.5', () => {
+  const ok = (l: string) => {
+    const p = parseLine(l);
+    return p.kind === 'ok' ? p.ack : 'not-ok';
+  };
+  it('parses the locked success replies', () => {
+    expect(ok('OK LRA 40 25')).toEqual({ cmd: 'LRA', a: 40, b: 25 });
+    expect(ok('OK LRA 0 0')).toEqual({ cmd: 'LRA', a: 0, b: 0 });
+    expect(ok('OK VHZ 18')).toEqual({ cmd: 'VHZ', hz: 18 });
+    expect(ok('OK VHZ 0')).toEqual({ cmd: 'VHZ', hz: 0 });
+    expect(ok('OK FREQ 170')).toEqual({ cmd: 'FREQ', f: 170 });
+    expect(ok('OK LPULSE 0 30 400 400')).toEqual({
+      cmd: 'LPULSE',
+      target: '0',
+      v: 30,
+      onMs: 400,
+      offMs: 400,
+    });
+    expect(ok('OK ESTOP 1')).toEqual({ cmd: 'ESTOP', on: true });
+    expect(ok('OK ESTOP 0')).toEqual({ cmd: 'ESTOP', on: false });
+    expect(ok('OK STOP')).toEqual({ cmd: 'STOP' });
+    expect(ok('OK RATE 10')).toEqual({ cmd: 'RATE', n: 10 });
+    expect(ok('OK PONG')).toEqual({ cmd: 'other', verb: 'PONG', args: [] });
+    expect(ok('OK VCM 1 50')).toEqual({ cmd: 'other', verb: 'VCM', args: ['1', '50'] });
+  });
+  it('wrong arity or non-numeric values are malformed (null), never guessed', () => {
+    expect(ok('OK LRA 40')).toBeNull(); // must carry both groups
+    expect(ok('OK LRA 40 25 10')).toBeNull();
+    expect(ok('OK LRA A 40')).toBeNull(); // echo of the command, not the §10.5 form
+    expect(ok('OK VHZ')).toBeNull();
+    expect(ok('OK VHZ 18Hz')).toBeNull();
+    expect(ok('OK FREQ 170 Hz')).toBeNull();
+    expect(ok('OK ESTOP')).toBeNull();
+    expect(ok('OK ESTOP 2')).toBeNull();
+    expect(ok('OK STOP 1')).toBeNull();
+    expect(parseOkReply(['RATE', '-1'])).toBeNull();
   });
 });

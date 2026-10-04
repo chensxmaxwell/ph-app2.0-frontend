@@ -461,7 +461,8 @@ describe('Icd001Client + simulator', () => {
     await connect(client, id, dev.name);
     dev.estop = true; // firmware latched, EVT missed
     await tick(300);
-    expect(client.getState()).toMatchObject({ estop: true, estopSource: 'device' });
+    // no EVT ESTOP on this connection -> not attributed to the device button (audit F2)
+    expect(client.getState()).toMatchObject({ estop: true, estopSource: 'unknown' });
     dev.estop = false;
     await tick(300);
     expect(client.getState().estop).toBe(false);
@@ -515,6 +516,111 @@ describe('Icd001Client + simulator', () => {
     expect(dev.commandLog).not.toContain('ESTOP 1');
     const i = dev.commandLog.findIndex(c => c.startsWith('RATE'));
     expect(dev.commandLog[i + 1]).toBe('STOP');
+    client.destroy();
+  });
+  it('§10.5: mock and client agree on the verbatim OK replies (OK LRA <A> <B>, OK VHZ <hz>, OK FREQ <f>)', async () => {
+    const { dev, client, id } = setup('icd1', 185);
+    await connect(client, id, dev.name);
+    const replies: string[] = [client.getState().lastReply ?? ''];
+    const unsub = client.subscribe(s => {
+      if (s.lastReply && replies[replies.length - 1] !== s.lastReply) {
+        replies.push(s.lastReply);
+      }
+    });
+    client.setLra('A', 40);
+    await tick(200);
+    expect(client.getState().lastAck).toMatchObject({ cmd: 'LRA', a: 40, b: 0 });
+    client.setLra('B', 25);
+    await tick(200);
+    expect(client.getState().lastAck).toMatchObject({ cmd: 'LRA', a: 40, b: 25 }); // both groups' current values
+    client.setVcmHz(18);
+    await tick(200);
+    expect(client.getState().lastAck).toMatchObject({ cmd: 'VHZ', hz: 18 });
+    client.setVcmHz(0);
+    await tick(200);
+    expect(client.getState().lastAck).toMatchObject({ cmd: 'VHZ', hz: 0 });
+    client.setFreq(170);
+    await tick(200);
+    expect(client.getState().lastAck).toMatchObject({ cmd: 'FREQ', f: 170 });
+    unsub();
+    expect(replies.slice(1)).toEqual(['OK LRA 40 0', 'OK LRA 40 25', 'OK VHZ 18', 'OK VHZ 0', 'OK FREQ 170']);
+    // a malformed OK keeps the previous ack and is flagged in the log
+    client.onLine('OK LRA 40');
+    expect(client.getState().lastAck).toMatchObject({ cmd: 'FREQ', f: 170 });
+    expect(client.getState().log[client.getState().log.length - 1]).toContain('malformed OK');
+    client.destroy();
+  });
+
+  it('§10.4: telemetry wing frequency is `f`; `lra_f` is not read', () => {
+    const { client } = setup('icd1');
+    client.onLine('{"t":1,"lra":[0,0],"vhz":0,"f":170}');
+    expect(client.getState().tlm?.lraFreqHz).toBe(170);
+    client.onLine('{"t":2,"lra":[0,0],"vhz":0,"lra_f":200}');
+    expect(client.getState().tlm?.lraFreqHz).toBeNull();
+    client.destroy();
+  });
+
+  it('§10.3: ESTOP 1 is never blocked by the client (over-temp + low battery + already latched)', async () => {
+    const { dev, client, id } = setup('icd1', 185);
+    dev.ntcOverride = 43;
+    dev.vbatOverride = 3.3;
+    await connect(client, id, dev.name);
+    await tick(1500);
+    expect(client.getState()).toMatchObject({ overTemp: true, lowBattery: true, locked: true });
+    expect(client.setLra('A', 30)).toBe(false); // actuators refused while locked
+    dev.commandLog.length = 0;
+    await client.setEstop(true);
+    await tick(100);
+    await client.setEstop(true); // already latched: sent again, never deduped
+    await tick(100);
+    expect(dev.commandLog).toEqual(['ESTOP 1', 'ESTOP 1']);
+    expect(client.getState()).toMatchObject({ estop: true, estopSource: 'app' });
+    expect(client.getState().lastAck).toMatchObject({ cmd: 'ESTOP', on: true });
+    client.destroy();
+  });
+
+  it('F2 / §10.1: latch kept over a reconnect: app stop -> app; START-key stop -> unknown (no EVT this link)', async () => {
+    const { dev, transport, client, id } = setup('icd1', 185);
+    await connect(client, id, dev.name);
+    await client.setEstop(true);
+    await tick(200);
+    transport.simulateLinkLoss(id);
+    await tick(600);
+    expect(client.getState()).toMatchObject({ status: 'connected', estop: true, estopSource: 'app' });
+    // START key twice: release + engage via EVT on this link -> device
+    transport.pressStartKey(id);
+    await tick(100);
+    transport.pressStartKey(id);
+    await tick(100);
+    expect(client.getState()).toMatchObject({ estop: true, estopSource: 'device' });
+    transport.simulateLinkLoss(id);
+    await tick(600);
+    expect(client.getState()).toMatchObject({ status: 'connected', estop: true, estopSource: 'unknown' });
+    expect(client.getState().estopChange).toMatchObject({ on: true, source: 'unknown' });
+    client.destroy();
+  });
+
+  it('dedupe: a rejected (ERR) value can be sent again right away; ALL then a group resends the group', async () => {
+    const { dev, client, id } = setup('icd1', 185);
+    await connect(client, id, dev.name);
+    dev.commandLog.length = 0;
+    client.setLra('A', 40);
+    await tick(200);
+    client.onLine('ERR ARG LRA'); // value not stored
+    client.setLra('A', 40);
+    await tick(200);
+    client.setLra('ALL', 0);
+    await tick(200);
+    client.setLra('A', 40);
+    await tick(200);
+    client.setLra('A', 40); // duplicate
+    await tick(200);
+    expect(dev.commandLog.filter(c => c.startsWith('LRA'))).toEqual([
+      'LRA 0 40',
+      'LRA 0 40',
+      'LRA BOTH 0',
+      'LRA 0 40',
+    ]);
     client.destroy();
   });
 });

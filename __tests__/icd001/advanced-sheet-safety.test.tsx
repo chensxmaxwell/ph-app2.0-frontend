@@ -10,6 +10,9 @@ import { StyleSheet, Text } from 'react-native';
 import renderer, { act, ReactTestInstance } from 'react-test-renderer';
 
 jest.mock('react-native-ble-manager', () => ({}));
+jest.mock('@react-native-async-storage/async-storage', () =>
+  jest.requireActual('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
 jest.mock('@react-navigation/native', () => ({
   useFocusEffect: () => undefined,
   useRoute: () => ({ name: 'AdvancedControl', params: undefined }),

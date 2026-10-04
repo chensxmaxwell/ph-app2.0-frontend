@@ -99,4 +99,69 @@ describe('CommandScheduler', () => {
     expect(errs).toEqual(['LRA 0 1']);
     expect(sent.map(s => s.line)).toEqual(['LRA 1 2']);
   });
+  it('dedupe keys: an identical line already written is not re-sent; a different one is (audit F10)', async () => {
+    sched.enqueue('wing:B', 'LRA 1 20', true);
+    await flush(150);
+    sched.enqueue('wing:B', 'LRA 1 30', true);
+    await flush(150);
+    sched.enqueue('wing:B', 'LRA 1 30', true); // slider release repeats the last value
+    await flush(300);
+    expect(sent.map(x => x.line)).toEqual(['LRA 1 20', 'LRA 1 30']);
+    // a pending value superseded by "back to what was just written" is dropped too
+    sched.enqueue('wing:B', 'LRA 1 40', true);
+    await flush(5); // written; key now inside its 100 ms window
+    sched.enqueue('wing:B', 'LRA 1 45', true); // pending
+    sched.enqueue('wing:B', 'LRA 1 40', true); // back to 40 -> pending 45 dropped
+    await flush(300);
+    expect(sent.map(x => x.line)).toEqual(['LRA 1 20', 'LRA 1 30', 'LRA 1 40']);
+    // keys without dedupe keep the old behaviour
+    sched.enqueue('get', 'GET');
+    await flush(150);
+    sched.enqueue('get', 'GET');
+    await flush(150);
+    expect(sent.filter(x => x.line === 'GET')).toHaveLength(2);
+  });
+
+  it('dedupe is reset by sendNow (STOP/ESTOP), clear, forget, a failed write and after the window', async () => {
+    const again = async (reset: () => void | Promise<void>) => {
+      sched.enqueue('vcm', 'VHZ 24', true);
+      await flush(150);
+      await reset();
+      const n = sent.length;
+      sched.enqueue('vcm', 'VHZ 24', true);
+      await flush(150);
+      return sent.slice(n).map(x => x.line);
+    };
+    expect(await again(() => sched.sendNow('STOP'))).toEqual(['VHZ 24']);
+    expect(await again(() => sched.clear())).toEqual(['VHZ 24']);
+    expect(await again(() => sched.forget('vcm'))).toEqual(['VHZ 24']);
+    expect(await again(() => sched.forget())).toEqual(['VHZ 24']);
+    expect(await again(() => flush(1100))).toEqual(['VHZ 24']);
+    expect(await again(() => undefined)).toEqual([]);
+    // safety lines are never deduped or throttled
+    const n = sent.length;
+    await sched.sendNow('ESTOP 1');
+    await sched.sendNow('ESTOP 1');
+    expect(sent.slice(n).map(x => [x.line, x.urgent])).toEqual([
+      ['ESTOP 1', true],
+      ['ESTOP 1', true],
+    ]);
+  });
+
+  it('a failed write is not remembered for dedupe', async () => {
+    let fail = true;
+    const lines: string[] = [];
+    const s2 = new CommandScheduler(async line => {
+      lines.push(line);
+      if (fail) {
+        fail = false;
+        throw new Error('ble');
+      }
+    });
+    s2.enqueue('wing:A', 'LRA 0 40', true);
+    await flush(150);
+    s2.enqueue('wing:A', 'LRA 0 40', true);
+    await flush(150);
+    expect(lines).toEqual(['LRA 0 40', 'LRA 0 40']);
+  });
 });

@@ -202,8 +202,15 @@ export function bannerFor(
         tone: 'neutral',
         icon: 'lock',
         title: 'Everything is stopped',
+        // 'device' only after an EVT ESTOP on this connection; a latch seen only
+        // in TLM (kept over a disconnect, §10.1) and not set by this app is
+        // 'unknown': neutral wording, no device-button attribution (audit F2).
         lines: [
-          estopSource === 'device' ? 'Stopped with the button on the device.' : 'All outputs are off.',
+          estopSource === 'device'
+            ? 'Stopped with the button on the device.'
+            : estopSource === 'unknown'
+            ? 'Stop all is still on.'
+            : 'All outputs are off.',
           estopSource === 'device'
             ? 'Tap Unlock or press that button again.'
             : 'Tap Unlock when you are ready.',

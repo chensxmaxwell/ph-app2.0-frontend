@@ -223,7 +223,7 @@ export class MockIcd001Device {
           return ['ERR FREQ 100-300'];
         }
         this.freq = v1;
-        return [`OK FREQ ${v1}`];
+        return [`OK FREQ ${this.freq}`]; // §10.5: OK FREQ <f>
       case 'LRA': {
         if (Number.isNaN(v2) || v2 < 0 || v2 > 100) {
           return ['ERR LRA <0|1|B> <0-100>'];
@@ -237,7 +237,7 @@ export class MockIcd001Device {
           this.lra[i] = v2;
           this.lp[i] = [0, 0]; // LRA cancels rhythm on that group
         });
-        return [`OK LRA ${this.lra[0]} ${this.lra[1]}`];
+        return [`OK LRA ${this.lra[0]} ${this.lra[1]}`]; // §10.5: both groups' current values
       }
       case 'LPULSE': {
         const on = n(3);
@@ -275,7 +275,7 @@ export class MockIcd001Device {
         if (v1 !== 0) {
           this.vcmHz = v1;
         }
-        return [`OK VHZ ${this.vcmOn ? v1 : 0}`];
+        return [`OK VHZ ${this.vcmOn ? this.vcmHz : 0}`]; // §10.5: OK VHZ <hz>
       }
       default:
         return [`ERR UNKNOWN ${op}`];

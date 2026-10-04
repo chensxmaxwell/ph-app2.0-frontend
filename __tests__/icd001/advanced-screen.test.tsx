@@ -10,6 +10,9 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 
 jest.mock('react-native-ble-manager', () => ({}));
+jest.mock('@react-native-async-storage/async-storage', () =>
+  jest.requireActual('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
 jest.mock('@react-navigation/native', () => ({
   useFocusEffect: () => undefined,
   useRoute: () => ({ name: 'AdvancedControl', params: undefined }),
@@ -265,6 +268,7 @@ describe('AdvancedControlScreen v4 on the mock', () => {
     expect(t).toContain('Unlock');
 
     const sent: string[] = [];
+    dev.commandLog.length = 0;
     const unsub = client.subscribe(s => {
       const last = s.log[s.log.length - 1];
       if (last) {
@@ -277,6 +281,8 @@ describe('AdvancedControlScreen v4 on the mock', () => {
       await jest.advanceTimersByTimeAsync(50);
     });
     unsub();
-    expect(sent.some(l => l.includes('STOP'))).toBe(true);
+    // one STOP for leaving (blur/unmount de-duplicated, audit F10)
+    expect(sent.filter(l => l.startsWith('# auto STOP'))).toEqual(['# auto STOP (leave advanced control)']);
+    expect(dev.commandLog.filter((c: string) => c === 'STOP')).toEqual(['STOP']);
   });
 });

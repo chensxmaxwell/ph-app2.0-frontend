@@ -7,6 +7,7 @@ import {
   SensorView,
   STAGE_TINT,
 } from '../../src/screens/advanced-control/controller';
+import { createPulseSpeedStore, resetPulseSpeedCache } from '../../src/screens/advanced-control/pulseMemory';
 import { Icd001Client } from '../../src/services/icd001/client';
 import { MockIcd001Device, MockIcd001Transport } from '../../src/services/icd001/mock';
 
@@ -44,6 +45,7 @@ async function setup(variant: 'icd1' | 'h11' = 'icd1', pre?: (dev: MockIcd001Dev
 describe('AdvancedControlController (view-model) on the simulator', () => {
   beforeEach(() => {
     jest.useFakeTimers({ now: 9_000_000 });
+    resetPulseSpeedCache();
   });
   afterEach(() => {
     jest.useRealTimers();
@@ -109,15 +111,34 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.done();
   });
 
-  it('rhythm mode sends LPULSE', async () => {
+  it('F1 regression: telemetry lp != 0 never switches wing sliders to LPULSE (always LRA, §10.8)', async () => {
     const t = await setup();
-    t.ctl.setWingValue('A', 50);
+    // device left in rhythm (e.g. by the debug page / another app): TLM reports lp
+    t.dev.lra = [50, 20];
+    t.dev.lp = [
+      [400, 400],
+      [150, 150],
+    ];
+    await tick(1500);
+    expect(t.v().cards.length).toBeGreaterThan(0);
+    expect('setWingRhythm' in t.ctl).toBe(false);
+    expect('setWingMode' in t.ctl).toBe(false);
+    t.dev.commandLog.length = 0;
+    t.ctl.setWingValue('A', 30);
     await tick(300);
-    t.ctl.setWingRhythm('fast');
+    t.ctl.setWingValue('B', 60);
     await tick(300);
-    expect(t.dev.commandLog).toContain('LPULSE 0 50 150 150');
-    await tick(1000); // telemetry now reports lp -> summary follows the device
-    expect(t.wing().summary).toBe('A 50 · B 0 · Rhythm');
+    t.ctl.setWingOn(false);
+    await tick(300);
+    t.ctl.setWingOn(true);
+    await tick(300);
+    expect(t.dev.commandLog.filter(c => c.startsWith('LPULSE'))).toEqual([]);
+    expect(t.dev.commandLog).toEqual(['LRA 0 30', 'LRA 1 60', 'LRA BOTH 0', 'LRA 0 30', 'LRA 1 60']);
+    // LRA cancels the rhythm on the device (firmware rule, §7.7)
+    expect(t.dev.snapshot().lp).toEqual([
+      [0, 0],
+      [0, 0],
+    ]);
     t.done();
   });
 
@@ -493,6 +514,156 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     expect(t.v().toast).toBe("Couldn't change Wings. Showing the device's current setting.");
     await tick(3100);
     expect(t.v().toast).toBeNull();
+    t.done();
+  });
+
+  it('F2: latch kept over a disconnect, set by the START key last link -> neutral copy, not the device button', async () => {
+    const t = await setup();
+    t.transport.pressStartKey(t.id); // EVT ESTOP 1 on this connection -> device
+    await tick(200);
+    expect(t.v().estop).toMatchObject({ on: true, source: 'device' });
+    t.transport.simulateLinkLoss(t.id); // §10.1: firmware keeps estop over the drop
+    await tick(800); // auto-reconnect; first TLM says estop:1, no EVT on this link
+    expect(t.client.getState().status).toBe('connected');
+    expect(t.v().screen.kind).toBe('estop');
+    expect(t.v().estop).toMatchObject({ on: true, source: 'unknown' });
+    expect(t.v().banner?.lines.slice(0, 2)).toEqual([
+      'Stop all is still on.',
+      'Tap Unlock when you are ready.',
+    ]);
+    expect(t.v().banner?.lines.join(' ')).not.toContain('button on the device');
+    // an EVT ESTOP on this connection is attributed to the device again
+    t.transport.pressStartKey(t.id); // release
+    await tick(200);
+    t.transport.pressStartKey(t.id); // engage
+    await tick(200);
+    expect(t.v().banner?.lines[0]).toBe('Stopped with the button on the device.');
+    t.done();
+  });
+
+  it('F2: app Stop all kept over a disconnect comes back as the app stop (§10.1)', async () => {
+    const t = await setup();
+    t.ctl.stopAll();
+    await tick(300);
+    expect(t.v().estop).toMatchObject({ on: true, source: 'app' });
+    t.transport.simulateLinkLoss(t.id);
+    await tick(800);
+    expect(t.client.getState().status).toBe('connected');
+    expect(t.dev.commandLog.filter(c => c === 'ESTOP 1')).toEqual(['ESTOP 1']); // nothing re-sent
+    expect(t.v().estop).toMatchObject({ on: true, source: 'app' });
+    expect(t.v().banner?.lines[0]).toBe('All outputs are off.');
+    t.done();
+  });
+
+  it('§10.3: Stop all sends ESTOP 1 during over-temp + low battery and gets OK ESTOP 1', async () => {
+    const t = await setup('icd1', dev => {
+      dev.ntcOverride = 42.5;
+      dev.vbatOverride = 3.3;
+    });
+    await tick(1500);
+    expect(t.v().screen).toMatchObject({ kind: 'overtemp', controlsEnabled: false });
+    t.dev.commandLog.length = 0;
+    t.ctl.stopAll();
+    await tick(300);
+    expect(t.dev.commandLog).toEqual(['ESTOP 1']);
+    expect(t.client.getState().lastAck).toMatchObject({ cmd: 'ESTOP', on: true });
+    expect(t.v().screen.kind).toBe('estop');
+    t.done();
+  });
+
+  it('F10: a slider release repeating the last streamed value is not re-sent; a new value is', async () => {
+    const t = await setup();
+    t.dev.commandLog.length = 0;
+    // drag 1 -> 30 then release at 30 (ValueSlider calls onChange per step, onRelease(last))
+    for (const v of [1, 10, 20, 30]) {
+      t.ctl.setWingValue('B', v);
+      await tick(120);
+    }
+    t.ctl.setWingValue('B', 30); // onRelease
+    await tick(300);
+    expect(t.dev.commandLog).toEqual(['LRA 1 1', 'LRA 1 10', 'LRA 1 20', 'LRA 1 30']);
+    // after a STOP the same value must go out again (dedupe reset by safety paths)
+    t.ctl.stopAll();
+    await tick(200);
+    t.ctl.release();
+    await tick(1200);
+    t.dev.commandLog.length = 0;
+    t.ctl.setWingValue('B', 30);
+    await tick(300);
+    expect(t.dev.commandLog).toEqual(['LRA 1 30']);
+    // pulse speed: same rule
+    t.ctl.setPulseOn(true);
+    await tick(200);
+    t.ctl.setPulseHz(24);
+    await tick(200);
+    t.ctl.setPulseHz(24);
+    await tick(300);
+    expect(t.dev.commandLog.filter(c => c.startsWith('VHZ'))).toEqual(['VHZ 10', 'VHZ 24']);
+    t.done();
+  });
+
+  it('F10: leaving sends STOP once per visit (blur + unmount), re-armed by focus', async () => {
+    const t = await setup();
+    t.ctl.setWingValue('A', 40);
+    await tick(300);
+    t.dev.commandLog.length = 0;
+    t.ctl.leave(); // blur
+    t.ctl.leave(); // unmount
+    await tick(100);
+    expect(t.dev.commandLog.filter(c => c === 'STOP')).toEqual(['STOP']);
+    t.ctl.enter(); // focus again
+    t.ctl.setWingValue('A', 40);
+    await tick(300);
+    t.ctl.leave();
+    await tick(100);
+    expect(t.dev.commandLog.filter(c => c === 'STOP')).toEqual(['STOP', 'STOP']);
+    t.done();
+  });
+
+  it('F4 / §10.7: last Pulse speed is remembered per device across leaving and re-entering the page', async () => {
+    const t = await setup();
+    t.ctl.setPulseOn(true);
+    t.ctl.setPulseHz(36);
+    await tick(300);
+    t.ctl.setPulseOn(false); // VHZ 0: firmware forgets the Hz
+    await tick(300);
+    t.ctl.leave();
+    t.ctl.dispose();
+    // re-enter: a new controller on the same client
+    const ctl2 = new AdvancedControlController(t.client);
+    ctl2.start();
+    const pulse2 = () => ctl2.getView().cards.find(c => c.kind === 'rhythm') as RhythmView;
+    expect(pulse2()).toMatchObject({ on: false, hz: 36 });
+    t.dev.commandLog.length = 0;
+    ctl2.setPulseOn(true);
+    await tick(300);
+    expect(t.dev.commandLog).toContain('VHZ 36');
+    ctl2.dispose();
+    t.done();
+  });
+
+  it('F4: Pulse speed persists through key-value storage (app restart) and is keyed per device', async () => {
+    const mem = new Map<string, string>();
+    const storage = {
+      getItem: async (k: string) => mem.get(k) ?? null,
+      setItem: async (k: string, v: string) => {
+        mem.set(k, v);
+      },
+    };
+    const store = createPulseSpeedStore(storage);
+    store.set('ICD1-TEST', 42);
+    store.flush();
+    await tick(10);
+    expect(mem.get('icd001.pulseHz.ICD1-TEST')).toBe('42');
+    resetPulseSpeedCache(); // "app restart": cache gone, storage kept
+    const t = await setup();
+    const ctl2 = new AdvancedControlController(t.client, Date.now, store);
+    ctl2.start();
+    await tick(50);
+    const pulse2 = () => ctl2.getView().cards.find(c => c.kind === 'rhythm') as RhythmView;
+    expect(pulse2()).toMatchObject({ on: false, hz: 42 });
+    expect(await store.load('ICD1-OTHER')).toBeNull();
+    ctl2.dispose();
     t.done();
   });
 
