@@ -57,7 +57,7 @@ export const AdvancedControlScreen = ({ initialOverlay }: { initialOverlay?: Rea
   const wings = (c: IntensityView) => {
     const off = !c.enabled;
     return (
-      <ModuleCard key="wing" blob={BLOB.wings} title={c.card.label} testID="card-wing">
+      <ModuleCard key="wing" blob={BLOB.wingsCard} title={c.card.label} testID="card-wing">
         <View style={off && styles.dim} testID="controls-wing" pointerEvents={off ? 'none' : 'auto'}>
           {c.card.groups.map((g, i) => (
             <ValueSlider
@@ -101,8 +101,10 @@ export const AdvancedControlScreen = ({ initialOverlay }: { initialOverlay?: Rea
    * One card for Pulse + Bullet (Maxwell 2026-10-04). Head: pulse blob +
    * "Pulse & Bullet". Then the Pulse block (label row with the on/off switch,
    * speed slider; dimmed together when outputs are blocked), then the Bullet
-   * row (blob 32 + "Bullet" label, read-out on the right). Same 13 pt label /
-   * right-aligned control rhythm as the slider rows; no dividers (STYLE-DIGEST).
+   * row: read-only (skin contact + heart rate, no control), blob 32 + "Bullet"
+   * label, read-out on the right, set apart from the Pulse controls by 16 pt of
+   * spacing inside the same card (no nested card, no divider: STYLE-DIGEST).
+   * Same 13 pt label / right-aligned control rhythm as the slider rows.
    * Either part is left out if the device does not report it.
    */
   const pulseBullet = (p: RhythmView | undefined, b: SensorView | undefined) => {

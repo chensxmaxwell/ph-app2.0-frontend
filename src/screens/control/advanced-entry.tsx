@@ -78,7 +78,7 @@ export const AdvancedEntry = ({ variant = ADVANCED_ENTRY_VARIANT }: { variant?: 
       onLongPress={debug}
       style={({ pressed }) => [styles.row, pressed && styles.pressed]}
     >
-      <Image source={BLOB.wings} style={styles.blob} />
+      <Image source={BLOB.wingsEntry} style={styles.blob} />
       <View style={styles.titles}>
         <Text style={styles.t}>Advanced control</Text>
         <Text style={styles.s}>Each part on its own</Text>

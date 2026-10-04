@@ -1,17 +1,20 @@
 /**
- * Design v4 soft-blob placeholders (design-v4/assets/blobs, generated in the
- * Control-tile style by tools/make_blobs.py; 360 px, shown at 44 / 60 pt).
- * The App designer may redraw them in the house file (spec §9.5).
+ * Design v4 artwork. Pulse / Bullet are soft-blob placeholders
+ * (design-v4/assets/blobs, Control-tile style; 360 px, shown at 44 / 32 pt).
+ *
+ * WING ICON SWAP POINT: the only references to the wings artwork. Design's
+ * redraw (design-v4/assets/icon-wings, 2026-10-04) ships one PNG set per size,
+ * named for RN scale selection (Metro picks @2x / @3x by screen density):
+ *   - wingsCard  -> assets/images/advanced-control/wings-card{,@2x,@3x}.png
+ *                   (= icon-wings@2x / @3x.png; 44 pt, Wings card head)
+ *   - wingsEntry -> assets/images/advanced-control/wings-entry{,@2x,@3x}.png
+ *                   (= icon-wings-entry@2x / @3x.png; 60 pt, Control-page entry row)
+ * The 1x files are LANCZOS downscales of @3x (44 / 60 px). The blurred
+ * icon-wings.svg is deliberately not used (RN has no SVG blur filters).
  */
 export const BLOB = {
-  /**
-   * WING ICON SWAP POINT (design is redrawing it): the only reference to the
-   * wings artwork. Used by the Wings card head (44 pt) and the Control-page
-   * entry row (60 pt). Replace assets/images/advanced-control/wings.png
-   * (square, transparent, >= 180 px; 360 px today) or point this require at
-   * the new file.
-   */
-  wings: require('@images/advanced-control/wings.png'),
+  wingsCard: require('@images/advanced-control/wings-card.png'),
+  wingsEntry: require('@images/advanced-control/wings-entry.png'),
   pulse: require('@images/advanced-control/pulse.png'),
   bullet: require('@images/advanced-control/bullet.png'),
 };
