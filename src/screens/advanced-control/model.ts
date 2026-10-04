@@ -85,7 +85,8 @@ export interface ScreenState {
   kind: ScreenKind;
   /** Scanning / connecting / reconnecting (a sub-state of disconnected). */
   connecting: boolean;
-  /** Lower-priority conditions that are also active (extra banner lines). */
+  /** Lower-priority conditions that are also active. Not shown as extra notice lines
+   *  (notices are always two lines); the next one takes over when the top one clears. */
   also: Condition[];
   /** Actuator controls usable (normal state, INFO read, telemetry fresh). */
   controlsEnabled: boolean;
@@ -126,45 +127,52 @@ export function deriveScreenState(s: StateSlice): ScreenState {
  * Page notice (design v4 §1/§5: notice card = title + short body, same card
  * surface as the modules, full-white text). tone 'warn' for heat / battery,
  * 'neutral' for connection / E-stop / info. Copy follows design v4 (no em / en
- * dashes). Each string in `lines` renders as its own line.
+ * dashes).
+ *
+ * Always exactly two lines (design review 2026-10-04): `title` + one `line`,
+ * each rendered with numberOfLines={1}. Copy is sized to fit one line at
+ * 390 pt (14 pt title / 13 pt body, Quicksand-Bold; ≤ 131 pt next to a busy
+ * action button, ≤ 266 pt without one). Lower-priority conditions (`also`)
+ * are not added as extra lines: only the highest-priority notice shows.
  */
 export interface BannerModel {
   tone: 'neutral' | 'warn';
   icon: 'lock' | 'thermometer' | 'battery' | 'bluetooth' | 'info';
   title: string;
-  lines: string[];
+  line: string;
   /** Optional action rendered as an outline button (Reconnect / Scan). */
   action?: 'reconnect' | 'scan';
 }
 
 const fmtC = (c: number) => `${Number.isInteger(c) ? c : c.toFixed(1)} °C`;
 
-const ALSO_TEXT = (c: Condition, tlm: Telemetry | null): string => {
-  switch (c) {
-    case 'estop':
-      return 'Stop all is also on.';
-    case 'overtemp':
-      return `Also too warm${tlm?.ntcC != null ? ` (${fmtC(tlm.ntcC)})` : ''}.`;
-    case 'lowbat':
-      return `Battery is also low${tlm?.vbat != null ? ` (${tlm.vbat.toFixed(2)} V)` : ''}.`;
-  }
-};
+/** Second line of every E-stop notice (whatever engaged it). */
+export const UNLOCK_LINE = 'Tap Unlock when you are ready.';
 
 /**
- * Over-temp notice body. Reading = TLM `ntc` (ntcC), clear = INFO `ch.ot.clear`;
- * each part is omitted when the device did not provide it.
+ * Over-temp notice line, one line. Reading = TLM `ntc` (ntcC), clear = INFO
+ * `ch.ot.clear`; each number is shown only when the device provided it (never
+ * a fallback threshold).
  */
 export function overTempLine(ntcC: number | null, clearC: number | null): string {
-  const reading = ntcC !== null ? `Device at ${fmtC(ntcC)}. ` : '';
+  const reading = ntcC !== null ? `${fmtC(ntcC)} now. ` : '';
   if (clearC === null) {
-    return `${reading}Outputs resume once it cools down.`;
+    return ntcC !== null ? `${reading}Resumes when cooler.` : 'Resumes when it cools down.';
   }
-  return ntcC !== null
-    ? `${reading}Outputs resume once it cools below ${fmtC(clearC)}.`
-    : `Outputs resume once the device cools below ${fmtC(clearC)}.`;
+  return `${reading}Resumes below ${fmtC(clearC)}.`;
 }
 
-/** Only the highest-priority notice is shown; lower ones become extra lines. */
+/** Low-battery notice line, one line; the voltage only when TLM `vbat` is valid. */
+export function lowBatteryLine(vbat: number | null): string {
+  return vbat !== null ? `${vbat.toFixed(2)} V. Charge to continue.` : 'Charge the device to continue.';
+}
+
+/**
+ * The notice for the current state: only the highest-priority condition
+ * (未连接 > 急停 > 过温 > 低电). `screen.also` (lower-priority conditions that
+ * are active at the same time) is deliberately not shown as extra lines; the
+ * next notice takes over once the higher one clears.
+ */
 export function bannerFor(
   screen: ScreenState,
   tlm: Telemetry | null,
@@ -174,67 +182,63 @@ export function bannerFor(
 ): BannerModel | null {
   // Clear threshold only if INFO `ch.ot` carried it (never OT_FALLBACK).
   const otClear = safety?.fromInfo.ot ? safety.ot.clearC : null;
-  const also = screen.also.map(c => ALSO_TEXT(c, tlm));
   switch (screen.kind) {
     case 'disconnected':
       if (!link.hadDevice) {
-        return {
-          tone: 'neutral',
-          icon: 'bluetooth',
-          title: screen.connecting ? 'Looking for your device' : 'Not connected',
-          lines: ['Turn on ICD-001 and keep it close.'],
-          action: 'scan',
-        };
+        return screen.connecting
+          ? {
+              tone: 'neutral',
+              icon: 'bluetooth',
+              title: 'Searching…',
+              line: 'Keep ICD-001 close.',
+              action: 'scan',
+            }
+          : {
+              tone: 'neutral',
+              icon: 'bluetooth',
+              title: 'Not connected',
+              line: 'Turn on ICD-001 nearby.',
+              action: 'scan',
+            };
       }
       return {
         tone: 'neutral',
         icon: 'bluetooth',
         title: 'Connection lost',
         // Firmware stops everything on BLE drop (§5). Stop all pressed offline
-        // is sent as ESTOP 1 first on reconnect (controller.stopAll).
-        lines: link.stopQueued
-          ? ['Everything stopped.', 'Stays stopped after reconnect.']
-          : ['Everything stopped.'],
+        // is sent as ESTOP 1 first on reconnect (controller.stopAll), so the
+        // page comes back Stopped: "Stop all stays on."
+        line: link.stopQueued ? 'Stop all stays on.' : 'Everything stopped.',
         action: 'reconnect',
       };
     case 'estop':
+      // 'device' only after an EVT ESTOP on this connection; a latch seen only
+      // in TLM (kept over a disconnect, §10.1) and not set by this app is
+      // 'unknown': neutral wording, no device-button attribution (audit F2).
       return {
         tone: 'neutral',
         icon: 'lock',
-        title: 'Everything is stopped',
-        // 'device' only after an EVT ESTOP on this connection; a latch seen only
-        // in TLM (kept over a disconnect, §10.1) and not set by this app is
-        // 'unknown': neutral wording, no device-button attribution (audit F2).
-        lines: [
+        title:
           estopSource === 'device'
-            ? 'Stopped with the button on the device.'
+            ? 'Stopped with the device button'
             : estopSource === 'unknown'
-            ? 'Stop all is still on.'
-            : 'All outputs are off.',
-          estopSource === 'device'
-            ? 'Tap Unlock or press that button again.'
-            : 'Tap Unlock when you are ready.',
-          ...also,
-        ],
+            ? 'Stop all is still on'
+            : 'Everything is stopped',
+        line: UNLOCK_LINE,
       };
     case 'overtemp':
       return {
         tone: 'warn',
         icon: 'thermometer',
         title: 'Too warm, paused',
-        lines: [overTempLine(tlm?.ntcC ?? null, otClear), ...also],
+        line: overTempLine(tlm?.ntcC ?? null, otClear),
       };
     case 'lowbat':
       return {
         tone: 'warn',
         icon: 'battery',
         title: 'Battery low, paused',
-        lines: [
-          tlm?.vbat != null
-            ? `${tlm.vbat.toFixed(2)} V. Charge the device to continue.`
-            : 'Charge the device to continue.',
-          ...also,
-        ],
+        line: lowBatteryLine(tlm?.vbat ?? null),
       };
     default:
       return null;
@@ -245,7 +249,7 @@ export const COOLED_DOWN_BANNER: BannerModel = {
   tone: 'neutral',
   icon: 'info',
   title: 'Cooled down',
-  lines: ['Turn modules back on when you are ready.'],
+  line: 'Turn modules on when ready.',
 };
 export const COOLED_DOWN_MS = 4000;
 
@@ -265,7 +269,7 @@ export const RELEASED_ON_DEVICE_BANNER: BannerModel = {
   tone: 'neutral',
   icon: 'info',
   title: 'Released on the device',
-  lines: ['Outputs stay off. Turn modules back on when you are ready.'],
+  line: 'Outputs stay off.',
 };
 export const RELEASED_NOTICE_MS = 4000;
 

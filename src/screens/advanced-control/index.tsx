@@ -16,7 +16,7 @@ import { useScreenWrapper } from '../../common/components/screen-wrapper/hooks';
 
 import { BLOB } from './assets';
 import { Notice } from './components/Notice';
-import { OverlayHost, stopZoneHeight } from './components/OverlayHost';
+import { OverlayHost, contentBottomPadding, stopZoneHeight } from './components/OverlayHost';
 import { StopDock } from './components/StopDock';
 import { ValueSlider } from './components/ValueSlider';
 import { LinkPill, ModuleCard, PulseSwitch } from './components/parts';
@@ -102,7 +102,7 @@ export const AdvancedControlScreen = ({ initialOverlay }: { initialOverlay?: Rea
    * "Pulse & Bullet". Then the Pulse block (label row with the on/off switch,
    * speed slider; dimmed together when outputs are blocked), then the Bullet
    * row: read-only (skin contact + heart rate, no control), blob 32 + "Bullet"
-   * label, read-out on the right, set apart from the Pulse controls by 16 pt of
+   * label, read-out on the right, set apart from the Pulse controls by 12 pt of
    * spacing inside the same card (no nested card, no divider: STYLE-DIGEST).
    * Same 13 pt label / right-aligned control rhythm as the slider rows.
    * Either part is left out if the device does not report it.
@@ -156,7 +156,8 @@ export const AdvancedControlScreen = ({ initialOverlay }: { initialOverlay?: Rea
       <Gradient {...bg} style={StyleSheet.absoluteFill} pointerEvents="none" />
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={{ paddingBottom: zone + 12 }}
+        contentContainerStyle={{ paddingBottom: contentBottomPadding(stopBottom) }}
+        testID="advanced-scroll"
         showsVerticalScrollIndicator={false}
         scrollEnabled={dragging === null}
       >
@@ -191,9 +192,7 @@ export const AdvancedControlScreen = ({ initialOverlay }: { initialOverlay?: Rea
               onAction={a => (a === 'reconnect' ? ctl.reconnect() : ctl.scan())}
             />
           ) : null}
-          {view.toast ? (
-            <Notice model={{ tone: 'neutral', icon: 'info', title: view.toast, lines: [] }} />
-          ) : null}
+          {view.toast ? <Notice model={{ tone: 'neutral', icon: 'info', ...view.toast }} /> : null}
           {wingCards.map(wings)}
           {rhythm || sensor ? pulseBullet(rhythm, sensor) : null}
         </View>
@@ -238,6 +237,7 @@ const styles = StyleSheet.create({
   subRow: { marginTop: 12, minHeight: 31, flexDirection: 'row', alignItems: 'center' },
   subLabel: text(13, v4.white, 17),
   subRight: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center' },
-  bulletRow: { marginTop: 16 },
+  // 12 pt like the stack gap (was 16): keeps the e-stop / over-temp page within 724 pt, i.e. 12 pt above the Stop-all zone
+  bulletRow: { marginTop: 12 },
   subBlob: { width: 32, height: 32, marginLeft: -4, marginRight: 6 },
 });

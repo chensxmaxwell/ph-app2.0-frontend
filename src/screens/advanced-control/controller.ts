@@ -162,7 +162,8 @@ export interface AdvancedControlView {
     compact: boolean;
     tint: { upper: number; lower: number; head: number; egg: number };
   };
-  toast: string | null;
+  /** Transient two-line notice (title + line), e.g. after a rejected command. */
+  toast: { title: string; line: string } | null;
   /** Stop all pressed while offline; ESTOP 1 goes out first on the next connect. */
   stopQueued: boolean;
 }
@@ -218,7 +219,7 @@ export class AdvancedControlController {
   private seenErrAt: number | null = null;
   private prevOverTemp = false;
   private cooledUntil = 0;
-  private toast: { text: string; until: number } | null = null;
+  private toast: { title: string; line: string; until: number } | null = null;
   private stopQueued = false;
   private holdStart: number | null = null;
   private holdTimer: ReturnType<typeof setInterval> | null = null;
@@ -517,7 +518,8 @@ export class AdvancedControlController {
       if (!safety && this.lastInput && t - this.lastInput.at < ERR_ATTRIBUTION_MS) {
         this.inputAt = { A: -1e12, B: -1e12, vcm: -1e12 };
         this.toast = {
-          text: `Couldn't change ${CARD_NAME[this.lastInput.card]}. Showing the device's current setting.`,
+          title: `Couldn't change ${CARD_NAME[this.lastInput.card]}`,
+          line: "Showing the device's setting.",
           until: t + TOAST_MS,
         };
         this.schedule(TOAST_MS);
@@ -775,7 +777,7 @@ export class AdvancedControlController {
       },
       thresholds: (live ? s.info : this.lastInfo)?.safety ?? null,
       stage: this.stageView(screen, live),
-      toast: this.toast && t < this.toast.until ? this.toast.text : null,
+      toast: this.toast && t < this.toast.until ? { title: this.toast.title, line: this.toast.line } : null,
       stopQueued: this.stopQueued,
     };
   }

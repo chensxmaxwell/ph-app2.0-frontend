@@ -210,7 +210,10 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     await tick(300);
     expect(t.v().screen.kind).toBe('estop');
     expect(t.v().banner?.title).toBe('Everything is stopped');
-    expect(t.v().banner?.lines).toEqual(['All outputs are off.', 'Tap Unlock when you are ready.']);
+    expect(t.v().banner).toMatchObject({
+      title: 'Everything is stopped',
+      line: 'Tap Unlock when you are ready.',
+    });
     expect(t.wing().values).toEqual({ A: 0, B: 0 });
     expect(t.wing()).toMatchObject({ enabled: false, summary: 'Paused' });
     expect(t.egg()?.enabled).toBe(true);
@@ -326,7 +329,10 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     const t = await setup();
     t.transport.pressStartKey(t.id);
     await tick(200);
-    expect(t.v().banner?.lines[0]).toBe('Stopped with the button on the device.');
+    expect(t.v().banner).toMatchObject({
+      title: 'Stopped with the device button',
+      line: 'Tap Unlock when you are ready.',
+    });
     t.done();
   });
 
@@ -373,9 +379,10 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
       fromInfo: { ot: true },
     });
     expect(ctl.getView().screen.kind).toBe('overtemp');
-    expect(ctl.getView().banner?.lines[0]).toBe(
-      'Device at 40.4 °C. Outputs resume once it cools below 36.5 °C.',
-    );
+    expect(ctl.getView().banner).toMatchObject({
+      title: 'Too warm, paused',
+      line: '40.4 °C now. Resumes below 36.5 °C.',
+    });
     ctl.dispose();
     client.destroy();
   });
@@ -422,10 +429,13 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.ctl.stopAll();
     await tick(300);
     expect(t.v().screen).toMatchObject({ kind: 'estop', also: ['overtemp', 'lowbat'] });
-    expect(t.v().banner?.lines.slice(2)).toEqual([
-      'Also too warm (42.3 °C).',
-      'Battery is also low (3.38 V).',
-    ]);
+    // lower-priority conditions add no lines (two-line notices): the e-stop notice only
+    expect(t.v().banner).toEqual({
+      tone: 'neutral',
+      icon: 'lock',
+      title: 'Everything is stopped',
+      line: 'Tap Unlock when you are ready.',
+    });
     t.done();
   });
 
@@ -440,11 +450,11 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     expect(t.v().lastSeen.map(c => c.summary)).toEqual(['—', '—', '—']);
     expect((t.v().lastSeen[0] as IntensityView).values).toEqual({ A: 0, B: 0 });
     expect(t.v().device).toMatchObject({ connected: false, lastName: 'ICD1-TEST' });
-    expect(t.v().banner?.lines).toEqual(['Everything stopped.']);
+    expect(t.v().banner).toMatchObject({ title: 'Connection lost', line: 'Everything stopped.' });
     t.ctl.stopAll(); // still pressable offline
     expect(t.v().stopQueued).toBe(true);
     expect(t.client.queuedOnConnect).toBe('estop');
-    expect(t.v().banner?.lines).toEqual(['Everything stopped.', 'Stays stopped after reconnect.']);
+    expect(t.v().banner).toMatchObject({ title: 'Connection lost', line: 'Stop all stays on.' });
     t.dev.commandLog.length = 0;
     await tick(800); // auto-reconnect
     // first command on the new link is ESTOP 1, before RATE and any actuator command
@@ -511,7 +521,7 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     const t = await setup();
     t.ctl.setWingValue('A', 70);
     t.client.onLine('ERR ARG LRA');
-    expect(t.v().toast).toBe("Couldn't change Wings. Showing the device's current setting.");
+    expect(t.v().toast).toEqual({ title: "Couldn't change Wings", line: "Showing the device's setting." });
     await tick(3100);
     expect(t.v().toast).toBeNull();
     t.done();
@@ -527,17 +537,17 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     expect(t.client.getState().status).toBe('connected');
     expect(t.v().screen.kind).toBe('estop');
     expect(t.v().estop).toMatchObject({ on: true, source: 'unknown' });
-    expect(t.v().banner?.lines.slice(0, 2)).toEqual([
-      'Stop all is still on.',
-      'Tap Unlock when you are ready.',
-    ]);
-    expect(t.v().banner?.lines.join(' ')).not.toContain('button on the device');
+    expect(t.v().banner).toMatchObject({
+      title: 'Stop all is still on',
+      line: 'Tap Unlock when you are ready.',
+    });
+    expect(JSON.stringify(t.v().banner)).not.toContain('device button');
     // an EVT ESTOP on this connection is attributed to the device again
     t.transport.pressStartKey(t.id); // release
     await tick(200);
     t.transport.pressStartKey(t.id); // engage
     await tick(200);
-    expect(t.v().banner?.lines[0]).toBe('Stopped with the button on the device.');
+    expect(t.v().banner?.title).toBe('Stopped with the device button');
     t.done();
   });
 
@@ -551,7 +561,10 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     expect(t.client.getState().status).toBe('connected');
     expect(t.dev.commandLog.filter(c => c === 'ESTOP 1')).toEqual(['ESTOP 1']); // nothing re-sent
     expect(t.v().estop).toMatchObject({ on: true, source: 'app' });
-    expect(t.v().banner?.lines[0]).toBe('All outputs are off.');
+    expect(t.v().banner).toMatchObject({
+      title: 'Everything is stopped',
+      line: 'Tap Unlock when you are ready.',
+    });
     t.done();
   });
 

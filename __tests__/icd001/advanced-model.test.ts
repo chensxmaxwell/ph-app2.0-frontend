@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 import {
+  BannerModel,
   COOLED_DOWN_BANNER,
+  RELEASED_ON_DEVICE_BANNER,
+  UNLOCK_LINE,
   HOTSPOT_ZONES,
   RhythmCard,
   WING_FREQ_HZ,
@@ -152,30 +155,42 @@ describe('state priority 未连接 > 急停 > 过温 > 低电', () => {
   });
 });
 
-describe('notices (design v4 copy)', () => {
-  it('estop: neutral notice card; copy depends on who stopped it', () => {
+describe('notices (design v4 copy): always exactly two lines (title + one line)', () => {
+  it('estop: title by source, second line always "Tap Unlock when you are ready."', () => {
     const s = deriveScreenState(st({ estop: true }));
     expect(bannerFor(s, tlm(), 'app')).toEqual({
       tone: 'neutral',
       icon: 'lock',
       title: 'Everything is stopped',
-      lines: ['All outputs are off.', 'Tap Unlock when you are ready.'],
+      line: 'Tap Unlock when you are ready.',
     });
-    expect(bannerFor(s, tlm(), 'device')?.lines).toEqual([
-      'Stopped with the button on the device.',
-      'Tap Unlock or press that button again.',
-    ]);
+    expect(bannerFor(s, tlm(), null)).toMatchObject({ title: 'Everything is stopped', line: UNLOCK_LINE });
+    // §10.1 latch seen only in TLM, not set by this app
+    expect(bannerFor(s, tlm(), 'unknown')).toMatchObject({
+      title: 'Stop all is still on',
+      line: UNLOCK_LINE,
+    });
+    // EVT ESTOP from the START key on this connection
+    expect(bannerFor(s, tlm(), 'device')).toMatchObject({
+      title: 'Stopped with the device button',
+      line: UNLOCK_LINE,
+    });
+    expect(JSON.stringify(bannerFor(s, tlm(), 'app'))).not.toContain('All outputs are off');
   });
 
-  it('overtemp shows the live temperature and the device 39 °C release (INFO ch.ot)', () => {
+  it('overtemp: one line with the live reading and the device clear value (INFO ch.ot)', () => {
     const b = bannerFor(
       deriveScreenState(st({ overTemp: true })),
       tlm({ ntc: 42.6, ot: 1 }),
       null,
       safetyWithOt(),
     )!;
-    expect(b).toMatchObject({ tone: 'warn', icon: 'thermometer', title: 'Too warm, paused' });
-    expect(b.lines[0]).toBe('Device at 42.6 °C. Outputs resume once it cools below 39 °C.');
+    expect(b).toEqual({
+      tone: 'warn',
+      icon: 'thermometer',
+      title: 'Too warm, paused',
+      line: '42.6 °C now. Resumes below 39 °C.',
+    });
   });
 
   it('overtemp release text follows INFO ch.ot.clear (no hard-coded 39)', () => {
@@ -183,7 +198,7 @@ describe('notices (design v4 copy)', () => {
     raw.ch.ot = { trip: 40, clear: 37.5 };
     const safety = parseInfo(raw)!.safety;
     const b = bannerFor(deriveScreenState(st({ overTemp: true })), tlm({ ntc: 40.1, ot: 1 }), null, safety)!;
-    expect(b.lines[0]).toBe('Device at 40.1 °C. Outputs resume once it cools below 37.5 °C.');
+    expect(b.line).toBe('40.1 °C now. Resumes below 37.5 °C.');
   });
 
   describe('over-temp numbers come only from the device (no placeholders)', () => {
@@ -197,92 +212,134 @@ describe('notices (design v4 copy)', () => {
       const raw = JSON.parse(V0_INFO);
       raw.ch.ot = { trip: 41, clear: 36 };
       const b = bannerFor(ot, tlm({ ntc: 41.2, ot: 1 }), null, parseInfo(raw)!.safety)!;
-      expect(b.lines[0]).toBe('Device at 41.2 °C. Outputs resume once it cools below 36 °C.');
+      expect(b.line).toBe('41.2 °C now. Resumes below 36 °C.');
     });
     it('INFO without ch.ot -> generic line, the fallback 39 is never shown', () => {
       expect(noOt.fromInfo.ot).toBe(false);
       expect(noOt.ot.clearC).toBe(39); // fallback still exists for the client's legacy trip logic
       const b = bannerFor(ot, tlm({ ntc: 43, ot: 1 }), null, noOt)!;
-      expect(b.lines[0]).toBe('Device at 43 °C. Outputs resume once it cools down.');
-      expect(b.lines[0]).not.toMatch(/39/);
+      expect(b.line).toBe('43 °C now. Resumes when cooler.');
+      expect(b.line).not.toMatch(/39/);
       // legacy INFO (no ch at all) and no INFO at all behave the same
-      expect(bannerFor(ot, tlm({ ntc: 43, ot: 1 }), null, legacy.safety)!.lines[0]).toBe(
-        'Device at 43 °C. Outputs resume once it cools down.',
+      expect(bannerFor(ot, tlm({ ntc: 43, ot: 1 }), null, legacy.safety)!.line).toBe(
+        '43 °C now. Resumes when cooler.',
       );
-      expect(bannerFor(ot, tlm({ ntc: 43, ot: 1 }), null, null)!.lines[0]).toBe(
-        'Device at 43 °C. Outputs resume once it cools down.',
+      expect(bannerFor(ot, tlm({ ntc: 43, ot: 1 }), null, null)!.line).toBe(
+        '43 °C now. Resumes when cooler.',
       );
     });
     it('telemetry without ntcC -> no reading', () => {
       const noNtc = parseTelemetry({ t: 1, ppg: [], ot: 1 });
       expect(noNtc.ntcC).toBeNull();
-      expect(bannerFor(ot, noNtc, null, safetyWithOt())!.lines[0]).toBe(
-        'Outputs resume once the device cools below 39 °C.',
-      );
-      expect(bannerFor(ot, tlm({ ntc: -99, ot: 1 }), null, safetyWithOt())!.lines[0]).toBe(
-        'Outputs resume once the device cools below 39 °C.',
+      expect(bannerFor(ot, noNtc, null, safetyWithOt())!.line).toBe('Resumes below 39 °C.');
+      expect(bannerFor(ot, tlm({ ntc: -99, ot: 1 }), null, safetyWithOt())!.line).toBe(
+        'Resumes below 39 °C.',
       );
       // neither reading nor device threshold: exactly the generic line, no number at all
-      const g = bannerFor(ot, noNtc, null, noOt)!.lines[0];
-      expect(g).toBe('Outputs resume once it cools down.');
+      const g = bannerFor(ot, noNtc, null, noOt)!.line;
+      expect(g).toBe('Resumes when it cools down.');
       expect(g).not.toMatch(/\d/);
-      expect(bannerFor(ot, null, null, null)!.lines[0]).toBe('Outputs resume once it cools down.');
+      expect(bannerFor(ot, null, null, null)!.line).toBe('Resumes when it cools down.');
     });
     it('low battery shows only the live TLM voltage, never a threshold or fallback', () => {
       const lb = deriveScreenState(st({ lowBattery: true }));
-      expect(bannerFor(lb, tlm({ vbat: 3.38, lb: 1 }), null, noOt)!.lines).toEqual([
-        '3.38 V. Charge the device to continue.',
-      ]);
+      expect(bannerFor(lb, tlm({ vbat: 3.38, lb: 1 }), null, noOt)!.line).toBe('3.38 V. Charge to continue.');
       const noV = bannerFor(lb, parseTelemetry({ t: 1, ppg: [], lb: 1 }), null, noOt)!;
-      expect(noV.lines).toEqual(['Charge the device to continue.']);
+      expect(noV.line).toBe('Charge the device to continue.');
       expect(JSON.stringify(noV)).not.toMatch(/3\.[47]|60 s/);
     });
   });
 
-  it('lowbat shows voltage; lower-priority conditions become extra lines', () => {
+  it('lower-priority conditions add no lines: only the highest-priority notice shows', () => {
     const b = bannerFor(deriveScreenState(st({ lowBattery: true })), tlm({ vbat: 3.38, lb: 1 }), null)!;
-    expect(b).toMatchObject({ tone: 'warn', icon: 'battery', title: 'Battery low, paused' });
-    expect(b.lines).toEqual(['3.38 V. Charge the device to continue.']);
-    const e = bannerFor(
-      deriveScreenState(st({ estop: true, overTemp: true, lowBattery: true })),
-      tlm({ ntc: 42.3, vbat: 3.38 }),
-      'app',
-    )!;
-    expect(e.lines.slice(2)).toEqual(['Also too warm (42.3 °C).', 'Battery is also low (3.38 V).']);
+    expect(b).toEqual({
+      tone: 'warn',
+      icon: 'battery',
+      title: 'Battery low, paused',
+      line: '3.38 V. Charge to continue.',
+    });
+    const all3 = deriveScreenState(st({ estop: true, overTemp: true, lowBattery: true }));
+    expect(all3.also).toEqual(['overtemp', 'lowbat']);
+    expect(bannerFor(all3, tlm({ ntc: 42.3, vbat: 3.38 }), 'app')).toEqual({
+      tone: 'neutral',
+      icon: 'lock',
+      title: 'Everything is stopped',
+      line: UNLOCK_LINE,
+    });
+    const ot2 = deriveScreenState(st({ overTemp: true, lowBattery: true }));
+    expect(bannerFor(ot2, tlm({ ntc: 42.3, vbat: 3.38 }), null, safetyWithOt())).toMatchObject({
+      title: 'Too warm, paused',
+      line: '42.3 °C now. Resumes below 39 °C.',
+    });
   });
 
-  it('disconnected: Connection lost + Reconnect, or Not connected + Scan before any device', () => {
+  it('disconnected: Connection lost + Reconnect, or Not connected / Searching + Scan before any device', () => {
     const d = deriveScreenState(st({ status: 'disconnected' }));
-    expect(bannerFor(d, null, null)).toMatchObject({
-      title: 'Connection lost',
-      lines: ['Everything stopped.'],
-      action: 'reconnect',
+    expect(bannerFor(d, null, null)).toEqual({
+      tone: 'neutral',
       icon: 'bluetooth',
+      title: 'Connection lost',
+      line: 'Everything stopped.',
+      action: 'reconnect',
     });
-    // Stop all pressed while offline: the notice says it stays stopped.
-    expect(bannerFor(d, null, null, null, { hadDevice: true, stopQueued: true })?.lines).toEqual([
-      'Everything stopped.',
-      'Stays stopped after reconnect.',
-    ]);
+    // Stop all pressed while offline: ESTOP 1 goes out first on reconnect
+    expect(bannerFor(d, null, null, null, { hadDevice: true, stopQueued: true })).toMatchObject({
+      title: 'Connection lost',
+      line: 'Stop all stays on.',
+    });
     expect(bannerFor(d, null, null, null, { hadDevice: false })).toMatchObject({
       title: 'Not connected',
+      line: 'Turn on ICD-001 nearby.',
       action: 'scan',
     });
     const c = deriveScreenState(st({ status: 'scanning' }));
-    expect(bannerFor(c, null, null, null, { hadDevice: false })?.title).toBe('Looking for your device');
+    expect(bannerFor(c, null, null, null, { hadDevice: false })).toMatchObject({
+      title: 'Searching…',
+      line: 'Keep ICD-001 close.',
+    });
   });
 
-  it('no notice when normal; cooled-down copy; no em or en dashes anywhere', () => {
+  it('every notice is exactly two single lines that fit one line at 390 pt; no em or en dashes', () => {
     expect(bannerFor(deriveScreenState(st({})), tlm(), null)).toBeNull();
-    expect(COOLED_DOWN_BANNER.title).toBe('Cooled down');
-    const all = [
-      COOLED_DOWN_BANNER,
-      bannerFor(deriveScreenState(st({ estop: true, overTemp: true, lowBattery: true })), tlm(), 'device'),
-      bannerFor(deriveScreenState(st({ overTemp: true })), tlm(), null),
-      bannerFor(deriveScreenState(st({ lowBattery: true })), tlm(), null),
-      bannerFor(deriveScreenState(st({ status: 'disconnected' })), null, null),
+    const D = deriveScreenState(st({ status: 'disconnected' }));
+    const S = deriveScreenState(st({ status: 'scanning' }));
+    const E = deriveScreenState(st({ estop: true, overTemp: true, lowBattery: true }));
+    const O = deriveScreenState(st({ overTemp: true }));
+    const L = deriveScreenState(st({ lowBattery: true }));
+    // [notice, has action button]
+    const all: Array<[BannerModel | null, boolean]> = [
+      [COOLED_DOWN_BANNER, false],
+      [RELEASED_ON_DEVICE_BANNER, false],
+      [bannerFor(E, tlm(), 'app'), false],
+      [bannerFor(E, tlm(), 'unknown'), false],
+      [bannerFor(E, tlm(), 'device'), false],
+      [
+        bannerFor(O, tlm({ ntc: 42.3 }), null, {
+          ot: { tripC: 40, clearC: 36.5 },
+          fromInfo: { ot: true, lb: true },
+        }),
+        false,
+      ],
+      [bannerFor(O, tlm({ ntc: 42.3 }), null, null), false],
+      [bannerFor(O, null, null, null), false],
+      [bannerFor(L, tlm({ vbat: 3.38 }), null), false],
+      [bannerFor(L, null, null), false],
+      [bannerFor(D, null, null), true],
+      [bannerFor(D, null, null, null, { hadDevice: true, stopQueued: true }), true],
+      [bannerFor(D, null, null, null, { hadDevice: false }), true],
+      [bannerFor(S, null, null, null, { hadDevice: false }), true],
     ];
-    for (const b of all) {
+    for (const [b, action] of all) {
+      expect(b).not.toBeNull();
+      expect(Object.keys(b!).sort()).toEqual(
+        action ? ['action', 'icon', 'line', 'title', 'tone'] : ['icon', 'line', 'title', 'tone'],
+      );
+      expect(b!.title).toMatch(/^[^\n]+$/);
+      expect(b!.line).toMatch(/^[^\n]+$/);
+      // Proxy for the one-line fit (measured with Quicksand-Bold: ≈7.2 pt/char at
+      // 14 pt, ≈7.0 at 13 pt): 266 pt without an action, ≈131 pt next to a busy one.
+      expect(b!.title.length).toBeLessThanOrEqual(action ? 18 : 32);
+      expect(b!.line.length).toBeLessThanOrEqual(action ? 24 : 38);
       expect(JSON.stringify(b)).not.toMatch(/[\u2013\u2014]/);
     }
   });

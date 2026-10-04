@@ -1,6 +1,6 @@
 /**
  * Notice card (design v4 §1, §5): the module-card surface, first in the stack.
- * Icon 32 + title 14 + body 13 (all full white, no grey on cards), optional
+ * Icon 32 + title 14 + one body line 13 (all full white, no grey on cards), optional
  * PillButton-style action on the right (Reconnect / Scan). Used for e-stop,
  * connection lost, over-temp, low battery and short info messages.
  */
@@ -35,12 +35,17 @@ export const Notice = ({
       testID="notice"
       accessible={!model.action}
       accessibilityRole={model.action ? undefined : 'alert'}
-      accessibilityLabel={model.action ? undefined : [model.title, ...model.lines].join('. ')}
+      accessibilityLabel={model.action ? undefined : `${model.title}. ${model.line}`}
     >
       <View style={styles.icon}>{ICON[model.icon]}</View>
       <View style={styles.texts}>
-        <Text style={styles.title}>{model.title}</Text>
-        {model.lines.length ? <Text style={styles.body}>{model.lines.join('\n')}</Text> : null}
+        {/* Exactly two lines: title + one body line (design review 2026-10-04). */}
+        <Text style={styles.title} numberOfLines={1} testID="notice-title">
+          {model.title}
+        </Text>
+        <Text style={styles.body} numberOfLines={1} testID="notice-line">
+          {model.line}
+        </Text>
       </View>
       {model.action ? (
         <Pressable

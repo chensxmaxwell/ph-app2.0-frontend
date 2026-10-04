@@ -7,6 +7,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
+import { Text } from 'react-native';
 import renderer, { act } from 'react-test-renderer';
 
 jest.mock('react-native-ble-manager', () => ({}));
@@ -31,6 +32,12 @@ jest.mock('react-native-svg', () => {
 });
 
 import { AdvancedControlScreen } from '../../src/screens/advanced-control';
+import {
+  CONTENT_ZONE_GAP,
+  STOP_ZONE_GAP,
+  contentBottomPadding,
+  stopZoneHeight,
+} from '../../src/screens/advanced-control/components/OverlayHost';
 import {
   ValueSlider,
   sliderGeometry,
@@ -86,6 +93,30 @@ const settle = async (ms = 1000) => {
   }
 };
 
+/** The notice card renders exactly two single-line texts (title + line); returns them. */
+function expectTwoLineNotice(r: renderer.ReactTestRenderer): string[] {
+  const notice = r.root.find(n => n.props.testID === 'notice' && typeof n.type !== 'string');
+  const lines = notice
+    .findAll(n => n.type === Text)
+    .filter(n => n.props.testID === 'notice-title' || n.props.testID === 'notice-line');
+  expect(lines.map(n => n.props.testID)).toEqual(['notice-title', 'notice-line']);
+  lines.forEach(n => expect(n.props.numberOfLines).toBe(1));
+  // nothing else (no extra lines) inside the text column besides the optional action label
+  const all = notice.findAll(n => n.type === Text).map(n => n.props.testID ?? 'action');
+  expect(all.filter(id => id !== 'action')).toHaveLength(2);
+  return lines.map(n => flat(n.props.children));
+}
+
+describe('Stop-all zone bottom padding', () => {
+  it('content bottom padding = reserved Stop-all zone (108 pt) + 12 pt', () => {
+    expect(STOP_ZONE_GAP).toBe(12);
+    expect(CONTENT_ZONE_GAP).toBe(12);
+    expect(stopZoneHeight(38)).toBe(108); // Stop all bottom = 34 pt inset + 4
+    expect(contentBottomPadding(38)).toBe(120);
+    expect(contentBottomPadding(16)).toBe(stopZoneHeight(16) + 12); // no home indicator
+  });
+});
+
 describe('isAdvancedDevice / slider geometry', () => {
   it('shows the entry only for a connected ICD1- / H11- device', () => {
     expect(isAdvancedDevice('connected', 'ICD1-91B1')).toBe(true);
@@ -138,6 +169,11 @@ describe('AdvancedControlScreen v4 on the mock', () => {
     expect(texts(r)).toContain('Not connected');
     expect(texts(r)).toContain('Advanced control');
     expect(entry.toJSON()).toBeNull();
+    // Safety net: scroll content ends 12 pt above the 108 pt Stop-all zone (34 pt home indicator).
+    expect(byTestID(r, 'advanced-scroll')[0].props.contentContainerStyle).toMatchObject({
+      paddingBottom: 120,
+    });
+    expectTwoLineNotice(r);
 
     const client = getIcd001Client();
     const transport = (client as unknown as { transport: any }).transport;
@@ -213,7 +249,12 @@ describe('AdvancedControlScreen v4 on the mock', () => {
     expect(dev.commandLog).toContain('ESTOP 1');
     t = texts(r);
     expect(t).toContain('Everything is stopped');
-    expect(t).toContain('All outputs are off.');
+    expect(t).toContain('Tap Unlock when you are ready.');
+    expect(t).not.toContain('All outputs are off.');
+    expect(expectTwoLineNotice(r)).toEqual(['Everything is stopped', 'Tap Unlock when you are ready.']);
+    expect(byTestID(r, 'advanced-scroll')[0].props.contentContainerStyle).toMatchObject({
+      paddingBottom: 120,
+    });
     expect(controlRowText(r)).not.toMatch(/\d|%|Hz/);
     expect(t).toContain('Stopped');
     expect(byTestID(r, 'stop-all').length).toBe(0);
@@ -257,7 +298,7 @@ describe('AdvancedControlScreen v4 on the mock', () => {
       stop.props.onPress();
       await settle(20);
     });
-    expect(texts(r)).toContain('Stays stopped after reconnect.');
+    expect(expectTwoLineNotice(r)).toEqual(['Connection lost', 'Stop all stays on.']);
     // Auto-reconnect: ESTOP 1 is the first command on the new link -> Stopped.
     await act(async () => {
       await settle(1500);

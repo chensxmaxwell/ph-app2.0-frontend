@@ -38,6 +38,19 @@ export function stopZoneHeight(stopBottom: number): number {
   return stopBottom + STOP_BUTTON_H + STOP_ZONE_GAP;
 }
 
+/** Minimum gap between the last card and the top of the reserved Stop-all zone. */
+export const CONTENT_ZONE_GAP = 12;
+
+/**
+ * Page scroll content bottom padding (safety net, design review 2026-10-04):
+ * reserved Stop-all zone + 12 pt (108 + 12 = 120 pt on a 34 pt home-indicator
+ * iPhone). Content taller than the screen scrolls; scrolled to the bottom the
+ * last card always ends ≥ 12 pt above the zone, in every notice state.
+ */
+export function contentBottomPadding(stopBottom: number): number {
+  return stopZoneHeight(stopBottom) + CONTENT_ZONE_GAP;
+}
+
 export const OverlayHost = ({
   visible,
   onClose,
