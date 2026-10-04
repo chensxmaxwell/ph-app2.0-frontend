@@ -71,9 +71,9 @@ const fontsOf = (r: renderer.ReactTestRenderer) =>
         );
       }),
   );
-/** Text inside the Wings and Pulse cards (control rows): must carry no numbers / units. */
+/** Text of the control rows (Wings sliders, Pulse switch + speed): must carry no numbers / units. */
 const controlRowText = (r: renderer.ReactTestRenderer) =>
-  ['card-wing', 'card-vcm']
+  ['controls-wing', 'controls-vcm']
     .flatMap(id => r.root.findAll(n => n.props.testID === id).slice(0, 1))
     .flatMap(c => c.findAll(n => (n.type as unknown) === 'Text').map(n => flat(n.props.children)))
     .join('\n');
@@ -154,6 +154,16 @@ describe('AdvancedControlScreen v4 on the mock', () => {
     for (const s of ['Connected', 'Wings', 'Upper wings', 'Lower wings', 'Pulse', 'Pulse speed', 'Bullet']) {
       expect(t).toContain(s);
     }
+    // Pulse and Bullet share one card (Maxwell 2026-10-04): switch, speed slider and the Bullet read-out.
+    const pb = byTestID(r, 'card-pulse-bullet');
+    expect(pb.length).toBeGreaterThan(0);
+    expect(texts({ root: pb[0] } as unknown as renderer.ReactTestRenderer)).toMatch(
+      /Pulse & Bullet[\s\S]*Pulse[\s\S]*Pulse speed[\s\S]*Bullet[\s\S]*On skin/,
+    );
+    expect(pb[0].findAll(n => n.props.testID === 'pulse-switch').length).toBeGreaterThan(0);
+    expect(pb[0].findAll(n => n.props.testID === 'row-bullet').length).toBeGreaterThan(0);
+    expect(byTestID(r, 'card-vcm').length + byTestID(r, 'card-egg').length).toBe(0);
+    expect(controlRowText(r)).toContain('Pulse speed');
     // Sliders only: no number, %, or Hz in the Wings / Pulse cards (control values).
     expect(controlRowText(r)).toContain('Upper wings');
     expect(controlRowText(r)).not.toMatch(/\d|%|Hz/);

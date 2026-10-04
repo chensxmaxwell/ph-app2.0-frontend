@@ -8,7 +8,7 @@
  */
 import { useNavigation } from '@react-navigation/native';
 import React, { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import Gradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -80,65 +80,73 @@ export const AdvancedControlScreen = ({ initialOverlay }: { initialOverlay?: Rea
     );
   };
 
-  const pulse = (c: RhythmView) => {
-    const off = !c.enabled;
+  /** Bullet read-out (skin contact + heart rate), or "No signal". Read-only, never dimmed by e-stop. */
+  const bulletReadout = (c: SensorView) => {
+    const r = c.reading;
+    if (!(live && r.available)) {
+      return <Text style={[styles.ro, styles.dim]}>No signal</Text>;
+    }
     return (
-      <ModuleCard
-        key="vcm"
-        blob={BLOB.pulse}
-        title={c.card.label}
-        testID="card-vcm"
-        right={
-          <View style={off && styles.dim} pointerEvents={off ? 'none' : 'auto'}>
-            <PulseSwitch value={c.on} onChange={on => ctl.setPulseOn(on)} disabled={off} label="Pulse" />
-          </View>
-        }
-      >
-        <View style={off && styles.dim} testID="controls-vcm" pointerEvents={off ? 'none' : 'auto'}>
-          <ValueSlider
-            first
-            label="Pulse speed"
-            value={c.hz}
-            min={c.card.range.min}
-            max={c.card.range.max}
-            unit=" Hz"
-            idle={!c.on && dragging !== 'vcm'}
-            disabled={off}
-            onChange={hz => ctl.setPulseHz(hz)}
-            onRelease={hz => ctl.setPulseHz(hz)}
-            testID="slider-vcm"
-            {...dragProps('vcm')}
-          />
+      <View style={styles.readouts} accessible accessibilityLabel={bulletA11y(r.contact, r.hr)}>
+        <Text style={styles.ro}>{r.contact ? 'On skin' : 'Not on skin'}</Text>
+        <View style={styles.hr}>
+          <Icon name="heart" size={16} color={v4.white} />
+          <Text style={[styles.ro, styles.bpm]}>{r.contact && r.hr ? `${r.hr} bpm` : '-- bpm'}</Text>
         </View>
+      </View>
+    );
+  };
+
+  /**
+   * One card for Pulse + Bullet (Maxwell 2026-10-04). Head: pulse blob +
+   * "Pulse & Bullet". Then the Pulse block (label row with the on/off switch,
+   * speed slider; dimmed together when outputs are blocked), then the Bullet
+   * row (blob 32 + "Bullet" label, read-out on the right). Same 13 pt label /
+   * right-aligned control rhythm as the slider rows; no dividers (STYLE-DIGEST).
+   * Either part is left out if the device does not report it.
+   */
+  const pulseBullet = (p: RhythmView | undefined, b: SensorView | undefined) => {
+    const off = p ? !p.enabled : false;
+    const title = p && b ? 'Pulse & Bullet' : p ? p.card.label : b!.card.label;
+    return (
+      <ModuleCard key="vcm-egg" blob={p ? BLOB.pulse : BLOB.bullet} title={title} testID="card-pulse-bullet">
+        {p ? (
+          <View style={off && styles.dim} testID="controls-vcm" pointerEvents={off ? 'none' : 'auto'}>
+            <View style={styles.subRow}>
+              <Text style={styles.subLabel}>{p.card.label}</Text>
+              <View style={styles.subRight}>
+                <PulseSwitch value={p.on} onChange={on => ctl.setPulseOn(on)} disabled={off} label="Pulse" />
+              </View>
+            </View>
+            <ValueSlider
+              label="Pulse speed"
+              value={p.hz}
+              min={p.card.range.min}
+              max={p.card.range.max}
+              unit=" Hz"
+              idle={!p.on && dragging !== 'vcm'}
+              disabled={off}
+              onChange={hz => ctl.setPulseHz(hz)}
+              onRelease={hz => ctl.setPulseHz(hz)}
+              testID="slider-vcm"
+              {...dragProps('vcm')}
+            />
+          </View>
+        ) : null}
+        {b ? (
+          <View style={[styles.subRow, p ? styles.bulletRow : null]} testID="row-bullet">
+            {p ? <Image source={BLOB.bullet} style={styles.subBlob} /> : null}
+            {p ? <Text style={styles.subLabel}>{b.card.label}</Text> : null}
+            <View style={styles.subRight}>{bulletReadout(b)}</View>
+          </View>
+        ) : null}
       </ModuleCard>
     );
   };
 
-  const bullet = (c: SensorView) => {
-    const r = c.reading;
-    const signal = live && r.available;
-    return (
-      <ModuleCard
-        key="egg"
-        blob={BLOB.bullet}
-        title={c.card.label}
-        testID="card-egg"
-        right={
-          signal ? (
-            <View style={styles.readouts} accessible accessibilityLabel={bulletA11y(r.contact, r.hr)}>
-              <Text style={styles.ro}>{r.contact ? 'On skin' : 'Not on skin'}</Text>
-              <View style={styles.hr}>
-                <Icon name="heart" size={16} color={v4.white} />
-                <Text style={[styles.ro, styles.bpm]}>{r.contact && r.hr ? `${r.hr} bpm` : '-- bpm'}</Text>
-              </View>
-            </View>
-          ) : (
-            <Text style={[styles.ro, styles.dim]}>No signal</Text>
-          )
-        }
-      />
-    );
-  };
+  const wingCards = cards.filter((c): c is IntensityView => c.kind === 'intensity');
+  const rhythm = cards.find((c): c is RhythmView => c.kind === 'rhythm');
+  const sensor = cards.find((c): c is SensorView => c.kind === 'sensor');
 
   return (
     <View style={styles.root} testID="advanced-control">
@@ -184,7 +192,8 @@ export const AdvancedControlScreen = ({ initialOverlay }: { initialOverlay?: Rea
           {view.toast ? (
             <Notice model={{ tone: 'neutral', icon: 'info', title: view.toast, lines: [] }} />
           ) : null}
-          {cards.map(c => (c.kind === 'intensity' ? wings(c) : c.kind === 'rhythm' ? pulse(c) : bullet(c)))}
+          {wingCards.map(wings)}
+          {rhythm || sensor ? pulseBullet(rhythm, sensor) : null}
         </View>
       </ScrollView>
       {/* Sheets: laid out above the reserved Stop-all zone. See the SAFETY RULE in OverlayHost. */}
@@ -223,4 +232,10 @@ const styles = StyleSheet.create({
   ro: text(14, v4.white, 18),
   hr: { flexDirection: 'row', alignItems: 'center', marginLeft: 14 },
   bpm: { marginLeft: 6, minWidth: 54, textAlign: 'right' },
+  /** Card sub-rows: label 13 left, control/read-out right (slider label rhythm). */
+  subRow: { marginTop: 12, minHeight: 31, flexDirection: 'row', alignItems: 'center' },
+  subLabel: text(13, v4.white, 17),
+  subRight: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center' },
+  bulletRow: { marginTop: 16 },
+  subBlob: { width: 32, height: 32, marginLeft: -4, marginRight: 6 },
 });
