@@ -4,16 +4,18 @@
  *   const { view, ctl } = useAdvancedControl();
  *   view.cards / view.banner / view.screen ...; ctl.setWingValue('A', 60) ...
  *
- * Leaving the page (blur or unmount) sends STOP once per visit (spec: "Leaving
- * this page stops all outputs"; blur + unmount = one STOP, audit F10); focus
- * re-arms it. App background -> STOP is installed globally by useIcd001.
+ * Leaving the page (blur or unmount) releases control once per visit (blur +
+ * unmount = once, audit F10): STOP on older firmware; on ICD001-1 auto keeps
+ * running and a manual takeover is handed back with MODE AUTO (§11.6.3).
+ * Focus re-arms it and hides the global "Auto on" pill. App background is
+ * handled globally by useIcd001.
  * The last Pulse speed per device persists in AsyncStorage (§10.7, audit F4).
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 
-import { useIcd001 } from '../../services/icd001/useIcd001';
+import { setControlPageFocused, useIcd001 } from '../../services/icd001/useIcd001';
 
 import { AdvancedControlController, AdvancedControlView } from './controller';
 import { PLACEHOLDER_INFO } from './model';
@@ -48,7 +50,11 @@ export function useAdvancedControl(opts: { placeholderCards?: boolean } = {}): {
   useFocusEffect(
     useCallback(() => {
       ctl.enter();
-      return () => ctl.leave();
+      setControlPageFocused(true);
+      return () => {
+        setControlPageFocused(false);
+        ctl.leave();
+      };
     }, [ctl]),
   );
   const view = useSyncExternalStore(ctl.subscribe, ctl.getView);

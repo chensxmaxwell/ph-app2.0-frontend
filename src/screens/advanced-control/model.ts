@@ -22,6 +22,7 @@ import {
   formatStop,
   formatVcmHz,
   parseInfo,
+  supportsAuto,
 } from '../../services/icd001/protocol';
 
 import type { Icd001State } from '../../services/icd001/client';
@@ -174,12 +175,26 @@ export function lowBatteryLine(vbat: number | null): string {
  * are active at the same time) is deliberately not shown as extra lines; the
  * next notice takes over once the higher one clears.
  */
+export interface BannerLink {
+  hadDevice: boolean;
+  stopQueued?: boolean;
+  /**
+   * ICD001-1 (§11.5.2): after a BLE drop the device is back on auto unless it
+   * was latched (§11.6.2). `autoDevice` = last INFO offered auto,
+   * `latchedAtDrop` = E-stop / over-temp / low battery was on at the drop.
+   */
+  autoDevice?: boolean;
+  latchedAtDrop?: boolean;
+  /** The latch shown also turned Auto off (EVT MODE MANUAL ESTOP|KEY|OVERTEMP|LOWBAT). */
+  autoOff?: boolean;
+}
+
 export function bannerFor(
   screen: ScreenState,
   tlm: Telemetry | null,
   estopSource: Icd001State['estopSource'],
   safety: Pick<SafetyThresholds, 'ot' | 'fromInfo'> | null = null,
-  link: { hadDevice: boolean; stopQueued?: boolean } = { hadDevice: true },
+  link: BannerLink = { hadDevice: true },
 ): BannerModel | null {
   // Clear threshold only if INFO `ch.ot` carried it (never OT_FALLBACK).
   const otClear = safety?.fromInfo.ot ? safety.ot.clearC : null;
@@ -209,7 +224,11 @@ export function bannerFor(
         // Firmware stops everything on BLE drop (§5). Stop all pressed offline
         // is sent as ESTOP 1 first on reconnect (controller.stopAll), so the
         // page comes back Stopped: "Stop all stays on."
-        line: link.stopQueued ? 'Stop all stays on.' : 'Everything stopped.',
+        line: link.stopQueued
+          ? 'Stop all stays on.'
+          : link.autoDevice && !link.latchedAtDrop
+          ? 'Device is on Auto.'
+          : 'Everything stopped.',
         action: 'reconnect',
       };
     case 'estop':
@@ -225,25 +244,177 @@ export function bannerFor(
             : estopSource === 'unknown'
             ? 'Stop all is still on'
             : 'Everything is stopped',
-        line: UNLOCK_LINE,
+        line: link.autoOff ? AUTO_UNLOCK_LINE : UNLOCK_LINE,
       };
     case 'overtemp':
       return {
         tone: 'warn',
         icon: 'thermometer',
-        title: 'Too warm, paused',
-        line: overTempLine(tlm?.ntcC ?? null, otClear),
+        title: link.autoOff ? 'Too warm, Auto is off' : 'Too warm, paused',
+        line: link.autoOff
+          ? autoOverTempLine(tlm?.ntcC ?? null, otClear)
+          : overTempLine(tlm?.ntcC ?? null, otClear),
       };
     case 'lowbat':
       return {
         tone: 'warn',
         icon: 'battery',
-        title: 'Battery low, paused',
+        title: link.autoOff ? 'Battery low, Auto is off' : 'Battery low, paused',
         line: lowBatteryLine(tlm?.vbat ?? null),
       };
     default:
       return null;
   }
+}
+
+// ------------------------------------------------------------ auto / manual (§11.4–§11.6)
+
+/** E-stop line when the stop also ended Auto (§11.6.4: unlock leaves the device in manual). */
+export const AUTO_UNLOCK_LINE = 'Tap Unlock, then Auto to resume.';
+
+/** Over-temp line after Auto dropped (§11.5.4: never resumes by itself). */
+export function autoOverTempLine(ntcC: number | null, clearC: number | null): string {
+  const reading = ntcC !== null ? `${fmtC(ntcC)} now. ` : '';
+  return clearC === null ? `${reading}Tap Auto when cooler.` : `${reading}Tap Auto below ${fmtC(clearC)}.`;
+}
+
+/** EVT MODE reasons that get a notice (§11.4.6). CMD = the user's own switch; BOOT never reaches the app; TIMEOUT unused (maxMin 0, §11.5.6). */
+export type ModeNoticeReason =
+  | 'STOP'
+  | 'ESTOP'
+  | 'KEY'
+  | 'OVERTEMP'
+  | 'LOWBAT'
+  | 'HOST_TIMEOUT'
+  | 'BLE_DISCONNECT';
+
+/** auto -> manual by a stop event (§11.3.4 / §11.5.4). */
+export const AUTO_OFF_REASONS: ReadonlyArray<ModeNoticeReason> = [
+  'STOP',
+  'ESTOP',
+  'KEY',
+  'OVERTEMP',
+  'LOWBAT',
+];
+/** manual takeover -> back to auto by the device (§11.5.2 / §11.5.3). */
+export const BACK_TO_AUTO_REASONS: ReadonlyArray<ModeNoticeReason> = ['HOST_TIMEOUT', 'BLE_DISCONNECT'];
+
+/** Which reasons a mode change notices (null = no notice). */
+export function modeNoticeFor(
+  from: 'auto' | 'manual' | null,
+  to: 'auto' | 'manual',
+  reason: string | null,
+): ModeNoticeReason | null {
+  const r = (reason ?? '') as ModeNoticeReason;
+  if (to === 'manual' && from === 'auto' && AUTO_OFF_REASONS.includes(r)) {
+    return r;
+  }
+  if (to === 'auto' && BACK_TO_AUTO_REASONS.includes(r)) {
+    return r;
+  }
+  return null;
+}
+
+/**
+ * Notice after the mode changed without the user choosing it (two lines,
+ * design review 2026-10-04). Shown once the latch notice (if any) is gone,
+ * until the user picks a mode or moves a control.
+ */
+export function modeNoticeBanner(reason: ModeNoticeReason): BannerModel {
+  switch (reason) {
+    case 'HOST_TIMEOUT':
+      return {
+        tone: 'neutral',
+        icon: 'info',
+        title: 'Back on Auto',
+        line: 'The app paused, so Auto took over.',
+      };
+    case 'BLE_DISCONNECT':
+      return {
+        tone: 'neutral',
+        icon: 'info',
+        title: 'Back on Auto',
+        line: 'The link dropped, so Auto took over.',
+      };
+    case 'STOP':
+      return { tone: 'neutral', icon: 'info', title: 'Stopped, Auto is off', line: AUTO_RESUME_LINE };
+    case 'OVERTEMP':
+      return { tone: 'neutral', icon: 'info', title: 'Cooled down, Auto is off', line: AUTO_RESUME_LINE };
+    default:
+      return { tone: 'neutral', icon: 'info', title: 'Auto is off', line: AUTO_RESUME_LINE };
+  }
+}
+export const AUTO_RESUME_LINE = 'Tap Auto to turn it back on.';
+
+/** Touching a read-only control while Auto runs: never a silent takeover. */
+export const AUTO_HINT_TOAST = { title: 'Auto is on', line: 'Tap Manual to take over.' } as const;
+export const PZERO_PENDING_TOAST = {
+  title: 'Re-zeroing pressure',
+  line: 'Keep hands off the sensors.',
+} as const;
+export const PZERO_DONE_TOAST = {
+  title: 'Pressure re-zeroed',
+  line: 'Auto follows your touch again.',
+} as const;
+export const PZERO_MANUAL_TOAST = { title: "Couldn't re-zero", line: 'Re-zero works in Auto only.' } as const;
+
+/** Sensor status per auto input (§11.2, §11.4.4): ok / part (some channels) / off. */
+export type SrcState = 'ok' | 'part' | 'off';
+export interface AutoSensors {
+  /** J19 / J20 pressure (drives Pulse). */
+  pressure: SrcState;
+  /** PPG driving the upper wings (ch.auto.lraSrc.A). */
+  upper: SrcState;
+  /** PPG driving the lower wings (ch.auto.lraSrc.B). */
+  lower: SrcState;
+  overall: SrcState;
+}
+
+function srcState(flags: boolean[]): SrcState {
+  if (!flags.length) {
+    return 'off';
+  }
+  const n = flags.filter(Boolean).length;
+  return n === flags.length ? 'ok' : n === 0 ? 'off' : 'part';
+}
+
+/** null when the frame has no `src` (older firmware) or the device has no auto. */
+export function autoSensors(tlm: Telemetry | null, info: DeviceInfo | null): AutoSensors | null {
+  if (!tlm?.src || !info?.auto) {
+    return null;
+  }
+  const { fsr, ppg } = tlm.src;
+  const { A, B } = info.auto.lraSrc;
+  const pressure = srcState(fsr);
+  const upper = srcState(ppg[A] === undefined ? [] : [ppg[A]]);
+  const lower = srcState(ppg[B] === undefined ? [] : [ppg[B]]);
+  const all = [pressure, upper, lower];
+  const overall: SrcState = all.every(x => x === 'ok') ? 'ok' : all.every(x => x === 'off') ? 'off' : 'part';
+  return { pressure, upper, lower, overall };
+}
+
+/** §11.4.4: all failed -> stays in auto at 0; the app only hints. */
+export function sensorBanner(s: AutoSensors | null): BannerModel | null {
+  if (!s || s.overall === 'ok') {
+    return null;
+  }
+  return s.overall === 'off'
+    ? { tone: 'neutral', icon: 'info', title: 'Auto has no signal', line: 'Check the sensors touch skin.' }
+    : { tone: 'neutral', icon: 'info', title: 'Some sensors are off', line: 'Auto keeps those outputs off.' };
+}
+
+/** Global "Auto on" pill: ICD001-1 connected, running auto, no control page on screen. */
+export function autoPillVisible(
+  s: Pick<Icd001State, 'status' | 'autoSupported' | 'mode' | 'modePending' | 'info'>,
+  controlPageFocused: boolean,
+): boolean {
+  return (
+    !controlPageFocused &&
+    s.status === 'connected' &&
+    s.autoSupported &&
+    supportsAuto(s.info) &&
+    (s.modePending ?? s.mode) === 'auto'
+  );
 }
 
 export const COOLED_DOWN_BANNER: BannerModel = {

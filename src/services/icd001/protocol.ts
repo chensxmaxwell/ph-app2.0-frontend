@@ -190,6 +190,39 @@ export function clamp(v: number, min: number, max: number): number {
 
 /** Protocol id in v0 INFO (§7.2). INFO without `proto` = H11 v1.0 legacy. */
 export const ICD001_PROTO_V0 = 'ICD001-0';
+/** Auto / manual modes (§11, finalised in §11.4–§11.6). */
+export const ICD001_PROTO_V1 = 'ICD001-1';
+
+export type DeviceMode = 'auto' | 'manual';
+
+/**
+ * INFO `ch.mode` / `ch.boot` / `ch.auto` (§11, §11.4.7, §11.5.1). Present only
+ * when the firmware offers auto; the app shows Auto only when supportsAuto()
+ * is true (§11.4.16: proto "ICD001-1" and ch.mode contains "auto").
+ */
+export interface AutoCaps {
+  modes: string[];
+  /** §11.5.1: "auto" (device runs from physiological signals after power-on). */
+  boot: DeviceMode | null;
+  /** Auto voice-coil output range (TLM vhz in auto is 5–10 Hz, 0 = not firing, §11.4.8). */
+  vhz: { min: number; max: number };
+  press: { on: number; off: number; full: number } | null;
+  hr: { lo: number; hi: number } | null;
+  lraNoHr: number | null;
+  /** Order of TLM `src.fsr` (§11.4.4), e.g. ["J19","J20"]. */
+  fsr: string[];
+  /** Index into ch.ppg / src.ppg driving each wing group, e.g. {A:0,B:2}. */
+  lraSrc: { A: number; B: number };
+  /** Longest HB timeout the firmware accepts (§11.4.12). */
+  hbMaxS: number;
+  /** Max auto minutes, 0 = unlimited (§11.5.6: fixed 0). Parsed, never shown. */
+  maxMin: number;
+}
+
+export const AUTO_VHZ_FALLBACK = { min: 5, max: 10 } as const;
+export const AUTO_LRA_SRC_FALLBACK = { A: 0, B: 2 } as const;
+export const HB_MIN_S = 5;
+export const HB_MAX_FALLBACK_S = 30;
 
 export type LraGroupId = 'A' | 'B';
 
@@ -258,6 +291,8 @@ export interface DeviceInfo {
   modules: DeviceModules;
   /** Safety thresholds from INFO `ch.ot` / `ch.lb` (§8.4), fallback when absent. */
   safety: SafetyThresholds;
+  /** INFO ch.mode / ch.boot / ch.auto (§11); null when the device reports no modes. */
+  auto: AutoCaps | null;
   selfTest: Record<string, unknown>;
   raw: Json;
 }
@@ -326,6 +361,54 @@ function parseSafety(ch: Json | null): SafetyThresholds {
       : { ...LB_FALLBACK },
     fromInfo: { ot: otOk, lb: lbOk },
   };
+}
+
+function strArr(v: unknown): string[] {
+  return Array.isArray(v) ? v.map(x => str(x)).filter((x): x is string => x !== null) : [];
+}
+
+function parseAutoCaps(ch: Json | null): AutoCaps | null {
+  if (!ch || !Array.isArray(ch.mode)) {
+    return null;
+  }
+  const modes = strArr(ch.mode).map(m => m.toLowerCase());
+  const a = isObj(ch.auto) ? ch.auto : {};
+  const vr = isObj(a.vhz) ? a.vhz : null;
+  const vmin = vr ? num(vr.min) : null;
+  const vmax = vr ? num(vr.max) : null;
+  const press = isObj(a.press) ? a.press : null;
+  const pOn = press ? num(press.on) : null;
+  const pOff = press ? num(press.off) : null;
+  const pFull = press ? num(press.full) : null;
+  const hr = isObj(a.hr) ? a.hr : null;
+  const lo = hr ? num(hr.lo) : null;
+  const hi = hr ? num(hr.hi) : null;
+  const src = isObj(a.lraSrc) ? a.lraSrc : null;
+  const sa = src ? num(src.A) : null;
+  const sb = src ? num(src.B) : null;
+  const hbMax = num(a.hbMaxS);
+  const maxMin = num(a.maxMin);
+  const boot = str(ch.boot)?.toLowerCase();
+  return {
+    modes,
+    boot: boot === 'auto' || boot === 'manual' ? boot : null,
+    vhz:
+      vmin !== null && vmax !== null && vmin > 0 && vmax >= vmin
+        ? { min: vmin, max: vmax }
+        : { ...AUTO_VHZ_FALLBACK },
+    press: pOn !== null && pOff !== null && pFull !== null ? { on: pOn, off: pOff, full: pFull } : null,
+    hr: lo !== null && hi !== null ? { lo, hi } : null,
+    lraNoHr: num(a.lraNoHr),
+    fsr: strArr(a.fsr),
+    lraSrc: sa !== null && sb !== null ? { A: sa, B: sb } : { ...AUTO_LRA_SRC_FALLBACK },
+    hbMaxS: hbMax !== null && hbMax >= HB_MIN_S ? hbMax : HB_MAX_FALLBACK_S,
+    maxMin: maxMin !== null && maxMin > 0 ? maxMin : 0,
+  };
+}
+
+/** §11.4.16: Auto is offered only on proto "ICD001-1" whose INFO ch.mode lists "auto". */
+export function supportsAuto(info: DeviceInfo | null | undefined): boolean {
+  return !!info && info.proto === ICD001_PROTO_V1 && !!info.auto && info.auto.modes.includes('auto');
 }
 
 const LEGACY_VCM: VcmCaps = {
@@ -425,6 +508,7 @@ export function parseInfo(input: string | Json): DeviceInfo | null {
     ver: str(raw.ver),
     modules,
     safety: parseSafety(ch),
+    auto: parseAutoCaps(ch),
     selfTest,
     raw,
   };
@@ -466,6 +550,26 @@ export interface Telemetry {
   ot: boolean;
   /** Low-battery latch (v0 `lb`; null when the frame does not carry it, i.e. legacy). */
   lb: boolean | null;
+  /** §11.4.4: every ICD001-1 frame carries `mode`; null on older firmware. */
+  mode: DeviceMode | null;
+  /**
+   * §11.4.4 sensor status, 1 = usable, 0 = failed / not fitted (1 s debounce in
+   * firmware). `fsr` order = INFO ch.auto.fsr, `ppg` order = INFO ch.ppg. null = absent.
+   */
+  src: { fsr: boolean[]; ppg: boolean[] } | null;
+}
+
+function parseMode(v: unknown): DeviceMode | null {
+  const m = str(v)?.toLowerCase();
+  return m === 'auto' || m === 'manual' ? m : null;
+}
+
+function parseSrc(v: unknown): Telemetry['src'] {
+  if (!isObj(v)) {
+    return null;
+  }
+  const arr = (x: unknown) => (Array.isArray(x) ? x.map(flag) : []);
+  return { fsr: arr(v.fsr), ppg: arr(v.ppg) };
 }
 
 /** Battery % from vbat via the installed curve (piecewise linear, clamped). */
@@ -546,6 +650,8 @@ export function parseTelemetry(obj: Json): Telemetry {
     estop: flag(obj.estop),
     ot: flag(obj.ot),
     lb: 'lb' in obj ? flag(obj.lb) : null,
+    mode: parseMode(obj.mode),
+    src: parseSrc(obj.src),
   };
 }
 
@@ -609,6 +715,12 @@ export type OkReply =
   | { cmd: 'ESTOP'; on: boolean }
   | { cmd: 'STOP' }
   | { cmd: 'RATE'; n: number }
+  /** §11.4.2: `OK MODE <AUTO|MANUAL> [lastReason]` (lastReason only on the query). */
+  | { cmd: 'MODE'; mode: DeviceMode; reason: string | null }
+  /** §11.4.12: `OK HB s`. */
+  | { cmd: 'HB'; s: number }
+  /** §11.4.14: `OK PZERO` (EVT PZERO follows when done). */
+  | { cmd: 'PZERO' }
   | { cmd: 'other'; verb: string; args: string[] };
 
 const intTok = (t: string | undefined): number | null =>
@@ -641,6 +753,16 @@ export function parseOkReply(args: string[]): OkReply | null {
       return rest.length === 0 ? { cmd: 'STOP' } : null;
     case 'RATE':
       return allInts(1) ? { cmd: 'RATE', n: ints[0] as number } : null;
+    case 'MODE': {
+      const m = parseMode(rest[0]);
+      return m && rest.length <= 2
+        ? { cmd: 'MODE', mode: m, reason: rest[1] ? rest[1].toUpperCase() : null }
+        : null;
+    }
+    case 'HB':
+      return allInts(1) ? { cmd: 'HB', s: ints[0] as number } : null;
+    case 'PZERO':
+      return rest.length === 0 ? { cmd: 'PZERO' } : null;
     default:
       return { cmd: 'other', verb, args: rest };
   }
@@ -655,6 +777,72 @@ export function safetyErrOf(p: ParsedLine): SafetyErr | null {
   }
   const a = (p.args[0] || '').toUpperCase();
   return a === 'ESTOP' || a === 'OVERTEMP' || a === 'LOWBAT' ? a : null;
+}
+
+/** Command verbs the firmware can name at the end of an ERR (§11.4.5). */
+const ERR_VERBS = new Set([
+  'LRA',
+  'LPULSE',
+  'VHZ',
+  'VCM',
+  'TEST',
+  'MODE',
+  'AUTO',
+  'HB',
+  'PZERO',
+  'FREQ',
+  'RATE',
+  'GET',
+  'INFO',
+  'PING',
+  'STOP',
+  'ESTOP',
+]);
+
+export interface ErrInfo {
+  /** `MODE AUTO` / `MODE MANUAL` (two words), else the first word: ESTOP, RANGE, UNKNOWN, … */
+  reason: string;
+  /** Rejected command named by ICD001-1 firmware (`ERR <reason> <verb>`), null if not given. */
+  verb: string | null;
+}
+
+/**
+ * Split ERR words (§11.4.5): `ERR MODE AUTO LRA`, `ERR ESTOP MODE`,
+ * `ERR RANGE HB`, `ERR MODE MANUAL PZERO`; old firmware: `ERR ESTOP`,
+ * `ERR MODE AUTO` (no verb). Extra words on older firmware are ignored.
+ */
+export function parseErr(args: string[]): ErrInfo {
+  const a = args.map(x => x.toUpperCase());
+  if (a[0] === 'MODE' && (a[1] === 'AUTO' || a[1] === 'MANUAL')) {
+    const v = a[2];
+    return { reason: `MODE ${a[1]}`, verb: v && ERR_VERBS.has(v) ? v : null };
+  }
+  const last = a[a.length - 1];
+  return {
+    reason: a[0] ?? '',
+    verb: a.length >= 2 && last && ERR_VERBS.has(last) ? last : null,
+  };
+}
+
+/** §11.4.6 reasons, plus TIMEOUT (maxMin, §11.4 hardware note; never shown since maxMin = 0). */
+export const MODE_REASONS = [
+  'CMD',
+  'STOP',
+  'ESTOP',
+  'KEY',
+  'OVERTEMP',
+  'LOWBAT',
+  'HOST_TIMEOUT',
+  'BLE_DISCONNECT',
+  'BOOT',
+  'TIMEOUT',
+] as const;
+export type ModeReason = (typeof MODE_REASONS)[number];
+
+/** `EVT MODE AUTO|MANUAL <reason>` -> parts; unknown reason kept as text (tolerant). */
+export function parseModeEvt(args: string[]): { mode: DeviceMode; reason: string | null } | null {
+  const m = parseMode(args[0]);
+  return m ? { mode: m, reason: args[1] ? args[1].toUpperCase() : null } : null;
 }
 
 // ---------------------------------------------------------------- commands
@@ -733,6 +921,15 @@ export function formatVcmHz(hz: number, caps: VcmCaps): string {
 export const formatStop = (): string => 'STOP';
 export const formatEstop = (on: boolean): string => (on ? 'ESTOP 1' : 'ESTOP 0');
 export const formatRate = (hz: number): string => `RATE ${clamp(int(hz), 0, 20)}`;
+/** §11.1/§11.4.2: `MODE AUTO`, `MODE MANUAL`, or the bare `MODE` query. */
+export const formatMode = (m?: DeviceMode): string => (m ? `MODE ${m.toUpperCase()}` : 'MODE');
+/** §11.4.12: `HB s`, s = 0 (off) or 5–hbMaxS. */
+export const formatHb = (s: number, maxS: number = HB_MAX_FALLBACK_S): string => {
+  const v = int(s);
+  return `HB ${v <= 0 ? 0 : clamp(v, HB_MIN_S, maxS)}`;
+};
+export const formatPzero = (): string => 'PZERO';
+export const formatPing = (): string => 'PING';
 
 /** Wire form: every command ends with `\n` (§7.4). */
 export function encodeCommand(line: string): number[] {

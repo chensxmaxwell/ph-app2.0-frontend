@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useScreenWrapper } from '../../common/components/screen-wrapper/hooks';
 
 import { BLOB } from './assets';
+import { ModeSwitch } from './components/ModeSwitch';
 import { Notice } from './components/Notice';
 import { OverlayHost, contentBottomPadding, stopZoneHeight } from './components/OverlayHost';
 import { StopDock } from './components/StopDock';
@@ -25,6 +26,7 @@ import { text, v4 } from './theme';
 import { useAdvancedControl } from './useAdvancedControl';
 
 import type { CardId, CardView, IntensityView, RhythmView, SensorView } from './controller';
+import type { SrcState } from './model';
 
 /** Kept for deep links from older builds / the QA harness; v4 has no collapsible rows. */
 export type AdvancedControlParams = { expanded?: CardId } | undefined;
@@ -66,27 +68,53 @@ export const AdvancedControlScreen = ({
   const stopBottom = Math.max(insets.bottom + 4, 16);
   const zone = stopZoneHeight(stopBottom);
 
+  /**
+   * Auto (ICD001-1): controls show the device's actual output and take no
+   * input. A touch shows "Auto is on / Tap Manual to take over" (never a
+   * silent takeover, §11.5.5 is done by the Auto | Manual control only).
+   */
+  const readOnly = (key: string, node: React.ReactNode) => (
+    <Pressable
+      onPress={() => ctl.autoHint()}
+      accessibilityRole="button"
+      accessibilityLabel="Auto is on. Tap Manual to take over"
+      testID={`readonly-${key}`}
+    >
+      <View style={styles.auto} pointerEvents="none">
+        {node}
+      </View>
+    </Pressable>
+  );
+
   const wings = (c: IntensityView) => {
     const off = !c.enabled;
+    const sliders = c.card.groups.map((g, i) => (
+      <ValueSlider
+        key={g.id}
+        first={i === 0}
+        label={g.name}
+        value={c.values[g.id]}
+        min={0}
+        max={100}
+        unit="%"
+        disabled={off}
+        onChange={v => ctl.setWingValue(g.id, v)}
+        onRelease={v => ctl.setWingValue(g.id, v)}
+        testID={`slider-${g.id}`}
+        {...dragProps(g.id)}
+      />
+    ));
+    if (c.readOnly) {
+      return (
+        <ModuleCard key="wing" blob={BLOB.wingsCard} title={c.card.label} testID="card-wing">
+          {readOnly('wing', <View testID="controls-wing">{sliders}</View>)}
+        </ModuleCard>
+      );
+    }
     return (
       <ModuleCard key="wing" blob={BLOB.wingsCard} title={c.card.label} testID="card-wing">
         <View style={off && styles.dim} testID="controls-wing" pointerEvents={off ? 'none' : 'auto'}>
-          {c.card.groups.map((g, i) => (
-            <ValueSlider
-              key={g.id}
-              first={i === 0}
-              label={g.name}
-              value={c.values[g.id]}
-              min={0}
-              max={100}
-              unit="%"
-              disabled={off}
-              onChange={v => ctl.setWingValue(g.id, v)}
-              onRelease={v => ctl.setWingValue(g.id, v)}
-              testID={`slider-${g.id}`}
-              {...dragProps(g.id)}
-            />
-          ))}
+          {sliders}
         </View>
       </ModuleCard>
     );
@@ -122,9 +150,48 @@ export const AdvancedControlScreen = ({
   const pulseBullet = (p: RhythmView | undefined, b: SensorView | undefined) => {
     const off = p ? !p.enabled : false;
     const title = p && b ? 'Pulse & Bullet' : p ? p.card.label : b!.card.label;
+    const pzeroBtn = view.mode.pzero ? (
+      <Pressable
+        onPress={() => ctl.pzero()}
+        disabled={view.mode.pzero === 'busy'}
+        accessibilityRole="button"
+        accessibilityLabel="Re-zero pressure"
+        accessibilityState={{ busy: view.mode.pzero === 'busy' }}
+        style={({ pressed }) => [styles.btn, (pressed || view.mode.pzero === 'busy') && styles.pressed]}
+        testID="pzero"
+      >
+        <Text style={styles.btnText}>{view.mode.pzero === 'busy' ? 'Re-zeroing…' : 'Re-zero pressure'}</Text>
+      </Pressable>
+    ) : null;
+    const pulseSlider = p ? (
+      <ValueSlider
+        label="Pulse speed"
+        value={p.hz}
+        min={p.range.min}
+        max={p.range.max}
+        unit=" Hz"
+        idle={!p.on && dragging !== 'vcm'}
+        disabled={off}
+        onChange={hz => ctl.setPulseHz(hz)}
+        onRelease={hz => ctl.setPulseHz(hz)}
+        testID="slider-vcm"
+        {...dragProps('vcm')}
+      />
+    ) : null;
     return (
       <ModuleCard key="vcm-egg" blob={p ? BLOB.pulse : BLOB.bullet} title={title} testID="card-pulse-bullet">
-        {p ? (
+        {p && p.readOnly ? (
+          // Auto: the Pulse row carries Re-zero pressure (§11.4.14; pressure drives Pulse) in
+          // place of the switch; the speed slider shows the actual 5–10 Hz output read-only.
+          <>
+            <View style={styles.subRow} testID="row-pzero">
+              <Text style={styles.subLabel}>{p.card.label}</Text>
+              <View style={styles.subRight}>{pzeroBtn}</View>
+            </View>
+            {readOnly('vcm', <View testID="controls-vcm">{pulseSlider}</View>)}
+          </>
+        ) : null}
+        {p && !p.readOnly ? (
           <View style={off && styles.dim} testID="controls-vcm" pointerEvents={off ? 'none' : 'auto'}>
             <View style={styles.subRow}>
               <Text style={styles.subLabel}>{p.card.label}</Text>
@@ -132,19 +199,7 @@ export const AdvancedControlScreen = ({
                 <PulseSwitch value={p.on} onChange={on => ctl.setPulseOn(on)} disabled={off} label="Pulse" />
               </View>
             </View>
-            <ValueSlider
-              label="Pulse speed"
-              value={p.hz}
-              min={p.card.range.min}
-              max={p.card.range.max}
-              unit=" Hz"
-              idle={!p.on && dragging !== 'vcm'}
-              disabled={off}
-              onChange={hz => ctl.setPulseHz(hz)}
-              onRelease={hz => ctl.setPulseHz(hz)}
-              testID="slider-vcm"
-              {...dragProps('vcm')}
-            />
+            {pulseSlider}
           </View>
         ) : null}
         {b ? (
@@ -152,6 +207,30 @@ export const AdvancedControlScreen = ({
             {p ? <Image source={BLOB.bullet} style={styles.subBlob} /> : null}
             {p ? <Text style={styles.subLabel}>{b.card.label}</Text> : null}
             <View style={styles.subRight}>{bulletReadout(b)}</View>
+          </View>
+        ) : null}
+        {b && b.sensors ? (
+          <View
+            style={styles.subRow}
+            testID="row-sensors"
+            accessible
+            accessibilityLabel={sensorsA11y(b.sensors)}
+          >
+            <Text style={styles.subLabel}>Sensors</Text>
+            <View style={styles.subRight}>
+              {(
+                [
+                  ['Pressure', b.sensors.pressure],
+                  ['Upper', b.sensors.upper],
+                  ['Lower', b.sensors.lower],
+                ] as const
+              ).map(([label, st]) => (
+                <View key={label} style={styles.chip} testID={`src-${label.toLowerCase()}-${st}`}>
+                  <View style={[styles.srcDot, { backgroundColor: SRC_COLOR[st] }]} />
+                  <Text style={styles.chipText}>{label}</Text>
+                </View>
+              ))}
+            </View>
           </View>
         ) : null}
       </ModuleCard>
@@ -195,8 +274,18 @@ export const AdvancedControlScreen = ({
             batteryPct={device.batteryPct}
             onPress={() => ctl.reconnect()}
           />
+          {view.mode.supported ? (
+            <View style={styles.modeRow}>
+              <ModeSwitch
+                current={view.mode.current}
+                switching={view.mode.switching}
+                autoAllowed={view.mode.autoAllowed}
+                onChange={m => ctl.setMode(m)}
+              />
+            </View>
+          ) : null}
         </View>
-        <View style={styles.stack}>
+        <View style={[styles.stack, view.mode.supported && styles.stackUnderMode]}>
           {banner ? (
             <Notice
               model={banner}
@@ -228,6 +317,13 @@ export const AdvancedControlScreen = ({
   );
 };
 
+const SRC_COLOR: Record<SrcState, string> = { ok: v4.green, part: v4.accent, off: v4.red };
+const SRC_WORD: Record<SrcState, string> = { ok: 'ready', part: 'partly off', off: 'off' };
+
+function sensorsA11y(s: { pressure: SrcState; upper: SrcState; lower: SrcState }): string {
+  return `Sensors: pressure ${SRC_WORD[s.pressure]}, upper ${SRC_WORD[s.upper]}, lower ${SRC_WORD[s.lower]}`;
+}
+
 function bulletA11y(contact: boolean, hr: number | null): string {
   return contact ? `On skin, heart rate ${hr ? `${hr} bpm` : 'measuring'}` : 'Not on skin';
 }
@@ -240,7 +336,26 @@ const styles = StyleSheet.create({
   back: { position: 'absolute', left: 20, top: 0, width: 35, height: 35 },
   pillRow: { marginTop: 20, alignItems: 'center' },
   stack: { marginTop: 24, marginHorizontal: 24, gap: 12 },
+  /** Under the Auto | Manual control: 16 pt (the control already spaces it from the pill). */
+  stackUnderMode: { marginTop: 16 },
   dim: { opacity: v4.dimOpacity },
+  /** Auto: read-only live output, lighter than the paused dim so movement stays visible. */
+  auto: { opacity: 0.7 },
+  modeRow: { marginTop: 12, alignItems: 'center' },
+  chip: { flexDirection: 'row', alignItems: 'center', marginLeft: 12 },
+  srcDot: { width: 7, height: 7, borderRadius: 4, marginRight: 5 },
+  chipText: text(13, v4.white, 17),
+  btn: {
+    height: 32,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: v4.white,
+    backgroundColor: v4.pill,
+    justifyContent: 'center',
+  },
+  btnText: text(13, v4.white, 17),
+  pressed: { opacity: 0.7 },
   readouts: { flexDirection: 'row', alignItems: 'center' },
   ro: text(14, v4.white, 18),
   hr: { flexDirection: 'row', alignItems: 'center', marginLeft: 14 },

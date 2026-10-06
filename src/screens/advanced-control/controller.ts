@@ -10,9 +10,18 @@
  * Visual design v2 renders `AdvancedControlView` and calls the intent
  * methods; nothing here knows about colours, layout or components.
  */
+import { effectiveMode } from '../../services/icd001/client';
+import { supportsAuto } from '../../services/icd001/protocol';
+
 import {
+  AUTO_HINT_TOAST,
+  AutoSensors,
   BannerModel,
   COOLED_DOWN_BANNER,
+  ModeNoticeReason,
+  PZERO_DONE_TOAST,
+  PZERO_MANUAL_TOAST,
+  PZERO_PENDING_TOAST,
   COOLED_DOWN_MS,
   HOTSPOT_ZONES,
   HotspotZone,
@@ -27,14 +36,18 @@ import {
   SensorCard,
   SensorReading,
   WingCtx,
+  autoSensors,
   bannerFor,
   beatLabel,
   buildCards,
   deriveScreenState,
   displayBatteryPct,
   mapAction,
+  modeNoticeBanner,
+  modeNoticeFor,
   rhythmPresets,
   runCalls,
+  sensorBanner,
   sensorReading,
   sensorSummary,
   wingFreqCorrection,
@@ -44,7 +57,7 @@ import {
 import { PulseSpeedStore, memoryPulseSpeedStore } from './pulseMemory';
 
 import type { Icd001State } from '../../services/icd001/client';
-import type { DeviceInfo, LraGroupId, SafetyThresholds } from '../../services/icd001/protocol';
+import type { DeviceInfo, DeviceMode, LraGroupId, SafetyThresholds } from '../../services/icd001/protocol';
 import type { DiscoveredDevice } from '../../services/icd001/transport';
 
 export type CardId = ModuleCard['id'];
@@ -67,6 +80,12 @@ export interface ClientLike extends ControlClient {
   requestEstopOnConnect(): void;
   downgradeQueuedEstop(): void;
   stopForSafety(reason: string): void;
+  /** ICD001-1: MODE AUTO / MODE MANUAL (§11.4). */
+  setMode(m: DeviceMode): boolean;
+  /** ICD001-1: PZERO (auto only, §11.4.14). */
+  pzero(): boolean;
+  /** Leave page / background: STOP, nothing (auto) or MODE AUTO hand-back (§11.6.3). */
+  releaseControl(reason: string): void;
 }
 
 /** Value shown on the collapsed row (design v2 §6.3); hidden while expanded. */
@@ -88,6 +107,8 @@ export interface IntensityView {
   values: Record<LraGroupId, number>;
   link: boolean;
   summary: string;
+  /** Auto running: sliders show the device's actual output, no input (§11.3.8). */
+  readOnly: boolean;
 }
 
 export interface RhythmView {
@@ -101,6 +122,9 @@ export interface RhythmView {
   presets: { soft: number; medium: number; strong: number };
   beat: 'Soft' | 'Medium' | 'Strong';
   summary: string;
+  /** Slider range: card.range in manual, INFO ch.auto.vhz (5–10 Hz) in auto (§11.4.8). */
+  range: { min: number; max: number };
+  readOnly: boolean;
 }
 
 export interface SensorView {
@@ -114,6 +138,8 @@ export interface SensorView {
   summary: string;
   /** Egg actuator is not on the hardware yet: 待硬件 / "Needs hardware". */
   actuator: 'needs-hardware' | 'available';
+  /** Auto running: status of the sensors auto follows (TLM src, §11.4.4); null otherwise. */
+  sensors: AutoSensors | null;
 }
 
 export type CardView = IntensityView | RhythmView | SensorView;
@@ -166,6 +192,19 @@ export interface AdvancedControlView {
   toast: { title: string; line: string } | null;
   /** Stop all pressed while offline; ESTOP 1 goes out first on the next connect. */
   stopQueued: boolean;
+  /**
+   * Auto | Manual control (ICD001-1 only, §11.4.16). `current` follows the
+   * device (an in-flight switch shows as its target, `switching`). Auto can't
+   * be chosen while latched (§11.4.10).
+   */
+  mode: {
+    supported: boolean;
+    current: DeviceMode | null;
+    switching: boolean;
+    autoAllowed: boolean;
+    /** Re-zero pressure shown (auto only, §11.4.14); busy between OK and EVT PZERO. */
+    pzero: 'available' | 'busy' | null;
+  };
 }
 
 type Listener = () => void;
@@ -223,6 +262,12 @@ export class AdvancedControlController {
   private cooledUntil = 0;
   private toast: { title: string; line: string; until: number } | null = null;
   private stopQueued = false;
+  /** Mode changed without the user choosing it; cleared by a mode pick or a control input. */
+  private modeNotice: ModeNoticeReason | null = null;
+  private seenModeChangeId: number | null = null;
+  private seenPzeroAt: number | null = null;
+  /** E-stop / over-temp / low battery was on when the link dropped (§11.6.2 copy). */
+  private latchedAtDrop = false;
   private holdStart: number | null = null;
   private holdTimer: ReturnType<typeof setInterval> | null = null;
   private msgTimer: ReturnType<typeof setTimeout> | null = null;
@@ -235,6 +280,8 @@ export class AdvancedControlController {
     this.s = client.getState();
     this.seenErrAt = this.s.lastErr?.at ?? null;
     this.seenEstopChangeAt = this.s.estopChange?.at ?? null;
+    this.seenModeChangeId = this.s.modeChange?.id ?? null;
+    this.seenPzeroAt = this.s.pzero?.at ?? null;
     this.absorb(this.s);
     this.recompute();
   }
@@ -295,7 +342,59 @@ export class AdvancedControlController {
     this.emit();
   }
 
+  // ------------------------------------------------------------ auto / manual
+
+  /** Auto | Manual control (§11.4): Manual = explicit takeover, Auto = hand back. */
+  setMode(m: DeviceMode): void {
+    this.modeNotice = null;
+    this.toast = null;
+    if (m === 'manual') {
+      // takeover starts from 0 (the switch zeroes, §11.3.2): no stale optimistic values
+      this.wing.values = { A: 0, B: 0 };
+      this.pulse.hz = 0;
+    }
+    this.client.setMode(m);
+    this.emit();
+  }
+
+  /** A read-only control was touched while Auto runs: hint, never a silent takeover. */
+  autoHint(): void {
+    this.showToast(AUTO_HINT_TOAST);
+  }
+
+  /** Re-zero pressure (auto only, §11.4.14). */
+  pzero(): void {
+    if (this.client.pzero()) {
+      this.showToast(PZERO_PENDING_TOAST);
+    }
+  }
+
+  /** Auto is (or is about to be) running on an ICD001-1 device: controls are read-only. */
+  private get inAuto(): boolean {
+    return supportsAuto(this.s.info) && effectiveMode(this.s) === 'auto';
+  }
+
+  /** Guard for every manual input: in auto, hint instead of sending (§11.4.9). */
+  private blockedByAuto(): boolean {
+    if (this.inAuto) {
+      this.autoHint();
+      return true;
+    }
+    this.modeNotice = null;
+    return false;
+  }
+
+  private showToast(t: { title: string; line: string }): void {
+    const now = this.now();
+    this.toast = { title: t.title, line: t.line, until: now + TOAST_MS };
+    this.schedule(TOAST_MS);
+    this.emit();
+  }
+
   setWingValue(group: LraGroupId, value: number): void {
+    if (this.blockedByAuto()) {
+      return;
+    }
     const v = Math.round(Math.max(0, Math.min(100, value)));
     const groups: LraGroupId[] = this.wing.link ? ['A', 'B'] : [group];
     for (const g of groups) {
@@ -309,6 +408,9 @@ export class AdvancedControlController {
   }
 
   setWingOn(on: boolean): void {
+    if (this.blockedByAuto()) {
+      return;
+    }
     if (on) {
       this.wing.values = { ...this.wing.restore };
     } else {
@@ -329,6 +431,9 @@ export class AdvancedControlController {
   }
 
   setPulseHz(hz: number, preset = false): void {
+    if (this.blockedByAuto()) {
+      return;
+    }
     const card = this.card('vcm') as RhythmCard | undefined;
     if (!card) {
       return;
@@ -347,6 +452,9 @@ export class AdvancedControlController {
   }
 
   setPulseOn(on: boolean): void {
+    if (this.blockedByAuto()) {
+      return;
+    }
     const card = this.card('vcm') as RhythmCard | undefined;
     if (!card) {
       return;
@@ -447,10 +555,12 @@ export class AdvancedControlController {
   }
 
   /**
-   * Leaving the page (blur/unmount): STOP all outputs, once per visit (blur
-   * followed by unmount sends a single STOP; audit F10). An e-stop queued while
-   * offline becomes a plain STOP: without this page there is no Unlock on
-   * screen, so the device must not reconnect latched behind another page.
+   * Leaving the page (blur/unmount), once per visit (blur followed by unmount
+   * acts once; audit F10). Older firmware: STOP. ICD001-1 (§11.6.3): auto keeps
+   * running (nothing sent), a manual takeover is handed back with MODE AUTO,
+   * latched -> STOP (client.releaseControl). An e-stop queued while offline
+   * becomes a plain STOP: without this page there is no Unlock on screen, so
+   * the device must not reconnect latched behind another page.
    */
   leave(): void {
     this.pulseStore.flush();
@@ -463,7 +573,7 @@ export class AdvancedControlController {
       this.client.downgradeQueuedEstop();
       this.stopQueued = false;
     }
-    this.client.stopForSafety('leave advanced control');
+    this.client.releaseControl('leave advanced control');
   }
 
   // ------------------------------------------------------------ internals
@@ -521,11 +631,43 @@ export class AdvancedControlController {
         this.releasedUntil = 0;
       }
     }
+    // ICD001-1 mode changes the user did not choose -> notice (§11.4.6, §11.5)
+    const mc = s.modeChange;
+    if (mc && mc.id !== this.seenModeChangeId) {
+      this.seenModeChangeId = mc.id;
+      const notice = modeNoticeFor(mc.from, mc.to, mc.reason);
+      if (notice) {
+        this.modeNotice = notice;
+      } else if (mc.reason === 'CMD') {
+        this.modeNotice = null;
+      }
+    }
+    if (s.status !== 'connected' && prev.status === 'connected') {
+      this.latchedAtDrop = prev.estop || prev.overTemp || prev.lowBattery;
+      this.modeNotice = null; // the Connection lost notice takes over; reconnect re-reads the mode
+    }
+    // PZERO done (EVT PZERO, also the PAUSE key)
+    if (s.pzero && s.pzero.at !== this.seenPzeroAt) {
+      this.seenPzeroAt = s.pzero.at;
+      if (s.pzero.state === 'done') {
+        this.toast = { ...PZERO_DONE_TOAST, until: t + TOAST_MS };
+        this.schedule(TOAST_MS);
+      }
+    }
     // non-safety ERR after an input -> revert to device values + toast
     if (s.lastErr && s.lastErr.at !== this.seenErrAt) {
       this.seenErrAt = s.lastErr.at;
       const safety = s.lastSafetyErr?.at === s.lastErr.at;
-      if (!safety && this.lastInput && t - this.lastInput.at < ERR_ATTRIBUTION_MS) {
+      const ei = s.lastErrInfo?.at === s.lastErr.at ? s.lastErrInfo : null;
+      // §11.4.9 race: an input already on the wire when MODE AUTO went out is
+      // refused with `ERR MODE AUTO <verb>`: expected, silent. MODE / HB
+      // rejections have their own notices (latch) or none (RANGE HB).
+      const silent =
+        !!ei && (ei.reason === 'MODE AUTO' || ei.verb === 'MODE' || ei.verb === 'AUTO' || ei.verb === 'HB');
+      if (ei?.verb === 'PZERO') {
+        this.toast = { ...PZERO_MANUAL_TOAST, until: t + TOAST_MS };
+        this.schedule(TOAST_MS);
+      } else if (!safety && !silent && this.lastInput && t - this.lastInput.at < ERR_ATTRIBUTION_MS) {
         this.inputAt = { A: -1e12, B: -1e12, vcm: -1e12 };
         this.toast = {
           title: `Couldn't change ${CARD_NAME[this.lastInput.card]}`,
@@ -576,6 +718,11 @@ export class AdvancedControlController {
     }
     const tlm = s.tlm;
     if (!tlm || s.status !== 'connected') {
+      return;
+    }
+    if (supportsAuto(s.info) && effectiveMode(s) !== 'manual') {
+      // Auto: cards render telemetry directly; the manual values / remembered
+      // Pulse speed are not overwritten by auto output (5–10 Hz, §11.4.8).
       return;
     }
     const t = this.now();
@@ -643,8 +790,44 @@ export class AdvancedControlController {
   private buildViews(info: DeviceInfo | null, live: boolean, screen: ScreenState): CardView[] {
     const s = this.s;
     const tlm = live ? s.tlm : null;
+    const auto = live && this.inAuto;
+    const autoRange = info?.auto?.vhz ?? null;
     return buildCards(info).map((card): CardView => {
       const expanded = live && this.expanded === card.id;
+      if (card.kind === 'intensity' && auto) {
+        const values = { A: tlm ? tlm.lra[0] : 0, B: tlm ? tlm.lra[1] : 0 };
+        return {
+          kind: 'intensity',
+          row: { kind: 'ab', A: values.A, B: values.B },
+          card,
+          expanded,
+          enabled: false,
+          on: values.A > 0 || values.B > 0,
+          values,
+          link: this.wing.link,
+          summary: 'Auto',
+          readOnly: true,
+        };
+      }
+      if (card.kind === 'rhythm' && auto) {
+        const hz = tlm && tlm.vcm.on ? tlm.vcm.hz ?? 0 : 0;
+        const range = autoRange ?? card.range;
+        const presets = rhythmPresets({ ...range, def: range.min });
+        return {
+          kind: 'rhythm',
+          row: hz > 0 ? { kind: 'hz', hz } : { kind: 'off', text: 'Off' },
+          card,
+          expanded,
+          enabled: false,
+          on: hz > 0,
+          hz: hz > 0 ? hz : range.min,
+          presets,
+          beat: beatLabel(hz, presets),
+          summary: 'Auto',
+          range: { min: range.min, max: range.max },
+          readOnly: true,
+        };
+      }
       if (card.kind === 'intensity') {
         const enabled = live && screen.controlsEnabled;
         // Disconnected / e-stopped: firmware has stopped everything (§5, §7.5).
@@ -664,6 +847,7 @@ export class AdvancedControlController {
             : !enabled && screen.kind !== 'normal'
             ? 'Paused'
             : `${sum.parts.join(' · ')} · ${sum.mode}`,
+          readOnly: false,
         };
       }
       if (card.kind === 'rhythm') {
@@ -692,6 +876,8 @@ export class AdvancedControlController {
             : hz > 0
             ? `${hz} Hz · ${beat}`
             : 'Off',
+          range: { min: card.range.min, max: card.range.max },
+          readOnly: false,
         };
       }
       const reading = sensorReading(tlm, card);
@@ -713,6 +899,7 @@ export class AdvancedControlController {
         reading,
         summary: live ? `${sum.strong}${sum.rest}` : '—',
         actuator: card.hasActuator ? 'available' : 'needs-hardware',
+        sensors: auto ? autoSensors(tlm, info) : null,
       };
     });
   }
@@ -745,10 +932,26 @@ export class AdvancedControlController {
     const t = this.now();
     const screen = deriveScreenState(s);
     const live = screen.kind !== 'disconnected';
+    const autoDevice = supportsAuto(live ? s.info : this.lastInfo);
+    const n = this.modeNotice;
+    const autoOff =
+      (screen.kind === 'estop' && (n === 'ESTOP' || n === 'KEY')) ||
+      (screen.kind === 'overtemp' && n === 'OVERTEMP') ||
+      (screen.kind === 'lowbat' && n === 'LOWBAT');
     let banner = bannerFor(screen, s.tlm, s.estopSource, s.info?.safety ?? null, {
       hadDevice: this.lastName !== null,
       stopQueued: this.stopQueued,
+      autoDevice,
+      latchedAtDrop: this.latchedAtDrop,
+      autoOff,
     });
+    if (!banner && live && n) {
+      banner = modeNoticeBanner(n);
+    }
+    const inAuto = live && this.inAuto;
+    if (!banner && inAuto && effectiveMode(s) === s.mode) {
+      banner = sensorBanner(autoSensors(s.tlm, s.info));
+    }
     if (!banner && live && t < this.releasedUntil) {
       banner = RELEASED_ON_DEVICE_BANNER;
     }
@@ -789,6 +992,13 @@ export class AdvancedControlController {
       stage: this.stageView(screen, live),
       toast: this.toast && t < this.toast.until ? { title: this.toast.title, line: this.toast.line } : null,
       stopQueued: this.stopQueued,
+      mode: {
+        supported: live && autoDevice,
+        current: live && autoDevice ? effectiveMode(s) : null,
+        switching: live && s.modePending !== null,
+        autoAllowed: live && !s.estop && !s.overTemp && !s.lowBattery,
+        pzero: inAuto && s.mode === 'auto' ? (s.pzero?.state === 'pending' ? 'busy' : 'available') : null,
+      },
     };
   }
 }

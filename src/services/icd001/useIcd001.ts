@@ -4,7 +4,10 @@
  *   const { state, client } = useIcd001();
  *   useIcd001SafetyStop();   // on the advanced-control page: STOP on blur/unmount
  *
- * App background -> STOP is installed globally the first time the hook mounts.
+ * App background / foreground is installed globally the first time the hook
+ * mounts: older firmware -> STOP (§5); ICD001-1 -> release control (auto keeps
+ * running, a manual takeover is handed back with MODE AUTO, §11.6.3) and
+ * RATE 2 while in the background, RATE 10 back in the foreground.
  */
 import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
@@ -27,7 +30,9 @@ function ensureAppStateHook(): void {
   }
   appStateSub = AppState.addEventListener('change', next => {
     if (next === 'background') {
-      client?.stopForSafety('app background');
+      client?.onAppBackground();
+    } else if (next === 'active') {
+      client?.onAppForeground();
     }
   });
 }
@@ -89,4 +94,34 @@ export function useIcd001SafetyStop(): void {
     }, []),
   );
   useEffect(() => () => getIcd001Client().stopForSafety('unmount'), []);
+}
+
+// ------------------------------------------------------------ control-page focus
+
+/**
+ * How many ICD-001 control pages (Manual / Advanced control) are focused. The
+ * global "Auto on" pill shows only when none is (it lives on every other page).
+ */
+let controlFocus = 0;
+const focusListeners = new Set<() => void>();
+
+export function setControlPageFocused(on: boolean): void {
+  controlFocus = Math.max(0, controlFocus + (on ? 1 : -1));
+  focusListeners.forEach(l => l());
+}
+
+export function isControlPageFocused(): boolean {
+  return controlFocus > 0;
+}
+
+export function useControlPageFocused(): boolean {
+  return useSyncExternalStore(
+    useCallback((cb: () => void) => {
+      focusListeners.add(cb);
+      return () => {
+        focusListeners.delete(cb);
+      };
+    }, []),
+    isControlPageFocused,
+  );
 }

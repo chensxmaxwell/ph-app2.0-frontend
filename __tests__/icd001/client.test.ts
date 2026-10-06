@@ -48,7 +48,7 @@ describe('Icd001Client + simulator', () => {
         .getState()
         .devices.map(d => d.name)
         .sort(),
-    ).toEqual(['H11-91B1', 'ICD1-5A3C']);
+    ).toEqual(['H11-91B1', 'ICD1-5A3C', 'ICD1-7E21']);
     client.destroy();
   });
 

@@ -5,6 +5,8 @@
  */
 import {
   DeviceInfo,
+  DeviceMode,
+  ErrInfo,
   ICD001_DEFAULT_TLM_HZ,
   LineAssembler,
   LraTarget,
@@ -14,14 +16,21 @@ import {
   encodeCommand,
   formatEstop,
   formatFreq,
+  formatHb,
   formatLpulse,
   formatLra,
+  formatMode,
+  formatPing,
+  formatPzero,
   formatRate,
   formatStop,
   formatVcmHz,
+  parseErr,
   parseInfo,
   parseLine,
+  parseModeEvt,
   safetyErrOf,
+  supportsAuto,
 } from './protocol';
 import { CommandScheduler } from './throttle';
 import { decodeUtf8 } from './utf8';
@@ -38,6 +47,33 @@ export type ConnStatus =
   | 'error';
 
 export type LockReason = 'disconnected' | 'noinfo' | 'estop' | 'overtemp' | 'lowbat' | 'stale';
+
+/**
+ * Leaving the control page / app background while the user holds a manual
+ * takeover on ICD001-1 (§11.6.3): 'handback' = `MODE AUTO` (firmware zeroes,
+ * then auto, reason CMD); 'stop' = `STOP` (stays manual at 0). One switch.
+ */
+export const MANUAL_LEAVE_ACTION: 'handback' | 'stop' = 'handback';
+/** HB seconds the app asks for on ICD001-1 (§11.4.12; protects the manual takeover). */
+export const APP_HB_S = 10;
+/** A PING goes out with a TLM frame when nothing was written for this long (any command feeds HB). */
+export const PING_IDLE_MS = 3000;
+/** No OK / ERR to a MODE change within this window -> re-query with `MODE`. */
+export const MODE_REPLY_TIMEOUT_MS = 2000;
+/** TLM rate while the app is in the background (ICD001-1). */
+export const BACKGROUND_TLM_HZ = 2;
+
+export interface ModeChange {
+  from: DeviceMode | null;
+  to: DeviceMode;
+  /** §11.4.6 reason (CMD, STOP, ESTOP, KEY, OVERTEMP, LOWBAT, HOST_TIMEOUT, …); null = seen in TLM only. */
+  reason: string | null;
+  /** 'evt' = EVT MODE; 'query' = OK MODE <x> <lastReason> after a reconnect; 'tlm' = no EVT seen. */
+  via: 'evt' | 'query' | 'tlm';
+  at: number;
+  /** Increments per change (dedupe key; two changes can share a millisecond). */
+  id: number;
+}
 
 export interface Icd001State {
   transport: 'ble' | 'mock';
@@ -75,6 +111,29 @@ export interface Icd001State {
   error: string | null;
   /** Last ~40 raw lines in/out, for the debug screen. */
   log: string[];
+  // ---- ICD001-1 auto / manual (§11.4–§11.6). All null / false on older firmware.
+  /** INFO says proto ICD001-1 with ch.mode "auto" (§11.4.16). */
+  autoSupported: boolean;
+  /** Device mode (TLM `mode` is authoritative, plus OK MODE / EVT MODE). */
+  mode: DeviceMode | null;
+  /** MODE AUTO / MODE MANUAL sent, reply not in yet. UI treats it as the mode. */
+  modePending: DeviceMode | null;
+  /** Last reason for the current mode (EVT MODE / MODE query lastReason). */
+  modeReason: string | null;
+  modeChange: ModeChange | null;
+  /** `OK HB s` seen on this connection (0 = off). */
+  hb: number | null;
+  /** PZERO: 'pending' after OK PZERO, 'done' at EVT PZERO (also the PAUSE key). */
+  pzero: { state: 'pending' | 'done'; at: number } | null;
+  /** Parsed words of the last ERR (§11.4.5). */
+  lastErrInfo: (ErrInfo & { at: number }) | null;
+  /** App in the background (RATE 2, §C of REVIEW-S11-app). */
+  background: boolean;
+}
+
+/** Mode the UI should show: an in-flight change wins over the last report. */
+export function effectiveMode(s: Pick<Icd001State, 'mode' | 'modePending'>): DeviceMode | null {
+  return s.modePending ?? s.mode;
 }
 
 export type EstopSource = 'app' | 'device' | 'unknown';
@@ -127,6 +186,14 @@ export class Icd001Client {
    * Cleared when the latch is seen released (OK/EVT ESTOP 0, TLM estop 0).
    */
   private appEstopDevice: string | null = null;
+  /** Last write time (any command feeds the firmware HB, §11.4.12). */
+  private lastWriteAt = 0;
+  private modeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Effective mode when the link dropped (reconnect notice via MODE lastReason). */
+  private modeAtLinkLoss: DeviceMode | null = null;
+  /** MODE query sent by establish(); its reply may carry BLE_DISCONNECT. */
+  private awaitingModeQuery = false;
+  private modeSeq = 0;
   /**
    * Single place E-stop state changes. The message type tells who caused it
    * (PROTOCOL §9, hardware-confirmed; no time windows):
@@ -206,6 +273,15 @@ export class Icd001Client {
       reconnectAttempt: 0,
       error: null,
       log: [],
+      autoSupported: false,
+      mode: null,
+      modePending: null,
+      modeReason: null,
+      modeChange: null,
+      hb: null,
+      pzero: null,
+      lastErrInfo: null,
+      background: false,
     };
     this.scheduler = new CommandScheduler((line, urgent) => this.write(line, urgent), {
       onError: (line, e) => this.pushLog(`! write failed: ${line} (${String(e)})`),
@@ -324,6 +400,8 @@ export class Icd001Client {
       if (!info) {
         throw new Error('设备没有返回 INFO');
       }
+      const auto = supportsAuto(info);
+      this.clearModeTimer();
       this.set({
         info,
         tlm: null,
@@ -332,6 +410,12 @@ export class Icd001Client {
         estopSource: null,
         overTemp: false,
         lowBattery: false,
+        autoSupported: auto,
+        mode: null,
+        modePending: null,
+        modeReason: null,
+        hb: null,
+        pzero: null,
       });
       this.legacyLowBat = false;
       this.legacyLbAboveSince = null;
@@ -342,9 +426,17 @@ export class Icd001Client {
         // State/source follow the `OK ESTOP 1` reply (§9), like setEstop().
         await this.write(formatEstop(true), true);
       }
-      await this.write(formatRate(this.opts.tlmHz), true);
+      await this.write(formatRate(this.state.background ? BACKGROUND_TLM_HZ : this.opts.tlmHz), true);
       if (first === 'stop') {
         await this.write(formatStop(), true);
+      }
+      if (auto) {
+        // §11.4.12 HB always on for this connection (auto ignores it, §11.5.3; it
+        // returns a frozen manual takeover to auto). Then read the mode + lastReason
+        // (§11.4.2): usually AUTO BOOT (§11.5.1). The app never sends MODE AUTO here (§11.4.11).
+        await this.write(formatHb(APP_HB_S, info.auto?.hbMaxS), true);
+        this.awaitingModeQuery = true;
+        await this.write(formatMode(), true);
       }
       this.set({ status: 'connected', reconnectAttempt: 0 });
       this.startWatchdog();
@@ -397,6 +489,12 @@ export class Icd001Client {
   private onLinkLost(): void {
     this.scheduler.clear();
     this.stopWatchdog();
+    this.clearModeTimer();
+    if (this.state.autoSupported) {
+      this.modeAtLinkLoss = effectiveMode(this.state);
+      // §11.5.2: device returns to auto by itself (manual -> zero -> auto) unless latched.
+      this.set({ modePending: null, hb: null });
+    }
     this.pushLog('! link lost (firmware stops all actuators)');
     if (this.userDisconnect || !this.state.device) {
       this.set({ status: 'disconnected', tlm: null, tlmAt: null });
@@ -454,6 +552,7 @@ export class Icd001Client {
   destroy(): void {
     this.clearReconnect();
     this.stopWatchdog();
+    this.clearModeTimer();
     this.scheduler.clear();
     this.unsubs.forEach(u => u());
     this.listeners.clear();
@@ -493,10 +592,15 @@ export class Icd001Client {
         const tripped =
           t.format === 'legacy' &&
           ((overTemp && !this.state.overTemp) || (lowBattery && !this.state.lowBattery));
-        this.set(this.applyEstop(t.estop, 'tlm', { tlm: t, tlmAt: now, overTemp, lowBattery }));
+        const patch = this.applyEstop(t.estop, 'tlm', { tlm: t, tlmAt: now, overTemp, lowBattery });
+        if (this.state.autoSupported && t.mode) {
+          Object.assign(patch, this.modeFromTlm(t.mode, now));
+        }
+        this.set(patch);
         if (tripped) {
           this.stopForSafety('legacy app-side latch');
         }
+        this.heartbeat(now);
         return;
       }
       case 'info':
@@ -509,6 +613,12 @@ export class Icd001Client {
         if (ack?.cmd === 'ESTOP') {
           // direct reply to our ESTOP n (the only ESTOP acknowledgement, §9)
           this.set(this.applyEstop(ack.on, 'ok'));
+        } else if (ack?.cmd === 'MODE') {
+          this.onModeReply(ack.mode, ack.reason);
+        } else if (ack?.cmd === 'HB') {
+          this.set({ hb: ack.s });
+        } else if (ack?.cmd === 'PZERO') {
+          this.set({ pzero: { state: 'pending', at: Date.now() } });
         }
         this.set({ lastReply: line, lastAck: ack ? { ...ack, at: Date.now() } : this.state.lastAck });
         this.pushLog(ack ? `< ${line}` : `< ${line}   # malformed OK (§10.5)`);
@@ -519,9 +629,25 @@ export class Icd001Client {
         // tlm.vcm. Safety rejections map straight onto lock reasons (§7.5).
         const se = safetyErrOf(p);
         const now = Date.now();
+        const ei = parseErr(p.args);
         // value not stored: the same value must be sendable again (dedupe reset)
         this.scheduler.forget();
-        const patch: Partial<Icd001State> = { lastErr: { text: line, at: now }, lastReply: line };
+        const patch: Partial<Icd001State> = {
+          lastErr: { text: line, at: now },
+          lastReply: line,
+          lastErrInfo: { ...ei, at: now },
+        };
+        if (ei.verb === 'MODE' || ei.verb === 'AUTO') {
+          // MODE AUTO refused while latched (§11.4.10): no switch; re-read the mode.
+          patch.modePending = null;
+          this.clearModeTimer();
+          if (this.state.status === 'connected') {
+            this.write(formatMode(), true).catch(() => undefined);
+          }
+        }
+        if (ei.verb === 'PZERO') {
+          patch.pzero = null;
+        }
         if (se) {
           patch.lastSafetyErr = { reason: se, at: now };
           // ERR ESTOP: state comes from EVT ESTOP / TLM (§8.3); the GET below
@@ -551,7 +677,15 @@ export class Icd001Client {
         } else if (p.name === 'LOWBAT') {
           // v0: EVT LOWBAT 1 / EVT LOWBAT 0 (bare EVT LOWBAT treated as 1)
           this.set({ lowBattery: p.args[0] !== '0' });
+        } else if (p.name === 'MODE') {
+          const m = parseModeEvt(p.args);
+          if (m) {
+            this.onModeEvt(m.mode, m.reason);
+          }
+        } else if (p.name === 'PZERO') {
+          this.set({ pzero: { state: 'done', at: Date.now() } });
         }
+        // `EVT HOST_TIMEOUT STOP` (§11.4.12, superseded by §11.5.3): outputs zeroed; TLM follows.
         return;
       default:
         this.pushLog(`< ${line}`);
@@ -566,6 +700,7 @@ export class Icd001Client {
       throw new Error('no device');
     }
     this.pushLog(`> ${line}`);
+    this.lastWriteAt = Date.now();
     // v0 buffers until \n so a long command may span writes; legacy may not.
     const allowSplit = this.state.info ? !this.state.info.legacy : false;
     await this.transport.write(dev.id, encodeCommand(line), urgent, allowSplit);
@@ -575,8 +710,15 @@ export class Icd001Client {
     return this.state.status === 'connected' && !!this.state.device;
   }
 
-  /** Non-zero actuator values are refused while locked; zero always allowed. */
+  /**
+   * Non-zero actuator values are refused while locked; zero always allowed.
+   * ICD001-1: only in (or switching to) manual; the firmware refuses every
+   * actuator command in auto with `ERR MODE AUTO <verb>` (§11.4.9).
+   */
   private canActuate(value: number): boolean {
+    if (this.state.autoSupported && effectiveMode(this.state) !== 'manual') {
+      return false;
+    }
     return this.linkUp && (value <= 0 || !this.state.locked);
   }
 
@@ -738,6 +880,178 @@ export class Icd001Client {
   stopForSafety(reason: string): void {
     this.pushLog(`# auto STOP (${reason})`);
     this.stop().catch(() => undefined);
+  }
+
+  // ------------------------------------------------------------ ICD001-1 modes
+
+  /**
+   * Switch mode (§11.1, §11.4). Unsent slider values are dropped and the
+   * command goes out at once; the UI follows `modePending` until `OK MODE x`
+   * (or TLM shows x). MODE AUTO is not sent while latched (would be
+   * `ERR <latch> MODE`, §11.4.10). Returns false when not sent.
+   */
+  setMode(m: DeviceMode): boolean {
+    if (!this.state.autoSupported || !this.linkUp) {
+      return false;
+    }
+    if (m === 'auto' && (this.state.estop || this.state.overTemp || this.state.lowBattery)) {
+      return false;
+    }
+    this.set({ modePending: m });
+    this.clearModeTimer();
+    this.modeTimer = setTimeout(() => {
+      this.modeTimer = null;
+      if (this.state.modePending !== null) {
+        this.set({ modePending: null });
+        if (this.linkUp) {
+          this.write(formatMode(), true).catch(() => undefined);
+        }
+      }
+    }, MODE_REPLY_TIMEOUT_MS);
+    // sendNow drops pending slider commands (§11.4.9 race: none can follow MODE AUTO)
+    this.scheduler.sendNow(formatMode(m)).catch(() => undefined);
+    return true;
+  }
+
+  /** §11.4.14: re-zero pressure (auto only). */
+  pzero(): boolean {
+    if (!this.state.autoSupported || !this.linkUp || effectiveMode(this.state) !== 'auto') {
+      return false;
+    }
+    this.scheduler.enqueue('pzero', formatPzero());
+    return true;
+  }
+
+  /**
+   * Leaving the control page or app background. ICD001-1 (§11.6.3): auto ->
+   * nothing (the device keeps following the body); manual takeover -> hand
+   * back with `MODE AUTO` (MANUAL_LEAVE_ACTION); latched -> `STOP` (MODE AUTO
+   * would be refused; outputs are 0 anyway). Older firmware: `STOP` (§5).
+   */
+  releaseControl(reason: string, action: 'handback' | 'stop' = MANUAL_LEAVE_ACTION): void {
+    if (!this.state.autoSupported) {
+      this.stopForSafety(reason);
+      return;
+    }
+    const m = effectiveMode(this.state);
+    if (m === 'auto' && this.linkUp) {
+      this.pushLog(`# ${reason}: auto keeps running (no STOP, §11.3.7)`);
+      return;
+    }
+    const latched = this.state.estop || this.state.overTemp || this.state.lowBattery;
+    if (action === 'handback' && this.linkUp && !latched) {
+      this.pushLog(`# ${reason}: hand back to auto (§11.6.3)`);
+      this.setMode('auto');
+      return;
+    }
+    this.stopForSafety(reason);
+  }
+
+  /** App went to the background (useIcd001): release control, slow TLM (ICD001-1). */
+  onAppBackground(): void {
+    this.set({ background: true });
+    if (!this.state.autoSupported) {
+      this.stopForSafety('app background');
+      return;
+    }
+    this.releaseControl('app background');
+    if (this.linkUp) {
+      this.write(formatRate(BACKGROUND_TLM_HZ), true).catch(() => undefined);
+    }
+  }
+
+  onAppForeground(): void {
+    const was = this.state.background;
+    this.set({ background: false });
+    if (was && this.state.autoSupported && this.linkUp) {
+      this.write(formatRate(this.opts.tlmHz), true).catch(() => undefined);
+    }
+  }
+
+  /** PING driven by TLM arrival (timers do not run in the iOS background). */
+  private heartbeat(now: number): void {
+    if (!this.state.autoSupported || !this.state.hb || !this.linkUp) {
+      return;
+    }
+    if (now - this.lastWriteAt >= PING_IDLE_MS) {
+      this.lastWriteAt = now;
+      this.scheduler.enqueue('ping', formatPing());
+    }
+  }
+
+  private clearModeTimer(): void {
+    if (this.modeTimer) {
+      clearTimeout(this.modeTimer);
+      this.modeTimer = null;
+    }
+  }
+
+  private change(to: DeviceMode, reason: string | null, via: ModeChange['via']): Partial<Icd001State> {
+    const from = this.state.mode;
+    return from === to && via !== 'query'
+      ? {}
+      : { modeChange: { from, to, reason, via, at: Date.now(), id: ++this.modeSeq } };
+  }
+
+  /** TLM `mode`: authoritative unless a change is in flight (then it confirms it). */
+  private modeFromTlm(m: DeviceMode, _now: number): Partial<Icd001State> {
+    const pending = this.state.modePending;
+    if (pending !== null) {
+      if (m !== pending) {
+        return {}; // frame predates our MODE command (strict order, §11.4.9)
+      }
+      this.clearModeTimer();
+      return { mode: m, modePending: null, ...this.change(m, this.state.modeReason, 'tlm') };
+    }
+    if (m === this.state.mode) {
+      return {};
+    }
+    this.scheduler.clear(); // device switched on its own: never let a queued value follow
+    return { mode: m, ...(this.state.mode === null ? {} : this.change(m, null, 'tlm')) };
+  }
+
+  private onModeReply(m: DeviceMode, reason: string | null): void {
+    const patch: Partial<Icd001State> = { mode: m };
+    if (reason) {
+      patch.modeReason = reason;
+    }
+    if (this.state.modePending === m) {
+      patch.modePending = null;
+      this.clearModeTimer();
+    }
+    if (this.awaitingModeQuery && reason) {
+      this.awaitingModeQuery = false;
+      // §11.5.2: a takeover lost to a BLE drop comes back as AUTO BLE_DISCONNECT.
+      if (this.modeAtLinkLoss === 'manual' && m === 'auto' && reason === 'BLE_DISCONNECT') {
+        patch.modeChange = {
+          from: 'manual',
+          to: 'auto',
+          reason,
+          via: 'query',
+          at: Date.now(),
+          id: ++this.modeSeq,
+        };
+      }
+      this.modeAtLinkLoss = null;
+    }
+    this.set(patch);
+  }
+
+  private onModeEvt(m: DeviceMode, reason: string | null): void {
+    const patch: Partial<Icd001State> = { mode: m, modeReason: reason, ...this.change(m, reason, 'evt') };
+    const prev = this.state.modeChange;
+    if (!patch.modeChange && prev && prev.to === m && prev.via === 'tlm' && prev.reason === null) {
+      // a TLM frame showed the switch before its EVT: attach the reason now
+      patch.modeChange = { ...prev, reason, via: 'evt', at: Date.now(), id: ++this.modeSeq };
+    }
+    if (this.state.modePending === m) {
+      patch.modePending = null;
+      this.clearModeTimer();
+    }
+    if (reason !== 'CMD') {
+      this.scheduler.clear(); // device-originated switch: drop queued slider values
+    }
+    this.set(patch);
   }
 }
 
