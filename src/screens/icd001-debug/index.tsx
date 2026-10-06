@@ -225,6 +225,24 @@ export const Icd001DebugScreen = () => {
         ) : null}
 
         {state.lastErr ? <Text style={styles.err}>最近错误：{state.lastErr.text}</Text> : null}
+        <View style={styles.card} testID="connect-log">
+          <Text style={styles.h}>Connect steps{state.connectStep ? ` · now: ${state.connectStep}` : ''}</Text>
+          {state.connectFailure ? (
+            <Text style={styles.err}>
+              {state.connectFailure.title} · {state.connectFailure.kind} at {state.connectFailure.step}:{' '}
+              {state.connectFailure.detail}
+            </Text>
+          ) : null}
+          {state.connectLog.length ? (
+            state.connectLog.slice(-20).map((l, i) => (
+              <Text key={i} style={styles.log}>
+                {l}
+              </Text>
+            ))
+          ) : (
+            <Text style={styles.log}>(no connect yet)</Text>
+          )}
+        </View>
         <View style={styles.card}>
           {state.log.slice(-15).map((l, i) => (
             <Text key={i} style={styles.log}>

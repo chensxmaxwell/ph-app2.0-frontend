@@ -292,7 +292,7 @@ export const AdvancedControlScreen = ({
             <Notice
               model={banner}
               busy={view.scan.connecting}
-              onAction={a => (a === 'reconnect' ? ctl.reconnect() : ctl.scan())}
+              onAction={a => (a === 'reconnect' ? ctl.reconnect() : a === 'retry' ? ctl.retry() : ctl.scan())}
             />
           ) : null}
           {view.toast ? <Notice model={{ tone: 'neutral', icon: 'info', ...view.toast }} /> : null}

@@ -105,6 +105,19 @@ export const ConnectDevice = () => {
             </View>
             
 
+            {find.failure ? (
+                <View style={styles.failure} testID="connect-failure">
+                    <View style={styles.failureTexts}>
+                        <Text style={styles.failureTitle} numberOfLines={1}>{find.failure.title}</Text>
+                        <Text style={styles.failureLine} numberOfLines={1}>{find.failure.line}</Text>
+                    </View>
+                    <TouchableOpacity style={styles.failureBtn} onPress={find.retry} testID="connect-retry"
+                        accessibilityRole="button" accessibilityLabel="Retry">
+                        <Text style={styles.failureBtnText}>Retry</Text>
+                    </TouchableOpacity>
+                </View>
+            ) : null}
+
             {/* Refresh Button */}
             <TouchableOpacity style={styles.refreshButton} onPress={handleRefresh}>
                 <Text style={styles.refreshText}>Refresh</Text>
@@ -156,6 +169,28 @@ export const ConnectDevice = () => {
 };
 
 const styles = StyleSheet.create({
+    failure: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginHorizontal: 24,
+        marginTop: 12,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 16,
+        backgroundColor: 'rgba(255,255,255,0.12)',
+    },
+    failureTexts: { flex: 1, marginRight: 12 },
+    failureTitle: { color: '#fff', fontSize: 14, fontFamily: 'Quicksand-Bold' },
+    failureLine: { color: '#fff', fontSize: 13, fontFamily: 'Quicksand-Bold', marginTop: 2 },
+    failureBtn: {
+        height: 32,
+        paddingHorizontal: 14,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: '#fff',
+        justifyContent: 'center',
+    },
+    failureBtnText: { color: '#fff', fontSize: 13, fontFamily: 'Quicksand-Bold' },
     container: {
         height: '100%',
         overflow: 'hidden',

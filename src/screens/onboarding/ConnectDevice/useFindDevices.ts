@@ -56,9 +56,20 @@ export function useFindDevices(i: FindDevicesInput) {
     }
   }
   let statusText = linked ? 'Connected' : 'Disconnected';
-  if (i.demoConnecting || icd.status === 'connecting') {
+  if (i.demoConnecting || icd.status === 'connecting' || icd.status === 'reconnecting') {
     statusText = 'Connecting...';
   }
+  // Failed connect (timeout / Bluetooth off / firmware): two-line notice + Retry; the pill reads Disconnected.
+  const failure =
+    !linked && (icd.status === 'error' || icd.status === 'disconnected') && icd.connectFailure
+      ? { title: icd.connectFailure.title, line: icd.connectFailure.line }
+      : null;
+  const retry = () => {
+    if (i.scaning) {
+      i.stopScan();
+    }
+    client.retry().catch(() => undefined);
+  };
   let emptyText: string | null = null;
   if (found.length === 0) {
     // After a scan (Refresh tapped, or the scanner reported anything at all) and nothing of ours.
@@ -100,5 +111,16 @@ export function useFindDevices(i: FindDevicesInput) {
     return true;
   };
 
-  return { found, linked, statusText, batteryText, emptyText, refresh, connectIcd001, disconnectIcd001 };
+  return {
+    found,
+    linked,
+    statusText,
+    batteryText,
+    emptyText,
+    failure,
+    retry,
+    refresh,
+    connectIcd001,
+    disconnectIcd001,
+  };
 }

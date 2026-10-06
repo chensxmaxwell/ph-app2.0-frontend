@@ -12,6 +12,7 @@ import BleManager, {
     BleState,
     Peripheral,
 } from 'react-native-ble-manager';
+import { ensureBleStarted } from '../services/icd001/bleStart';
 import { UPDATE_DEVICE } from './useMutation';
 import { PermissionEnum, useRequestPermission } from './useRequestPermission';
 import { byteToString, stringToByte } from './utils';
@@ -133,7 +134,9 @@ export const useBleManager = () => {
         if (permissionGranted) {
             enableBluetooth();
 
-            BleManager.start({ showAlert: false })
+            // Shared, once per app run: a second BleManager.start() creates a new iOS
+            // CBCentralManager and breaks the ICD-001 connect / a live link (bleStart.ts).
+            ensureBleStarted()
                 .then(() => {
                     console.log('BleManager initialized');
                     BleManager.checkState();

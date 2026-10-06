@@ -76,6 +76,7 @@ export interface ClientLike extends ControlClient {
   subscribe(l: (s: Icd001State) => void): () => void;
   startScan(): Promise<void>;
   connect(d: DiscoveredDevice): Promise<boolean>;
+  retry(): Promise<boolean>;
   requestStopOnConnect(): void;
   requestEstopOnConnect(): void;
   downgradeQueuedEstop(): void;
@@ -550,6 +551,15 @@ export class AdvancedControlController {
     this.client.startScan().catch(() => undefined);
   }
 
+  /** Retry a failed connect (notice action): same device; scans if there is none. */
+  retry(): void {
+    if (this.client.getState().device) {
+      this.client.retry().catch(() => undefined);
+    } else {
+      this.scan();
+    }
+  }
+
   connect(d: DiscoveredDevice): void {
     this.client.connect(d).catch(() => undefined);
   }
@@ -960,6 +970,7 @@ export class AdvancedControlController {
       autoDevice,
       latchedAtDrop: this.latchedAtDrop,
       autoOff,
+      failure: s.status === 'error' || s.status === 'disconnected' ? s.connectFailure : null,
     });
     if (!banner && live && n) {
       banner = modeNoticeBanner(n);

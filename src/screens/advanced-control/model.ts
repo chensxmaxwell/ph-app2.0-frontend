@@ -142,8 +142,8 @@ export interface BannerModel {
   icon: 'lock' | 'thermometer' | 'battery' | 'bluetooth' | 'info';
   title: string;
   line: string;
-  /** Optional action rendered as an outline button (Reconnect / Scan). */
-  action?: 'reconnect' | 'scan';
+  /** Optional action rendered as an outline button (Reconnect / Scan / Retry). */
+  action?: 'reconnect' | 'scan' | 'retry';
 }
 
 const fmtC = (c: number) => `${Number.isInteger(c) ? c : c.toFixed(1)} °C`;
@@ -191,6 +191,8 @@ export interface BannerLink {
   latchedAtDrop?: boolean;
   /** The latch shown also turned Auto off (EVT MODE MANUAL ESTOP|KEY|OVERTEMP|LOWBAT). */
   autoOff?: boolean;
+  /** Last connect / reconnect failed (client `connectFailure`): its two lines + Retry. */
+  failure?: { title: string; line: string } | null;
 }
 
 export function bannerFor(
@@ -204,6 +206,15 @@ export function bannerFor(
   const otClear = safety?.fromInfo.ot ? safety.ot.clearC : null;
   switch (screen.kind) {
     case 'disconnected':
+      if (link.failure && !screen.connecting) {
+        return {
+          tone: 'neutral',
+          icon: 'bluetooth',
+          title: link.failure.title,
+          line: link.failure.line,
+          action: 'retry',
+        };
+      }
       if (!link.hadDevice) {
         return screen.connecting
           ? {

@@ -46,6 +46,7 @@ const mockLegacyConnect = jest.fn();
 let mockScanning = false;
 const mockIcdConnect = jest.fn(async () => true);
 const mockIcdDisconnect = jest.fn(async () => undefined);
+const mockIcdRetry = jest.fn(async () => true);
 let mockIcdState: Record<string, unknown> = { status: 'idle', device: null, tlm: null };
 
 jest.mock('@react-navigation/native', () => ({
@@ -77,7 +78,7 @@ jest.mock('../../src/services/icd001', () => {
     ...actual,
     useIcd001: () => ({
       state: mockIcdState,
-      client: { connect: mockIcdConnect, disconnect: mockIcdDisconnect },
+      client: { connect: mockIcdConnect, disconnect: mockIcdDisconnect, retry: mockIcdRetry },
       mode: 'ble',
     }),
   };
@@ -212,5 +213,51 @@ describe('Find your device screen', () => {
     });
     const t = texts(tree);
     expect(t).toEqual(expect.arrayContaining(['Connected', '100%', 'ICD1-5A3C']));
+  });
+
+  it('failed connect (TF 1.2 (27) stuck "Connecting"): pill Disconnected, two-line notice + Retry', () => {
+    mockIcdState = {
+      status: 'error',
+      device: { id: 'h11', name: 'H11-91B1', rssi: -58, kind: 'devboard' },
+      tlm: null,
+      connectFailure: {
+        kind: 'timeout',
+        step: 'link',
+        title: "Couldn't connect",
+        line: 'No answer. Keep it close, tap Retry.',
+      },
+    };
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<ConnectDevice />);
+    });
+    const t = texts(tree);
+    expect(t).toEqual(
+      expect.arrayContaining(['Disconnected', "Couldn't connect", 'No answer. Keep it close, tap Retry.']),
+    );
+    expect(t).not.toContain('Connecting...');
+    act(() => tree.root.findByProps({ testID: 'connect-retry' }).props.onPress());
+    expect(mockIcdRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('firmware-update notice when the device answered with the wrong service / no INFO', () => {
+    mockIcdState = {
+      status: 'error',
+      device: { id: 'h11', name: 'H11-91B1', rssi: -58, kind: 'devboard' },
+      tlm: null,
+      connectFailure: {
+        kind: 'unsupported',
+        step: 'services',
+        title: 'Firmware update needed',
+        line: 'This device needs a firmware update.',
+      },
+    };
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<ConnectDevice />);
+    });
+    expect(texts(tree)).toEqual(
+      expect.arrayContaining(['Firmware update needed', 'This device needs a firmware update.']),
+    );
   });
 });

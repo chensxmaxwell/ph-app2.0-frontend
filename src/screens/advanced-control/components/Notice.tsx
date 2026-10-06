@@ -28,7 +28,7 @@ export const Notice = ({
   busy?: boolean;
   onAction?: (a: NonNullable<BannerModel['action']>) => void;
 }) => {
-  const label = model.action === 'reconnect' ? 'Reconnect' : 'Scan';
+  const label = model.action === 'reconnect' ? 'Reconnect' : model.action === 'retry' ? 'Retry' : 'Scan';
   return (
     <View
       style={styles.card}

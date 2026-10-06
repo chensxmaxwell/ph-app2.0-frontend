@@ -4,6 +4,8 @@
 import { NativeEventEmitter, NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import BleManager, { BleScanMode } from 'react-native-ble-manager';
 
+import { getBleStarter } from './bleStart';
+import { ConnectStep, ConnectStepError, STEP_TIMEOUT_MS, toStepError, withTimeout } from './connectSteps';
 import {
   ICD001_CMD_UUID,
   ICD001_INFO_UUID,
@@ -51,10 +53,12 @@ export class BleIcd001Transport implements Icd001Transport {
 
   async init(): Promise<void> {
     await ensureBlePermissions();
+    // One BleManager.start() per app run (bleStart.ts): a second start() makes a
+    // new iOS CBCentralManager and silently breaks connect / a live link.
+    await getBleStarter().ensureStarted();
     if (this.started) {
       return;
     }
-    await BleManager.start({ showAlert: false });
     const emitter = new NativeEventEmitter(NativeModules.BleManager);
     emitter.addListener('BleManagerDiscoverPeripheral', (p: Peripheral) => this.handleDiscover(p));
     emitter.addListener(
@@ -87,6 +91,7 @@ export class BleIcd001Transport implements Icd001Transport {
   }
 
   async startScan(onDevice: (d: DiscoveredDevice) => void, timeoutMs: number): Promise<void> {
+    await this.poweredOn();
     this.scanCb = onDevice;
     // Filter by service UUID (only thing in the adv packet). Scanning is active:
     // Android ScanSettings and iOS foreground scans request the scan response,
@@ -101,29 +106,55 @@ export class BleIcd001Transport implements Icd001Transport {
     await BleManager.stopScan().catch(() => undefined);
   }
 
-  async connect(id: string): Promise<ConnectResult> {
-    await BleManager.connect(id);
+  /** Shared start + adapter powered on (a fresh CBCentralManager drops commands until then). */
+  private async poweredOn(): Promise<void> {
+    try {
+      await getBleStarter().ensurePoweredOn(STEP_TIMEOUT_MS.bluetooth);
+    } catch (e) {
+      throw new ConnectStepError('bluetooth', 'bluetooth', e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async connect(id: string, onStep?: (s: ConnectStep) => void): Promise<ConnectResult> {
+    const step = async <T>(name: ConnectStep, run: () => Promise<T>): Promise<T> => {
+      onStep?.(name);
+      try {
+        return await withTimeout(run(), STEP_TIMEOUT_MS[name], name);
+      } catch (e) {
+        throw toStepError(e, name);
+      }
+    };
+    onStep?.('bluetooth');
+    await this.poweredOn();
+    // iOS connect never times out by itself; the client cancels it (disconnect) on timeout.
+    await step('link', () => BleManager.connect(id));
     let mtu = 23;
     if (Platform.OS === 'android') {
-      try {
-        mtu = await BleManager.requestMTU(id, ICD001_REQUESTED_MTU);
-      } catch {
-        mtu = 23;
-      }
-    } else {
-      // iOS negotiates MTU itself (typically 185); ble-manager can't query it,
-      // and every command we send is <= 20 bytes anyway.
-      mtu = 23;
+      mtu = await step('mtu', () => BleManager.requestMTU(id, ICD001_REQUESTED_MTU)).catch(() => 23);
     }
+    // iOS negotiates MTU itself (typically 185); ble-manager can't query it,
+    // and every command we send is <= 20 bytes anyway.
     this.mtus.set(id, mtu);
-    await BleManager.retrieveServices(id, [ICD001_SERVICE_UUID]);
-    await BleManager.startNotification(id, ICD001_SERVICE_UUID, ICD001_TLM_UUID);
+    const info = await step('services', () => BleManager.retrieveServices(id, [ICD001_SERVICE_UUID]));
+    const hasSvc = (info.services ?? []).some(sv => sameUuid(String(sv.uuid), ICD001_SERVICE_UUID));
+    const chars = (info.characteristics ?? []).map(c => String(c.characteristic));
+    const hasChar = (u: string) => chars.some(c => sameUuid(c, u));
+    if (!hasSvc || !hasChar(ICD001_TLM_UUID) || !hasChar(ICD001_CMD_UUID)) {
+      // Connected, but not the ICD-001 service (old / other firmware).
+      throw new ConnectStepError('services', 'unsupported', 'ICD-001 service or characteristics missing');
+    }
+    await step('notify', () => BleManager.startNotification(id, ICD001_SERVICE_UUID, ICD001_TLM_UUID));
     return { mtu };
   }
 
   async disconnect(id: string): Promise<void> {
-    await BleManager.stopNotification(id, ICD001_SERVICE_UUID, ICD001_TLM_UUID).catch(() => undefined);
-    await BleManager.disconnect(id).catch(() => undefined);
+    // Also cancels a pending (never answered) iOS connect; each call bounded.
+    await withTimeout(
+      BleManager.stopNotification(id, ICD001_SERVICE_UUID, ICD001_TLM_UUID),
+      1500,
+      'cleanup',
+    ).catch(() => undefined);
+    await withTimeout(BleManager.disconnect(id), STEP_TIMEOUT_MS.cleanup, 'cleanup').catch(() => undefined);
     this.mtus.delete(id);
   }
 

@@ -23,10 +23,29 @@
  *    (again while running -> `ERR BUSY PZERO`); TLM carries mode + src;
  *    optional `EVT ESTOP n` echo after `OK ESTOP n` (`estopEvtEcho`).
  */
+import { ConnectStep, ConnectStepError } from './connectSteps';
 import { clamp } from './protocol';
 import { decodeUtf8, encodeUtf8 } from './utf8';
 
 import type { ConnectResult, DiscoveredDevice, Icd001Transport } from './transport';
+
+/**
+ * Failure injection for the connect path (TF 1.2 (27) "Connecting" forever).
+ * `hang.<step>` = that native call never answers (like an iOS connect on an
+ * unpowered CBCentralManager); a disconnect() rejects a pending one, as
+ * cancelPeripheralConnection does.
+ */
+export interface MockConnectFaults {
+  hang?: Partial<Record<'link' | 'services' | 'notify' | 'info' | 'infoCmd', boolean>>;
+  /** Connected, but the ICD-001 service / characteristics are missing (other firmware). */
+  noService?: boolean;
+  /** INFO characteristic returns bytes that are not INFO JSON. */
+  badInfo?: boolean;
+  /** Adapter never powers on. */
+  bluetoothOff?: boolean;
+  /** Link-layer connect fails at once (didFailToConnect). */
+  linkError?: boolean;
+}
 
 export type MockVariant = 'icd1' | 'icd1v1' | 'h11';
 
@@ -843,6 +862,14 @@ export class MockIcd001Transport implements Icd001Transport {
   private notifyCbs = new Set<(id: string, bytes: number[]) => void>();
   private discCbs = new Set<(id: string) => void>();
   private connected = new Map<string, Conn>();
+  /** Pending (hung) native calls per device, rejected by disconnect(). */
+  private pending = new Map<string, Array<(e: Error) => void>>();
+  /** Fault injection (tests / debug). */
+  faults: MockConnectFaults = {};
+  /** Calls seen, for tests. */
+  connectCalls = 0;
+  disconnectCalls = 0;
+  initCalls = 0;
 
   constructor(
     devices?: MockIcd001Device[],
@@ -856,7 +883,18 @@ export class MockIcd001Transport implements Icd001Transport {
     this.devices = new Map(list.map(d => [`sim-${d.name}`, d]));
   }
 
-  async init(): Promise<void> {}
+  async init(): Promise<void> {
+    this.initCalls++;
+  }
+
+  /** A native call that never answers until disconnect() cancels it. */
+  private hang<T>(id: string): Promise<T> {
+    return new Promise<T>((_resolve, reject) => {
+      const list = this.pending.get(id) ?? [];
+      list.push(reject);
+      this.pending.set(id, list);
+    });
+  }
 
   async startScan(onDevice: (d: DiscoveredDevice) => void): Promise<void> {
     let i = 0;
@@ -874,12 +912,36 @@ export class MockIcd001Transport implements Icd001Transport {
 
   async stopScan(): Promise<void> {}
 
-  async connect(id: string): Promise<ConnectResult> {
+  async connect(id: string, onStep?: (s: ConnectStep) => void): Promise<ConnectResult> {
+    this.connectCalls++;
+    const f = this.faults;
+    onStep?.('bluetooth');
+    if (f.bluetoothOff) {
+      throw new ConnectStepError('bluetooth', 'bluetooth', 'Bluetooth is off');
+    }
     const dev = this.devices.get(id);
     if (!dev) {
       throw new Error(`Unknown simulated device ${id}`);
     }
+    onStep?.('link');
+    if (f.hang?.link) {
+      await this.hang(id);
+    }
+    if (f.linkError) {
+      throw new Error('Peripheral did fail to connect');
+    }
     await new Promise<void>(r => setTimeout(() => r(), this.opts.connectDelayMs ?? 400));
+    onStep?.('services');
+    if (f.hang?.services) {
+      await this.hang(id);
+    }
+    if (f.noService) {
+      throw new ConnectStepError('services', 'unsupported', 'ICD-001 service or characteristics missing');
+    }
+    onStep?.('notify');
+    if (f.hang?.notify) {
+      await this.hang(id);
+    }
     const mtu = this.opts.mtu ?? 185; // iOS typically lands on 185
     const now = Date.now();
     const c: Conn = { mtu, lastStep: now, lastTlm: now, timer: 0 as unknown as Timer, rx: '', rxIdle: null };
@@ -890,6 +952,10 @@ export class MockIcd001Transport implements Icd001Transport {
   }
 
   async disconnect(id: string): Promise<void> {
+    this.disconnectCalls++;
+    const list = this.pending.get(id) ?? [];
+    this.pending.delete(id);
+    list.forEach(rej => rej(new Error('cancelled')));
     this.drop(id, false);
   }
 
@@ -916,6 +982,12 @@ export class MockIcd001Transport implements Icd001Transport {
 
   async readInfo(id: string): Promise<number[]> {
     const dev = this.requireConnected(id);
+    if (this.faults.hang?.info) {
+      return this.hang(id);
+    }
+    if (this.faults.badInfo) {
+      return encodeUtf8('h11 hello');
+    }
     return encodeUtf8(dev.infoJson(false)); // INFO characteristic (≤ 512 B; no ch.auto on ICD001-1)
   }
 
@@ -934,6 +1006,9 @@ export class MockIcd001Transport implements Icd001Transport {
 
   private receive(id: string, dev: MockIcd001Device, c: Conn, text: string): void {
     const reply = (lines: string[]) => setTimeout(() => lines.forEach(r => this.sendLine(id, r)), 5);
+    if (this.faults.hang?.infoCmd && /^\s*INFO\s*$/i.test(text)) {
+      return; // INFO command never answered
+    }
     if (!dev.isV0) {
       reply(dev.handleWrite(text)); // H11 v1.0: each write executed as-is
       return;

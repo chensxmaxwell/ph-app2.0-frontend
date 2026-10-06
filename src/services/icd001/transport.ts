@@ -2,6 +2,7 @@
  * Transport abstraction so the client runs against real BLE
  * (react-native-ble-manager) or the in-app simulator.
  */
+import type { ConnectStep } from './connectSteps';
 import type { DeviceKind } from './protocol';
 
 export interface DiscoveredDevice {
@@ -23,8 +24,12 @@ export interface Icd001Transport {
   init(): Promise<void>;
   startScan(onDevice: (d: DiscoveredDevice) => void, timeoutMs: number): Promise<void>;
   stopScan(): Promise<void>;
-  /** Connect, request MTU, discover services, enable TLM notifications. */
-  connect(id: string): Promise<ConnectResult>;
+  /**
+   * Connect, request MTU, discover services, enable TLM notifications. Each
+   * native step is bounded (connectSteps.ts) and reported via `onStep`; throws
+   * ConnectStepError (kind 'unsupported' when the ICD-001 service is missing).
+   */
+  connect(id: string, onStep?: (s: ConnectStep) => void): Promise<ConnectResult>;
   disconnect(id: string): Promise<void>;
   /** Read INFO characteristic raw bytes. */
   readInfo(id: string): Promise<number[]>;

@@ -4,6 +4,16 @@
  * API, safety interlocks, auto-reconnect. React binding lives in useIcd001.ts.
  */
 import {
+  CONNECT_TIMEOUT_MS,
+  ConnectFailure,
+  ConnectStep,
+  ConnectStepError,
+  STEP_TIMEOUT_MS,
+  connectFailureFor,
+  toStepError,
+  withTimeout,
+} from './connectSteps';
+import {
   DeviceInfo,
   DeviceMode,
   ErrInfo,
@@ -109,6 +119,12 @@ export interface Icd001State {
   lastAck: (OkReply & { at: number }) | null;
   reconnectAttempt: number;
   error: string | null;
+  /** Why the last connect / reconnect failed (two-line notice + Retry); null once connected. */
+  connectFailure: ConnectFailure | null;
+  /** Step the running connect is in (null when not connecting). */
+  connectStep: ConnectStep | null;
+  /** Connect step log (kept apart from `log`, which TLM scrolls), for the debug screen. */
+  connectLog: string[];
   /** Last ~40 raw lines in/out, for the debug screen. */
   log: string[];
   // ---- ICD001-1 auto / manual (§11.4–§11.6). All null / false on older firmware.
@@ -148,6 +164,13 @@ export interface Icd001ClientOptions {
 type Listener = (s: Icd001State) => void;
 
 const LOG_MAX = 40;
+const CONNECT_LOG_MAX = 30;
+
+const hhmmss = (t: number) => {
+  const d = new Date(t);
+  const p = (n: number, w = 2) => String(n).padStart(w, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+};
 
 export class Icd001Client {
   private state: Icd001State;
@@ -157,6 +180,8 @@ export class Icd001Client {
   private unsubs: Array<() => void> = [];
   private userDisconnect = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Increments per connect attempt / disconnect; a stale attempt stops at its next step. */
+  private connectGen = 0;
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private infoWaiters: Array<(i: DeviceInfo) => void> = [];
   /**
@@ -276,6 +301,9 @@ export class Icd001Client {
       lastAck: null,
       reconnectAttempt: 0,
       error: null,
+      connectFailure: null,
+      connectStep: null,
+      connectLog: [],
       log: [],
       autoSupported: false,
       mode: null,
@@ -380,38 +408,96 @@ export class Icd001Client {
       status: 'connecting',
       device,
       error: null,
+      connectFailure: null,
       reconnectAttempt: 0,
     });
     return this.establish(device);
   }
 
+  /** Retry after a failed connect / reconnect (notice action): same device, fresh attempt. */
+  retry(): Promise<boolean> {
+    const dev = this.state.device;
+    return dev ? this.connect(dev) : Promise.resolve(false);
+  }
+
+  private connectLogLine(line: string): void {
+    const log = this.state.connectLog.concat(`${hhmmss(Date.now())} ${line}`);
+    this.set({ connectLog: log.length > CONNECT_LOG_MAX ? log.slice(log.length - CONNECT_LOG_MAX) : log });
+  }
+
+  /**
+   * Link + INFO + setup. Every step is bounded (connectSteps.ts) and the whole
+   * connect is capped at CONNECT_TIMEOUT_MS; on any failure the pending
+   * connection is cancelled (transport.disconnect) and the state goes to
+   * `error` with a ConnectFailure (or the next bounded reconnect attempt).
+   * A newer connect / disconnect supersedes this one (generation check).
+   */
   private async establish(device: DiscoveredDevice): Promise<boolean> {
+    const gen = ++this.connectGen;
+    const started = Date.now();
+    const deadline = started + CONNECT_TIMEOUT_MS;
+    const attempt = this.state.status === 'reconnecting' ? ` (reconnect ${this.state.reconnectAttempt})` : '';
     this.assembler.reset();
     this.scheduler.clear();
+    this.connectLogLine(`connect ${device.name ?? device.id}${attempt}`);
+    const current = () => gen === this.connectGen && !this.userDisconnect;
+    let at: ConnectStep = 'bluetooth';
+    const enter = (s: ConnectStep) => {
+      if (!current()) {
+        return;
+      }
+      at = s;
+      this.set({ connectStep: s });
+      this.connectLogLine(`… ${s}`);
+    };
+    /** Run one step bounded by its own limit and the overall deadline. */
+    const step = async <T>(s: ConnectStep, run: () => Promise<T>, limit = STEP_TIMEOUT_MS[s]): Promise<T> => {
+      if (!current()) {
+        throw new ConnectStepError(s, 'failed', 'superseded');
+      }
+      enter(s);
+      const left = deadline - Date.now();
+      if (left <= 0) {
+        throw new ConnectStepError(s, 'timeout', `connect took over ${CONNECT_TIMEOUT_MS / 1000} s`);
+      }
+      try {
+        return await withTimeout(run(), Math.min(limit, left), s);
+      } catch (e) {
+        throw toStepError(e, s);
+      }
+    };
     try {
-      await this.transport.init();
-      const { mtu } = await this.transport.connect(device.id);
+      await step('bluetooth', () => this.transport.init());
+      // Transport bounds its own native sub-steps; this caps the whole link setup.
+      const { mtu } = await step('link', () => this.transport.connect(device.id, enter), CONNECT_TIMEOUT_MS);
       this.set({ mtu });
       let info: DeviceInfo | null = null;
       try {
-        info = parseInfo(decodeUtf8(await this.transport.readInfo(device.id)));
-      } catch {
+        info = parseInfo(decodeUtf8(await step('info', () => this.transport.readInfo(device.id))));
+      } catch (e) {
+        if (e instanceof ConnectStepError && e.message === 'superseded') {
+          throw e;
+        }
         info = null;
       }
       if (!info) {
-        info = await this.requestInfoViaCommand();
+        info = await step('info-cmd', () => this.requestInfoViaCommand());
       }
       if (!info) {
-        throw new Error('设备没有返回 INFO');
+        // Connected, ICD-001 service there, but no INFO JSON we can read: old / other firmware.
+        throw new ConnectStepError('info', 'unsupported', 'no INFO (characteristic or command)');
       }
       if (supportsAuto(info) && info.auto && !info.auto.detail) {
         // h11-icd-v1 1.1.0: the INFO characteristic (≤ 512 B) leaves out ch.auto
         // (fsr / lraSrc / hbMaxS / vhz); the INFO command returns the full ~636 B
         // JSON as several notify packets (one line). Fallbacks if it does not come.
-        const full = await this.requestInfoViaCommand();
+        const full = await step('info-cmd', () => this.requestInfoViaCommand());
         if (full && supportsAuto(full)) {
           info = full;
         }
+      }
+      if (!current()) {
+        throw new ConnectStepError(at, 'failed', 'superseded');
       }
       const auto = supportsAuto(info);
       this.clearModeTimer();
@@ -435,40 +521,71 @@ export class Icd001Client {
       this.legacyOt = false;
       const first = this.onConnectAction;
       this.onConnectAction = null;
-      if (first === 'estop') {
-        // State/source follow the `OK ESTOP 1` reply (§9), like setEstop().
-        await this.write(formatEstop(true), true);
+      const setupInfo = info;
+      await step('setup', async () => {
+        if (first === 'estop') {
+          // State/source follow the `OK ESTOP 1` reply (§9), like setEstop().
+          await this.write(formatEstop(true), true);
+        }
+        await this.write(formatRate(this.state.background ? BACKGROUND_TLM_HZ : this.opts.tlmHz), true);
+        if (first === 'stop') {
+          await this.write(formatStop(), true);
+        }
+        if (auto) {
+          // §11.4.12 HB always on for this connection (auto ignores it, §11.5.3; it
+          // returns a frozen manual takeover to auto). Then read the mode + lastReason
+          // (§11.4.2): usually AUTO BOOT (§11.5.1). The app never sends MODE AUTO here (§11.4.11).
+          await this.write(formatHb(APP_HB_S, setupInfo.auto?.hbMaxS), true);
+          this.awaitingModeQuery = true;
+          await this.write(formatMode(), true);
+        }
+      });
+      if (!current()) {
+        throw new ConnectStepError(at, 'failed', 'superseded');
       }
-      await this.write(formatRate(this.state.background ? BACKGROUND_TLM_HZ : this.opts.tlmHz), true);
-      if (first === 'stop') {
-        await this.write(formatStop(), true);
-      }
-      if (auto) {
-        // §11.4.12 HB always on for this connection (auto ignores it, §11.5.3; it
-        // returns a frozen manual takeover to auto). Then read the mode + lastReason
-        // (§11.4.2): usually AUTO BOOT (§11.5.1). The app never sends MODE AUTO here (§11.4.11).
-        await this.write(formatHb(APP_HB_S, info.auto?.hbMaxS), true);
-        this.awaitingModeQuery = true;
-        await this.write(formatMode(), true);
-      }
-      this.set({ status: 'connected', reconnectAttempt: 0 });
+      this.connectLogLine(
+        `connected in ${Date.now() - started} ms (mtu ${mtu}, ${info.proto ?? info.fw ?? 'no proto'})`,
+      );
+      this.set({
+        status: 'connected',
+        reconnectAttempt: 0,
+        connectStep: null,
+        connectFailure: null,
+        error: null,
+      });
       this.startWatchdog();
       return true;
-    } catch (e) {
-      await this.transport.disconnect(device.id).catch(() => undefined);
-      if (this.state.status === 'reconnecting') {
+    } catch (raw) {
+      const e = toStepError(raw, at);
+      if (e.message === 'superseded' || !current()) {
+        // A newer connect / a user disconnect owns the link now: leave it alone.
+        this.connectLogLine(`stopped at ${e.step} (superseded)`);
+        return false;
+      }
+      this.connectLogLine(`FAILED at ${e.step}: ${e.kind} (${e.message})`);
+      // Cancel the pending / half-open link (iOS keeps trying a connect forever otherwise).
+      await withTimeout(this.transport.disconnect(device.id), STEP_TIMEOUT_MS.cleanup, 'cleanup').catch(() =>
+        this.connectLogLine('cleanup: disconnect did not answer'),
+      );
+      if (!current()) {
+        return false;
+      }
+      const failure = connectFailureFor(e.step, e.kind, e.message);
+      this.set({ connectStep: null, connectFailure: failure });
+      // A reconnect keeps trying (bounded, capped back-off) unless the device can never work.
+      if (this.state.status === 'reconnecting' && e.kind !== 'unsupported' && e.kind !== 'bluetooth') {
         this.scheduleReconnect();
       } else {
         this.set({
           status: 'error',
-          error: `连接失败：${e instanceof Error ? e.message : String(e)}`,
+          error: `连接失败：${e.message}`,
         });
       }
       return false;
     }
   }
 
-  private requestInfoViaCommand(timeoutMs = 2000): Promise<DeviceInfo | null> {
+  private requestInfoViaCommand(timeoutMs = STEP_TIMEOUT_MS['info-cmd']): Promise<DeviceInfo | null> {
     return new Promise(resolve => {
       const t = setTimeout(() => {
         this.infoWaiters = this.infoWaiters.filter(w => w !== done);
@@ -491,6 +608,7 @@ export class Icd001Client {
    */
   async disconnect(): Promise<void> {
     this.userDisconnect = true;
+    this.connectGen++; // a connect in flight stops at its next step
     this.clearReconnect();
     this.stopWatchdog();
     const dev = this.state.device;
@@ -505,7 +623,7 @@ export class Icd001Client {
     if (dev) {
       await this.transport.disconnect(dev.id).catch(() => undefined);
     }
-    this.set({ status: 'disconnected', tlm: null, tlmAt: null });
+    this.set({ status: 'disconnected', tlm: null, tlmAt: null, connectStep: null });
   }
 
   private onLinkLost(): void {
@@ -518,6 +636,7 @@ export class Icd001Client {
       this.set({ modePending: null, hb: null });
     }
     this.pushLog('! link lost (firmware stops all actuators)');
+    this.connectLogLine('link lost');
     if (this.userDisconnect || !this.state.device) {
       this.set({ status: 'disconnected', tlm: null, tlmAt: null });
       return;
@@ -535,7 +654,15 @@ export class Icd001Client {
     const n = this.state.reconnectAttempt;
     const delays = this.opts.reconnectDelaysMs;
     if (n >= delays.length || !this.state.device) {
-      this.set({ status: 'disconnected', error: '设备已断开，重连失败' });
+      // Cap reached: stop, show "Couldn't connect" + Retry (no endless loop).
+      this.connectLogLine(`reconnect: gave up after ${n} attempts`);
+      this.set({
+        status: 'disconnected',
+        error: '设备已断开，重连失败',
+        connectStep: null,
+        connectFailure:
+          this.state.connectFailure ?? connectFailureFor('link', 'timeout', `gave up after ${n} attempts`),
+      });
       return;
     }
     this.clearReconnect();
