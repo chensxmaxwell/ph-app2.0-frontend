@@ -150,6 +150,8 @@ export const AdvancedControlScreen = ({
   const pulseBullet = (p: RhythmView | undefined, b: SensorView | undefined) => {
     const off = p ? !p.enabled : false;
     const title = p && b ? 'Pulse & Bullet' : p ? p.card.label : b!.card.label;
+    // Auto sensor status under Bullet (or under Pulse when the unit has no Bullet sensor)
+    const sensors = view.mode.sensors;
     const pzeroBtn = view.mode.pzero ? (
       <Pressable
         onPress={() => ctl.pzero()}
@@ -209,20 +211,20 @@ export const AdvancedControlScreen = ({
             <View style={styles.subRight}>{bulletReadout(b)}</View>
           </View>
         ) : null}
-        {b && b.sensors ? (
+        {sensors ? (
           <View
             style={styles.subRow}
             testID="row-sensors"
             accessible
-            accessibilityLabel={sensorsA11y(b.sensors)}
+            accessibilityLabel={sensorsA11y(sensors)}
           >
             <Text style={styles.subLabel}>Sensors</Text>
             <View style={styles.subRight}>
               {(
                 [
-                  ['Pressure', b.sensors.pressure],
-                  ['Upper', b.sensors.upper],
-                  ['Lower', b.sensors.lower],
+                  ['Pressure', sensors.pressure],
+                  ['Upper', sensors.upper],
+                  ['Lower', sensors.lower],
                 ] as const
               ).map(([label, st]) => (
                 <View key={label} style={styles.chip} testID={`src-${label.toLowerCase()}-${st}`}>

@@ -217,6 +217,12 @@ export interface AutoCaps {
   hbMaxS: number;
   /** Max auto minutes, 0 = unlimited (§11.5.6: fixed 0). Parsed, never shown. */
   maxMin: number;
+  /**
+   * false = INFO had no `ch.auto` (the 512 B INFO characteristic of
+   * h11-icd-v1 1.1.0 leaves it out; the `INFO` command carries it), so the
+   * values above are fallbacks and the client asks `INFO` once.
+   */
+  detail: boolean;
 }
 
 export const AUTO_VHZ_FALLBACK = { min: 5, max: 10 } as const;
@@ -403,7 +409,17 @@ function parseAutoCaps(ch: Json | null): AutoCaps | null {
     lraSrc: sa !== null && sb !== null ? { A: sa, B: sb } : { ...AUTO_LRA_SRC_FALLBACK },
     hbMaxS: hbMax !== null && hbMax >= HB_MIN_S ? hbMax : HB_MAX_FALLBACK_S,
     maxMin: maxMin !== null && maxMin > 0 ? maxMin : 0,
+    detail: isObj(ch.auto),
   };
+}
+
+/**
+ * Wing values a manual slider follows: the setpoint (`lset`, ICD001-1) when
+ * the frame has it, else the reported output (`lra`, older firmware). Auto
+ * shows `lra`, the actual output (§11.4.8).
+ */
+export function wingSetpoints(tlm: Pick<Telemetry, 'lra' | 'lset'>): [number, number] {
+  return tlm.lset ?? tlm.lra;
 }
 
 /** §11.4.16: Auto is offered only on proto "ICD001-1" whose INFO ch.mode lists "auto". */
@@ -487,7 +503,8 @@ export function parseInfo(input: string | Json): DeviceInfo | null {
     let egg: EggCaps | null = null;
     if (isObj(ch.egg)) {
       const idx = num(ch.egg.ppg);
-      if (idx !== null) {
+      if (idx !== null && idx >= 0) {
+        // "ppg":-1 = no Bullet sensor on this unit (h11-icd-v1 1.1.0)
         egg = { ppgIndex: idx, hasActuator: flag(ch.egg.act) };
       }
     }
@@ -537,8 +554,13 @@ export interface Telemetry {
   batteryPct: number | null;
   acc: number[];
   gyr: number[];
-  /** Actual intensities [A (J10), B (J11)], 0–100. */
+  /**
+   * Actual intensities [A (J10), B (J11)], 0–100: in manual the current
+   * budget (J12 reserved, §11.3.10) can lower them below the setpoint.
+   */
   lra: [number, number];
+  /** ICD001-1: the manual setpoints [A, B] (`lset`); null when absent (older firmware). */
+  lset: [number, number] | null;
   /** Wing rhythm per group [[onMs,offMs],[onMs,offMs]]; [0,0] = constant. Legacy: always [0,0]. */
   lp: [[number, number], [number, number]];
   lraFreqHz: number | null;
@@ -643,6 +665,7 @@ export function parseTelemetry(obj: Json): Telemetry {
     acc: numArr(obj.acc),
     gyr: numArr(obj.gyr),
     lra: [lra[0] ?? 0, lra[1] ?? 0],
+    lset: Array.isArray(obj.lset) ? [num(obj.lset[0]) ?? 0, num(obj.lset[1]) ?? 0] : null,
     lp: [pair(lpArr[0]), pair(lpArr[1])],
     lraFreqHz: num(obj.f),
     vcm,

@@ -198,8 +198,9 @@ export class Icd001Client {
    * Single place E-stop state changes. The message type tells who caused it
    * (PROTOCOL §9, hardware-confirmed; no time windows):
    *  - `OK ESTOP n`  only ever answers the app's own `ESTOP n`   -> 'app'
-   *  - `EVT ESTOP n` is sent only when the device START key is pressed
-   *                  (never as an echo of `ESTOP n`)              -> 'device'
+   *  - `EVT ESTOP n` that changes the latch: START key            -> 'device'
+   *                  (ICD001-1 firmware may also echo `EVT ESTOP n` right after
+   *                  `OK ESTOP n`, hardware 10/06; no change -> source kept)
    *  - TLM `estop`   carries no origin: an already-engaged stop keeps its source.
    *                  Engaged seen only in TLM (latch kept over a disconnect,
    *                  §10.1, or reply/EVT lost) -> 'app' if this app engaged it on
@@ -218,6 +219,9 @@ export class Icd001Client {
     const devId = this.state.device?.id ?? null;
     let source: EstopSource;
     if (via === 'ok') {
+      source = 'app';
+    } else if (via === 'evt' && !changed && this.state.estopSource === 'app') {
+      // hardware 10/06: an EVT ESTOP n may follow our own OK ESTOP n; keep 'app'
       source = 'app';
     } else if (via === 'evt') {
       source = 'device';
@@ -400,6 +404,15 @@ export class Icd001Client {
       if (!info) {
         throw new Error('设备没有返回 INFO');
       }
+      if (supportsAuto(info) && info.auto && !info.auto.detail) {
+        // h11-icd-v1 1.1.0: the INFO characteristic (≤ 512 B) leaves out ch.auto
+        // (fsr / lraSrc / hbMaxS / vhz); the INFO command returns the full ~636 B
+        // JSON as several notify packets (one line). Fallbacks if it does not come.
+        const full = await this.requestInfoViaCommand();
+        if (full && supportsAuto(full)) {
+          info = full;
+        }
+      }
       const auto = supportsAuto(info);
       this.clearModeTimer();
       this.set({
@@ -470,14 +483,23 @@ export class Icd001Client {
     });
   }
 
-  /** User-initiated disconnect: STOP first (best effort), no auto-reconnect. */
+  /**
+   * User-initiated disconnect, no auto-reconnect. Older firmware: STOP first
+   * (best effort, §5). ICD001-1: nothing first; auto keeps running and the
+   * firmware zeroes a manual takeover and returns to auto on the drop
+   * (§11.5.2; a latch stays, §11.6.2). Product decision 10/06 23:39.
+   */
   async disconnect(): Promise<void> {
     this.userDisconnect = true;
     this.clearReconnect();
     this.stopWatchdog();
     const dev = this.state.device;
     if (dev && this.state.status === 'connected') {
-      await this.stop().catch(() => undefined);
+      if (this.state.autoSupported) {
+        this.pushLog('# disconnect: no STOP (ICD001-1, device returns to auto, §11.5.2)');
+      } else {
+        await this.stop().catch(() => undefined);
+      }
     }
     this.scheduler.clear();
     if (dev) {
@@ -646,7 +668,9 @@ export class Icd001Client {
           }
         }
         if (ei.verb === 'PZERO') {
-          patch.pzero = null;
+          // §11.7.7 ERR BUSY PZERO: a re-zero (e.g. the PAUSE key) is running and
+          // continues; wait for its EVT PZERO. Other refusals: nothing pending.
+          patch.pzero = ei.reason === 'BUSY' ? { state: 'pending', at: now } : null;
         }
         if (se) {
           patch.lastSafetyErr = { reason: se, at: now };
@@ -1021,8 +1045,13 @@ export class Icd001Client {
     }
     if (this.awaitingModeQuery && reason) {
       this.awaitingModeQuery = false;
-      // §11.5.2: a takeover lost to a BLE drop comes back as AUTO BLE_DISCONNECT.
-      if (this.modeAtLinkLoss === 'manual' && m === 'auto' && reason === 'BLE_DISCONNECT') {
+      // §11.5.2 / §11.8: a takeover (or an E-stop latch) lost to a BLE drop or an
+      // HB timeout comes back as AUTO BLE_DISCONNECT / AUTO HOST_TIMEOUT.
+      if (
+        this.modeAtLinkLoss === 'manual' &&
+        m === 'auto' &&
+        (reason === 'BLE_DISCONNECT' || reason === 'HOST_TIMEOUT')
+      ) {
         patch.modeChange = {
           from: 'manual',
           to: 'auto',

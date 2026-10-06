@@ -14,7 +14,7 @@ import {
 } from '../../src/screens/advanced-control/controller';
 import {
   AUTO_HINT_TOAST,
-  autoPillVisible,
+  autoBarState,
   autoSensors,
   modeNoticeFor,
 } from '../../src/screens/advanced-control/model';
@@ -72,6 +72,7 @@ describe('§11.4 protocol parsing / formatting', () => {
   it('§11.4.7 / §11.5.1 INFO ch.mode, ch.boot, ch.auto; §11.4.16 Auto only on ICD001-1 with "auto"', () => {
     const i = parseInfo(V1_INFO)!;
     expect(i.auto).toEqual({
+      detail: true,
       modes: ['manual', 'auto'],
       boot: 'auto',
       vhz: { min: 5, max: 10 },
@@ -222,7 +223,7 @@ async function setup(variant: MockVariant = 'icd1v1', pre?: (dev: MockIcd001Devi
   return { dev, transport, client, ctl, id, device, v, wing, pulse, egg, log, since, banner, takeOver, done };
 }
 
-describe('ICD001-1 on the simulator (§11.4–§11.6)', () => {
+describe('ICD001-1 on the simulator (§11.4–§11.8)', () => {
   beforeEach(() => {
     jest.useFakeTimers({ now: 20_000_000 });
     resetPulseSpeedCache();
@@ -233,7 +234,8 @@ describe('ICD001-1 on the simulator (§11.4–§11.6)', () => {
 
   it('§11.5.1 connect: RATE, HB 10, MODE query -> AUTO BOOT; read-only cards; app sends no MODE AUTO', async () => {
     const t = await setup();
-    expect(t.dev.commandLog.slice(0, 3)).toEqual(['RATE 10', `HB ${APP_HB_S}`, 'MODE']);
+    // fw 1.1.0: the INFO characteristic omits ch.auto (512 B cap) -> full INFO via command first
+    expect(t.dev.commandLog.slice(0, 4)).toEqual(['INFO', 'RATE 10', `HB ${APP_HB_S}`, 'MODE']);
     expect(t.dev.commandLog).not.toContain('MODE AUTO');
     const s = t.client.getState();
     expect(s).toMatchObject({
@@ -253,7 +255,7 @@ describe('ICD001-1 on the simulator (§11.4–§11.6)', () => {
     expect(t.wing().enabled).toBe(false);
     expect(t.pulse()).toMatchObject({ readOnly: true, range: { min: 5, max: 10 } });
     expect(t.v().mode.pzero).toBe('available');
-    expect(t.egg().sensors).toEqual({ pressure: 'ok', upper: 'ok', lower: 'ok', overall: 'ok' });
+    expect(t.v().mode.sensors).toEqual({ pressure: 'ok', upper: 'ok', lower: 'ok', overall: 'ok' });
     expect(t.v().banner).toBeNull();
     t.done();
   });
@@ -320,7 +322,7 @@ describe('ICD001-1 on the simulator (§11.4–§11.6)', () => {
     expect(t.wing()).toMatchObject({ readOnly: false, enabled: true, values: { A: 0, B: 0 } });
     expect(t.v().banner).toBeNull(); // CMD: no notice
     expect(t.v().mode.pzero).toBeNull();
-    expect(t.egg().sensors).toBeNull();
+    expect(t.v().mode.sensors).toBeNull();
     t.ctl.setWingValue('A', 40);
     await tick(300);
     expect(t.dev.commandLog).toContain('LRA 0 40');
@@ -488,7 +490,7 @@ describe('ICD001-1 on the simulator (§11.4–§11.6)', () => {
     t.done();
   });
 
-  it('§11.3.4 STOP in auto (global pill) -> EVT MODE MANUAL STOP -> "Stopped, Auto is off"; §11.6.1 later BLE drop returns to auto', async () => {
+  it('§11.3.4 STOP in auto -> EVT MODE MANUAL STOP -> "Stopped, Auto is off"; §11.6.1 later BLE drop returns to auto', async () => {
     const t = await setup();
     await t.client.stop();
     await tick(200);
@@ -518,6 +520,66 @@ describe('ICD001-1 on the simulator (§11.4–§11.6)', () => {
     // §11.4.12: HB timeout never latches: the user can take over again at once
     await t.takeOver();
     expect(t.v().banner).toBeNull();
+    t.done();
+  });
+
+  it('§11.8.2 HB timeout with only an E-stop latched: E-stop released, back on Auto (EVT ESTOP 0, EVT MODE AUTO HOST_TIMEOUT)', async () => {
+    const t = await setup();
+    t.ctl.stopAll();
+    await tick(200);
+    expect(t.dev.snapshot().estop).toBe(true);
+    t.dev.rate = 0; // no TLM -> no PING: the device sees a silent host
+    await tick(10_500);
+    t.dev.rate = 10;
+    await tick(300);
+    expect(t.dev.mode).toBe('auto');
+    expect(t.dev.snapshot().estop).toBe(false);
+    const evts = t.log().filter(l => l.startsWith('< EVT'));
+    expect(evts.slice(-2)).toEqual(['< EVT ESTOP 0', '< EVT MODE AUTO HOST_TIMEOUT']);
+    expect(t.client.getState()).toMatchObject({ estop: false, mode: 'auto' });
+    expect(t.banner()).toEqual(['Back on Auto', 'The app paused, so Auto took over.']);
+    expect(t.v().toast).toBeNull(); // one notice only (fw C-series: EVT ESTOP 0 then EVT MODE AUTO HOST_TIMEOUT)
+    t.done();
+  });
+
+  it('§11.7.1 / §11.8.3 HB timeout with over-temp latched: stays manual + latched, no EVT MODE', async () => {
+    const t = await setup();
+    t.dev.ntcOverride = 43;
+    await tick(400);
+    expect(t.dev.mode).toBe('manual');
+    t.dev.rate = 0;
+    await tick(10_500);
+    expect(t.dev.mode).toBe('manual');
+    expect(t.dev.ot).toBe(true);
+    expect(t.log()).not.toContain('< EVT MODE AUTO HOST_TIMEOUT');
+    t.done();
+  });
+
+  it('§11.8.4 HB timeout with E-stop + over-temp: only the E-stop is released, stays manual', async () => {
+    const t = await setup();
+    t.ctl.stopAll();
+    await tick(200);
+    t.dev.ntcOverride = 43;
+    await tick(400);
+    t.dev.rate = 0;
+    await tick(10_500);
+    expect(t.dev.snapshot().estop).toBe(false);
+    expect(t.dev.ot).toBe(true);
+    expect(t.dev.mode).toBe('manual');
+    t.done();
+  });
+
+  it('§11.7.4 HB timeout in manual with outputs already 0 (after STOP) still returns to Auto', async () => {
+    const t = await setup();
+    await t.client.stop();
+    await tick(200);
+    expect(t.dev.mode).toBe('manual');
+    t.dev.rate = 0;
+    await tick(10_500);
+    t.dev.rate = 10;
+    await tick(300);
+    expect(t.dev.mode).toBe('auto');
+    expect(t.log()).toContain('< EVT MODE AUTO HOST_TIMEOUT');
     t.done();
   });
 
@@ -625,7 +687,7 @@ describe('ICD001-1 on the simulator (§11.4–§11.6)', () => {
     const n = t.dev.commandLog.length;
     await tick(600); // auto-reconnect
     expect(t.client.getState().status).toBe('connected');
-    expect(t.since(n).slice(0, 3)).toEqual(['RATE 10', 'HB 10', 'MODE']);
+    expect(t.since(n).slice(0, 4)).toEqual(['INFO', 'RATE 10', 'HB 10', 'MODE']);
     expect(t.since(n)).not.toContain('MODE AUTO');
     expect(t.client.getState()).toMatchObject({ mode: 'auto', modeReason: 'BLE_DISCONNECT' });
     expect(t.banner()).toEqual(['Back on Auto', 'The link dropped, so Auto took over.']);
@@ -642,17 +704,118 @@ describe('ICD001-1 on the simulator (§11.4–§11.6)', () => {
     t.done();
   });
 
-  it('§11.6.2 BLE drop while latched: stays manual + latched (no return to auto)', async () => {
+  it('§11.8.1 BLE drop with only an E-stop latched: released, back on Auto; reconnect reads AUTO BLE_DISCONNECT, estop 0', async () => {
     const t = await setup();
     t.ctl.stopAll();
     await tick(200);
     t.transport.simulateLinkLoss(t.id);
     await tick(20);
+    expect(t.dev.mode).toBe('auto');
+    expect(t.dev.snapshot().estop).toBe(false);
+    expect(t.banner()).toEqual(['Connection lost', 'Device is on Auto.']); // never "Stop all stays on."
+    const n = t.dev.commandLog.length;
+    await tick(600);
+    expect(t.since(n).slice(0, 4)).toEqual(['INFO', 'RATE 10', 'HB 10', 'MODE']);
+    expect(t.since(n)).not.toContain('ESTOP 1');
+    expect(t.client.getState()).toMatchObject({
+      status: 'connected',
+      mode: 'auto',
+      modeReason: 'BLE_DISCONNECT',
+      estop: false,
+    });
+    expect(t.banner()).toEqual(['Back on Auto', 'The link dropped, so Auto took over.']);
+    expect(t.v().mode.autoAllowed).toBe(true);
+    t.done();
+  });
+
+  it('§11.8.3 BLE drop with over-temp latched: stays manual + latched; reconnect shows the over-temp lock', async () => {
+    const t = await setup();
+    t.dev.ntcOverride = 43;
+    await tick(400);
+    t.transport.simulateLinkLoss(t.id);
+    await tick(20);
     expect(t.dev.mode).toBe('manual');
-    expect(t.dev.snapshot().estop).toBe(true);
+    expect(t.dev.ot).toBe(true);
     expect(t.banner()).toEqual(['Connection lost', 'Everything stopped.']);
     await tick(600);
-    expect(t.client.getState()).toMatchObject({ status: 'connected', mode: 'manual', estop: true });
+    expect(t.client.getState()).toMatchObject({ status: 'connected', mode: 'manual', overTemp: true });
+    expect(t.v().mode.autoAllowed).toBe(false);
+    t.done();
+  });
+
+  it('§11.8.4 BLE drop with E-stop + low battery: only the E-stop is released, stays manual', async () => {
+    const t = await setup();
+    t.ctl.stopAll();
+    await tick(200);
+    t.dev.vbatOverride = 3.3;
+    await tick(400);
+    expect(t.dev.lowbat).toBe(true);
+    t.transport.simulateLinkLoss(t.id);
+    await tick(20);
+    expect(t.dev.snapshot().estop).toBe(false);
+    expect(t.dev.lowbat).toBe(true);
+    expect(t.dev.mode).toBe('manual');
+    expect(t.banner()).toEqual(['Connection lost', 'Everything stopped.']);
+    t.done();
+  });
+
+  it('Stop all pressed offline on ICD001-1: "On Auto, stops on reconnect.", then ESTOP 1 on reconnect', async () => {
+    const t = await setup();
+    t.transport.simulateLinkLoss(t.id);
+    await tick(20);
+    t.ctl.stopAll();
+    expect(t.banner()).toEqual(['Connection lost', 'On Auto, stops on reconnect.']);
+    const n = t.dev.commandLog.length;
+    await tick(600);
+    expect(t.since(n)).toContain('ESTOP 1');
+    expect(t.dev.snapshot().estop).toBe(true);
+    expect(t.dev.mode).toBe('manual');
+    t.done();
+  });
+
+  it('user Disconnect on ICD001-1 sends no STOP (10/06 decision): auto keeps running', async () => {
+    const t = await setup();
+    const n = t.dev.commandLog.length;
+    await t.client.disconnect();
+    expect(t.since(n)).toEqual([]);
+    expect(t.client.getState().status).toBe('disconnected');
+    expect(t.dev.mode).toBe('auto');
+    expect(t.log()).toContain('# disconnect: no STOP (ICD001-1, device returns to auto, §11.5.2)');
+    t.done();
+  });
+
+  it('user Disconnect during a takeover: no STOP; firmware zeroes and returns to auto (§11.5.2)', async () => {
+    const t = await setup();
+    await t.takeOver();
+    t.ctl.setWingValue('A', 60);
+    await tick(300);
+    expect(t.dev.snapshot().lra[0]).toBe(60);
+    const n = t.dev.commandLog.length;
+    await t.client.disconnect();
+    expect(t.since(n)).not.toContain('STOP');
+    expect(t.dev.mode).toBe('auto');
+    expect(t.dev.modeReason).toBe('BLE_DISCONNECT');
+    expect(t.dev.snapshot().lra).toEqual([0, 0]);
+    t.done();
+  });
+
+  it('user Disconnect with an E-stop latched: no STOP; firmware releases it and returns to auto (§11.8.1)', async () => {
+    const t = await setup();
+    t.ctl.stopAll();
+    await tick(200);
+    const n = t.dev.commandLog.length;
+    await t.client.disconnect();
+    expect(t.since(n)).toEqual([]);
+    expect(t.dev.mode).toBe('auto');
+    expect(t.dev.snapshot().estop).toBe(false);
+    t.done();
+  });
+
+  it('old firmware (ICD001-0): user Disconnect still sends STOP first', async () => {
+    const t = await setup('icd1');
+    const n = t.dev.commandLog.length;
+    await t.client.disconnect();
+    expect(t.since(n)[0]).toBe('STOP');
     t.done();
   });
 
@@ -676,19 +839,83 @@ describe('ICD001-1 on the simulator (§11.4–§11.6)', () => {
     t.done();
   });
 
+  it('§11.7.7 PZERO while a re-zero runs -> ERR BUSY PZERO: no error toast, button busy until EVT PZERO', async () => {
+    const t = await setup();
+    t.dev.handleWrite('PZERO'); // a re-zero already running on the device (e.g. nRF / PAUSE)
+    t.ctl.pzero();
+    await tick(60);
+    expect(t.log()).toContain('< ERR BUSY PZERO');
+    expect(t.v().toast).toMatchObject({ title: 'Re-zeroing pressure' });
+    expect(t.v().mode.pzero).toBe('busy');
+    await tick(400);
+    expect(t.v().mode.pzero).toBe('available');
+    expect(t.v().toast).toMatchObject({ title: 'Pressure re-zeroed' });
+    t.done();
+  });
+
+  it('§11.7.6 one ERR, by priority: ESTOP > MODE (PZERO / LRA in manual while E-stopped)', async () => {
+    const t = await setup();
+    await t.takeOver();
+    t.ctl.stopAll();
+    await tick(200);
+    expect(t.dev.handleWrite('PZERO')).toEqual(['ERR ESTOP PZERO']);
+    expect(t.dev.handleWrite('LRA 0 20')).toEqual(['ERR ESTOP LRA']);
+    expect(t.dev.handleWrite('MODE AUTO')).toEqual(['ERR ESTOP MODE']);
+    t.ctl.release();
+    await tick(200);
+    expect(t.dev.handleWrite('PZERO')).toEqual(['ERR MODE MANUAL PZERO']);
+    t.done();
+  });
+
+  it('§11.7.5 lastReason = CMD after an app switch; unchanged by an idempotent MODE', async () => {
+    const t = await setup();
+    await t.takeOver();
+    expect(t.dev.handleWrite('MODE')).toEqual(['OK MODE MANUAL CMD']);
+    await t.client.stop();
+    await tick(100);
+    t.ctl.setMode('auto');
+    await tick(200);
+    expect(t.dev.handleWrite('MODE')).toEqual(['OK MODE AUTO CMD']);
+    t.dev.pressStartKey();
+    t.dev.pressStartKey(); // manual, KEY
+    expect(t.dev.handleWrite('MODE')).toEqual(['OK MODE MANUAL KEY']);
+    expect(t.dev.handleWrite('MODE MANUAL')).toEqual(['OK MODE MANUAL']);
+    expect(t.dev.handleWrite('MODE')).toEqual(['OK MODE MANUAL KEY']);
+    t.done();
+  });
+
+  it('hardware 10/06: OK ESTOP 1 may be followed by EVT ESTOP 1: one notice, source stays app', async () => {
+    const t = await setup('icd1v1', d => {
+      d.estopEvtEcho = true;
+    });
+    t.ctl.stopAll();
+    await tick(200);
+    const rx = t.log().filter(l => l.startsWith('<') && !l.startsWith('< {'));
+    expect(rx.slice(-3)).toEqual(['< OK ESTOP 1', '< EVT ESTOP 1', '< EVT MODE MANUAL ESTOP']);
+    expect(t.client.getState()).toMatchObject({ estop: true, estopSource: 'app', mode: 'manual' });
+    expect(t.banner()).toEqual(['Everything is stopped', 'Tap Unlock, then Auto to resume.']);
+    expect(t.v().toast).toBeNull();
+    t.ctl.release();
+    await tick(200);
+    expect(t.log()).toContain('< EVT ESTOP 0');
+    expect(t.client.getState()).toMatchObject({ estop: false, mode: 'manual' });
+    expect(t.banner()).toEqual(['Auto is off', 'Tap Auto to turn it back on.']);
+    t.done();
+  });
+
   it('§11.3.9 PAUSE key in auto -> EVT PZERO -> toast', async () => {
     const t = await setup();
     t.transport.pressPauseKey(t.id);
-    await tick(100);
+    await tick(400); // re-zero takes ~300 ms before EVT PZERO
     expect(t.v().toast).toMatchObject({ title: 'Pressure re-zeroed' });
     t.done();
   });
 
   it('§11.4.4 sensors partly failed: auto keeps the others; sensor row + notice', async () => {
     const t = await setup();
-    t.dev.srcOverride = { fsr: [1, 0], ppg: [1, 1, 0, 1] };
+    t.dev.srcOverride = { fsr: [1, 0], ppg: [1, 1, 0] };
     await tick(4000);
-    expect(t.egg().sensors).toEqual({ pressure: 'part', upper: 'ok', lower: 'off', overall: 'part' });
+    expect(t.v().mode.sensors).toEqual({ pressure: 'part', upper: 'ok', lower: 'off', overall: 'part' });
     expect(t.banner()).toEqual(['Some sensors are off', 'Auto keeps those outputs off.']);
     expect(t.client.getState().tlm!.lra[1]).toBe(0); // lower wings follow J23 (ppg[2]) -> 0
     expect(t.client.getState().tlm!.lra[0]).toBeGreaterThan(0);
@@ -697,7 +924,7 @@ describe('ICD001-1 on the simulator (§11.4–§11.6)', () => {
 
   it('§11.4.4 all sensors failed: stays AUTO with outputs 0; hint only', async () => {
     const t = await setup();
-    t.dev.srcOverride = { fsr: [0, 0], ppg: [0, 0, 0, 0] };
+    t.dev.srcOverride = { fsr: [0, 0], ppg: [0, 0, 0] };
     await tick(4000);
     const s = t.client.getState();
     expect(s.mode).toBe('auto');
@@ -744,15 +971,152 @@ describe('ICD001-1 on the simulator (§11.4–§11.6)', () => {
     t.done();
   });
 
-  it('global "Auto on" pill: only ICD001-1, connected, auto, no control page focused', async () => {
+  it('global Auto bar: only ICD001-1, connected, no control page focused; auto -> "auto", e-stop -> "stopped"', async () => {
     const t = await setup();
     const s = t.client.getState();
-    expect(autoPillVisible(s, false)).toBe(true);
-    expect(autoPillVisible(s, true)).toBe(false);
-    expect(autoPillVisible({ ...s, mode: 'manual' }, false)).toBe(false);
-    expect(autoPillVisible({ ...s, status: 'reconnecting' }, false)).toBe(false);
-    expect(autoPillVisible({ ...s, autoSupported: false }, false)).toBe(false);
+    expect(autoBarState(s, false)).toBe('auto');
+    expect(autoBarState(s, true)).toBeNull();
+    expect(autoBarState({ ...s, mode: 'manual' }, false)).toBeNull();
+    expect(autoBarState({ ...s, mode: 'manual', estop: true }, false)).toBe('stopped');
+    expect(autoBarState({ ...s, mode: 'manual', estop: true }, true)).toBeNull();
+    expect(autoBarState({ ...s, status: 'reconnecting' }, false)).toBeNull();
+    expect(autoBarState({ ...s, autoSupported: false }, false)).toBeNull();
     expect(autoSensors(null, s.info)).toBeNull();
+    t.done();
+  });
+});
+
+// ------------------------------------------------------------ fw h11-icd-v1 1.1.0 cross-check (FW-CROSSCHECK.md)
+
+describe('fw h11-icd-v1 1.1.0 cross-check (test/RESULTS.md)', () => {
+  beforeEach(() => {
+    jest.useFakeTimers({ now: 20_000_000 });
+    resetPulseSpeedCache();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('INFO characteristic ≤ 512 B without ch.auto; the INFO command (≈ 636 B, several packets at MTU 185) gives the caps', async () => {
+    const d = new MockIcd001Device('icd1v1', 'X');
+    const chr = d.infoJson(false);
+    const full = d.infoJson(true);
+    expect(new TextEncoder().encode(chr).length).toBeLessThanOrEqual(512);
+    expect(JSON.parse(chr).ch.auto).toBeUndefined();
+    expect(new TextEncoder().encode(full).length).toBeGreaterThan(3 * 182); // ≥ 4 notify packets at MTU 185
+    expect(parseInfo(JSON.parse(chr))!.auto).toMatchObject({ detail: false, modes: ['manual', 'auto'] });
+    const t = await setup();
+    expect(t.client.getState().info!.auto).toMatchObject({
+      detail: true,
+      fsr: ['J19', 'J20'],
+      lraSrc: { A: 0, B: 2 },
+      hbMaxS: 30,
+      vhz: { min: 5, max: 10 },
+    });
+    t.done();
+  });
+
+  it('INFO command never answered: Auto still gated on proto + ch.mode, caps fall back to defaults', async () => {
+    const dev = new MockIcd001Device('icd1v1', 'ICD1-AUTO');
+    const orig = dev.handleWrite.bind(dev);
+    dev.handleWrite = (text: string) => (text.trim() === 'INFO' ? [] : orig(text));
+    const transport = new MockIcd001Transport([dev], { mtu: 185, connectDelayMs: 10 });
+    const client = new Icd001Client(transport, { reconnectDelaysMs: [100, 100] });
+    const p = client.connect({
+      id: 'sim-ICD1-AUTO',
+      name: 'ICD1-AUTO',
+      rssi: -50,
+      kind: null,
+      simulated: true,
+    });
+    await tick(2600);
+    expect(await p).toBe(true);
+    const s = client.getState();
+    expect(s).toMatchObject({ status: 'connected', autoSupported: true, mode: 'auto', hb: APP_HB_S });
+    expect(s.info!.auto).toMatchObject({ detail: false, hbMaxS: 30, vhz: { min: 5, max: 10 } });
+    client.destroy();
+  });
+
+  it('TLM lra = actual (budgeted), lset = setpoint: manual sliders follow lset; Auto shows lra', async () => {
+    const t = await setup();
+    await t.takeOver();
+    t.ctl.setWingValue('A', 100);
+    t.ctl.setWingValue('B', 100);
+    await tick(400);
+    t.ctl.setPulseOn(true);
+    await tick(1600); // past the optimistic window
+    const tlm = t.client.getState().tlm!;
+    expect(tlm.lset).toEqual([100, 100]);
+    expect(tlm.lra).toEqual([40, 40]); // 1200 mA − J12 1000 mA = 200 mA for 2 × 250 mA
+    expect(t.wing().values).toEqual({ A: 100, B: 100 });
+    t.done();
+  });
+
+  it('START key latched with no phone: connecting shows Stopped + Unlock; connect + disconnect keeps it; ESTOP 0 releases', async () => {
+    const t = await setup('icd1v1', d => {
+      d.pressStartKey(); // nobody connected (E8)
+    });
+    expect(t.client.getState()).toMatchObject({ estop: true, mode: 'manual' });
+    expect(t.v().mode.autoAllowed).toBe(false);
+    expect(autoBarState(t.client.getState(), false)).toBe('stopped');
+    t.transport.simulateLinkLoss(t.id);
+    await tick(20);
+    expect(t.dev.snapshot().estop).toBe(true); // not released by the drop
+    expect(t.dev.mode).toBe('manual');
+    await tick(600);
+    expect(t.client.getState()).toMatchObject({ status: 'connected', estop: true, mode: 'manual' });
+    t.ctl.release();
+    await tick(200);
+    expect(t.client.getState()).toMatchObject({ estop: false, mode: 'manual' });
+    t.done();
+  });
+
+  it('serial order on a drop in manual with an E-stop: BLE_DISCONNECT STOP, ESTOP 0, MODE AUTO BLE_DISCONNECT', async () => {
+    const t = await setup();
+    t.ctl.stopAll();
+    await tick(200);
+    t.dev.serialLog = [];
+    t.transport.simulateLinkLoss(t.id);
+    await tick(20);
+    expect(t.dev.serialLog).toEqual([
+      'EVT BLE_DISCONNECT STOP',
+      'EVT ESTOP 0',
+      'EVT MODE AUTO BLE_DISCONNECT',
+    ]);
+    t.done();
+  });
+
+  it('argument errors: ERR ARG HB / PZERO / LRA, ESTOP with no or garbled arg engages, only exact "0" releases', async () => {
+    const t = await setup();
+    expect(t.dev.handleWrite('HB X')).toEqual(['ERR ARG HB']);
+    expect(t.dev.handleWrite('HB 99')).toEqual(['ERR RANGE HB']);
+    expect(t.dev.handleWrite('PZERO 1')).toEqual(['ERR ARG PZERO']);
+    expect(t.dev.handleWrite('LRA 7 20')).toEqual(['ERR ARG LRA']); // format before MODE AUTO
+    expect(t.dev.handleWrite('LRA 0 200')).toEqual(['ERR MODE AUTO LRA']); // MODE before RANGE
+    expect(t.dev.handleWrite('RATE X')).toEqual(['ERR ARG RATE']);
+    expect(t.dev.handleWrite('ESTOP XX')[0]).toBe('OK ESTOP 1');
+    expect(t.dev.handleWrite('ESTOP 00')).toEqual(['OK ESTOP 1']);
+    expect(t.dev.handleWrite('ESTOP')).toEqual(['OK ESTOP 1']);
+    expect(t.dev.handleWrite('ESTOP 0')).toEqual(['OK ESTOP 0']);
+    expect(t.dev.handleWrite('LRA 0 200')).toEqual(['ERR RANGE LRA']);
+    expect(t.dev.handleWrite('LRA CORE 20')).toEqual(['OK LRA 20 0']);
+    t.done();
+  });
+
+  it('PAUSE key: ignored in manual and while a re-zero runs', async () => {
+    const t = await setup();
+    const pending = () =>
+      (t.dev as unknown as { pendingEvts: { line: string }[] }).pendingEvts.filter(
+        e => e.line === 'EVT PZERO',
+      ).length;
+    t.dev.handleWrite('PZERO');
+    t.dev.pressPauseKey();
+    expect(pending()).toBe(1); // the running zero continues, no second one
+    await tick(400);
+    expect(pending()).toBe(0);
+    await t.takeOver();
+    t.dev.pressPauseKey();
+    expect(pending()).toBe(0);
     t.done();
   });
 });

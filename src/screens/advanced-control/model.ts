@@ -175,13 +175,17 @@ export function lowBatteryLine(vbat: number | null): string {
  * are active at the same time) is deliberately not shown as extra lines; the
  * next notice takes over once the higher one clears.
  */
+/** Connection lost, ICD001-1, Stop all pressed offline: Auto runs until the ESTOP 1 reaches it. */
+export const AUTO_STOP_QUEUED_LINE = 'On Auto, stops on reconnect.';
+
 export interface BannerLink {
   hadDevice: boolean;
   stopQueued?: boolean;
   /**
-   * ICD001-1 (§11.5.2): after a BLE drop the device is back on auto unless it
-   * was latched (§11.6.2). `autoDevice` = last INFO offered auto,
-   * `latchedAtDrop` = E-stop / over-temp / low battery was on at the drop.
+   * ICD001-1 (§11.5.2, §11.8): after a BLE drop the device is back on auto,
+   * also from an E-stop, unless over-temp / low battery is latched.
+   * `autoDevice` = last INFO offered auto, `latchedAtDrop` = over-temp / low
+   * battery was on at the drop.
    */
   autoDevice?: boolean;
   latchedAtDrop?: boolean;
@@ -224,10 +228,16 @@ export function bannerFor(
         // Firmware stops everything on BLE drop (§5). Stop all pressed offline
         // is sent as ESTOP 1 first on reconnect (controller.stopAll), so the
         // page comes back Stopped: "Stop all stays on."
-        line: link.stopQueued
+        // ICD001-1 (§11.8): the device runs Auto while offline (an E-stop is
+        // released on the drop); a Stop all pressed now goes out on reconnect.
+        line: link.autoDevice
+          ? link.latchedAtDrop
+            ? 'Everything stopped.'
+            : link.stopQueued
+            ? AUTO_STOP_QUEUED_LINE
+            : 'Device is on Auto.'
+          : link.stopQueued
           ? 'Stop all stays on.'
-          : link.autoDevice && !link.latchedAtDrop
-          ? 'Device is on Auto.'
           : 'Everything stopped.',
         action: 'reconnect',
       };
@@ -403,18 +413,25 @@ export function sensorBanner(s: AutoSensors | null): BannerModel | null {
     : { tone: 'neutral', icon: 'info', title: 'Some sensors are off', line: 'Auto keeps those outputs off.' };
 }
 
-/** Global "Auto on" pill: ICD001-1 connected, running auto, no control page on screen. */
-export function autoPillVisible(
-  s: Pick<Icd001State, 'status' | 'autoSupported' | 'mode' | 'modePending' | 'info'>,
+/** Global Auto bar on the tab pages (components/AutoBar.tsx). */
+export type AutoBarState = 'auto' | 'stopped' | null;
+
+/**
+ * ICD001-1 only, connected, no control page focused. `stopped` while an
+ * e-stop is latched (the bar's Stop all, or Stop all on the page before
+ * leaving) so Unlock stays one tap away; `auto` while the device runs Auto.
+ */
+export function autoBarState(
+  s: Pick<Icd001State, 'status' | 'autoSupported' | 'mode' | 'modePending' | 'info' | 'estop'>,
   controlPageFocused: boolean,
-): boolean {
-  return (
-    !controlPageFocused &&
-    s.status === 'connected' &&
-    s.autoSupported &&
-    supportsAuto(s.info) &&
-    (s.modePending ?? s.mode) === 'auto'
-  );
+): AutoBarState {
+  if (controlPageFocused || s.status !== 'connected' || !s.autoSupported || !supportsAuto(s.info)) {
+    return null;
+  }
+  if (s.estop) {
+    return 'stopped';
+  }
+  return (s.modePending ?? s.mode) === 'auto' ? 'auto' : null;
 }
 
 export const COOLED_DOWN_BANNER: BannerModel = {

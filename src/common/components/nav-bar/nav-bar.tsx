@@ -1,6 +1,6 @@
 import React from "react";
 import { View, StyleSheet } from "react-native";
-import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { BottomTabBar, createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Home } from "../../../screens/home";
 import { Control } from "../../../screens/control";
 import { SCREENS } from "@common/constant";
@@ -11,6 +11,13 @@ import UserCircle from "@images/icons/user-circle.svg";
 import { colors } from "@common/styles/colors";
 import ProfileStack from "../../../screens/profile/ProfileStack";
 import { Chat } from "../../../screens/chat";
+import {
+  AUTO_BAR_H,
+  AutoBarHost,
+  useAutoBarState,
+} from "../../../screens/advanced-control/components/AutoBar";
+import type { AutoBarState } from "../../../screens/advanced-control/model";
+import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 
 const Tab = createBottomTabNavigator();
 
@@ -26,13 +33,25 @@ const TabIcon = ({
   </View>
 );
 
-export const NavBar = () => (
+// ICD001-1 Auto bar docks on top of the tab bar; while it shows, the scenes
+// lose AUTO_BAR_H at the bottom so it never covers page content.
+export const NavBar = () => <NavBarTabs autoBar={useAutoBarState()} />;
+
+// absolute host = the old `position: "absolute"` tab bar (scenes run under it)
+const renderTabBar = (props: BottomTabBarProps) => (
+  <AutoBarHost>
+    <BottomTabBar {...props} />
+  </AutoBarHost>
+);
+
+const NavBarTabs = ({ autoBar }: { autoBar: AutoBarState }) => (
   <Tab.Navigator
+    sceneContainerStyle={autoBar ? { paddingBottom: AUTO_BAR_H } : undefined}
+    tabBar={renderTabBar}
     screenOptions={{
       headerShown: false,
       tabBarStyle: {
         backgroundColor: colors.grayLightSolid,
-        position: "absolute",
         borderTopWidth: 0, // Remove the top border
         elevation: 0, // Remove shadow on Android
       },

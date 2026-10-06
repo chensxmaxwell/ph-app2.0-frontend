@@ -3,7 +3,7 @@
  * Auto | Manual control under the connection pill (Auto after connect),
  * read-only cards in Auto (a touch only hints), explicit takeover, sensors row
  * and Re-zero pressure only in Auto, no numbers / Hz on the controls, the
- * global "Auto on" pill, and old firmware (ICD001-0 / H11) without the control.
+ * global Auto bar on the tab pages, and old firmware (ICD001-0 / H11) without the control.
  */
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
@@ -31,7 +31,7 @@ jest.mock('react-native-svg', () => {
 });
 
 import { AdvancedControlScreen } from '../../src/screens/advanced-control';
-import { AutoPill } from '../../src/screens/advanced-control/components/AutoPill';
+import { AutoBar, useAutoBarState } from '../../src/screens/advanced-control/components/AutoBar';
 import { getIcd001Client, setControlPageFocused, setIcd001Mode } from '../../src/services/icd001/useIcd001';
 
 const flat = (c: unknown): string =>
@@ -50,6 +50,9 @@ const settle = async (ms = 1000) => {
     await jest.advanceTimersByTimeAsync(10);
   }
 };
+
+/** What nav-bar.tsx renders on the tab bar (AutoBarHost), with an injectable open action. */
+const Bar = ({ onOpen }: { onOpen: () => void }) => <AutoBar state={useAutoBarState()} onOpen={onOpen} />;
 
 describe('Manual page, ICD001-1 Auto | Manual (mock)', () => {
   beforeAll(async () => {
@@ -81,7 +84,7 @@ describe('Manual page, ICD001-1 Auto | Manual (mock)', () => {
       await p;
     });
     const dev = transport.devices.get('sim-ICD1-7E21');
-    // control under the pill, Auto selected (§11.5.1 boot in auto)
+    // control under the status pill, Auto selected (§11.5.1 boot in auto)
     expect(has(r, 'mode-switch')).toBe(true);
     const auto = byTestID(r, 'mode-auto')[0];
     const manual = byTestID(r, 'mode-manual')[0];
@@ -93,6 +96,8 @@ describe('Manual page, ICD001-1 Auto | Manual (mock)', () => {
     // Auto: read-only cards, sensors row, Re-zero pressure; no numbers / Hz on controls
     expect(has(r, 'readonly-wing')).toBe(true);
     expect(has(r, 'readonly-vcm')).toBe(true);
+    // fw 1.1.0 has no Bullet sensor (egg ppg -1): the sensors row still shows (under Pulse)
+    expect(textsOf(r.root)).not.toContain('Pulse & Bullet');
     expect(has(r, 'row-sensors')).toBe(true);
     expect(has(r, 'src-pressure-ok')).toBe(true);
     expect(has(r, 'pzero')).toBe(true);
@@ -169,7 +174,7 @@ describe('Manual page, ICD001-1 Auto | Manual (mock)', () => {
     r.unmount();
   });
 
-  it('global "Auto on" pill: shows off-page in auto; stop button sends STOP; hidden on a control page', async () => {
+  it('global Auto bar: off-page in auto; Stop all = ESTOP 1 -> "Stopped" + Unlock (ESTOP 0); hidden on a control page; Disconnect sends no STOP', async () => {
     const client = getIcd001Client();
     const transport = (client as unknown as { transport: any }).transport;
     await act(async () => {
@@ -187,7 +192,7 @@ describe('Manual page, ICD001-1 Auto | Manual (mock)', () => {
     const onOpen = jest.fn();
     let r!: renderer.ReactTestRenderer;
     await act(async () => {
-      r = renderer.create(<AutoPill onOpen={onOpen} />);
+      r = renderer.create(<Bar onOpen={onOpen} />);
     });
     expect(textsOf(r.root)).toContain('Auto on');
     await act(async () => {
@@ -198,19 +203,34 @@ describe('Manual page, ICD001-1 Auto | Manual (mock)', () => {
       setControlPageFocused(false);
     });
     await act(async () => {
-      byTestID(r, 'auto-pill-open')[0].props.onPress();
+      byTestID(r, 'auto-bar-open')[0].props.onPress();
     });
     expect(onOpen).toHaveBeenCalled();
+    // Stop all on the bar = ESTOP 1, same as the page (10/06 decision)
+    const n0 = dev.commandLog.length;
     await act(async () => {
-      byTestID(r, 'auto-pill-stop')[0].props.onPress();
+      byTestID(r, 'auto-bar-stop')[0].props.onPress();
       await settle(300);
     });
-    expect(dev.commandLog).toContain('STOP');
+    expect(dev.commandLog.slice(n0).filter((c: string) => c !== 'PING')).toEqual(['ESTOP 1']);
     expect(dev.mode).toBe('manual');
-    expect(r.toJSON()).toBeNull(); // no longer auto
+    expect(dev.snapshot().estop).toBe(true);
+    expect(textsOf(r.root)).toContain('Stopped');
+    expect(has(r, 'auto-bar-unlock')).toBe(true);
+    // Unlock = ESTOP 0: device stays manual at 0 (§11.6.4) -> bar hides
+    await act(async () => {
+      byTestID(r, 'auto-bar-unlock')[0].props.onPress();
+      await settle(300);
+    });
+    expect(lastCmd(dev.commandLog)).toBe('ESTOP 0');
+    expect(dev.mode).toBe('manual');
+    expect(r.toJSON()).toBeNull();
+    // ICD001-1: user Disconnect sends no STOP
+    const n = dev.commandLog.length;
     await act(async () => {
       await client.disconnect();
     });
+    expect(dev.commandLog.slice(n).filter((c: string) => c !== 'PING')).toEqual([]);
     r.unmount();
   });
 });

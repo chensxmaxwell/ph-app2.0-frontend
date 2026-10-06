@@ -13,13 +13,15 @@
  *  - 'h11'  = H11 v1.0 h11-demo-ble as on H11-91B1: INFO without proto,
  *    `VCM on halfMs`, telemetry vcm:[on,halfMs], 3 PPG, each write executed
  *    as-is, VHZ/LPULSE -> ERR UNKNOWN, no ot/lb.
- *  - 'icd1v1' = "ICD001-1" (h11-icd-v1 1.1.0) auto / manual, §11.4–§11.6:
+ *  - 'icd1v1' = "ICD001-1" (h11-icd-v1 1.1.0) auto / manual, §11.4–§11.8:
  *    boots in AUTO (lastReason BOOT); MODE / MODE query / AUTO alias, idempotent;
  *    actuator commands in auto -> `ERR MODE AUTO <verb>`; verb-tagged ERRs;
  *    STOP / ESTOP 1 / START key / OT / LB -> manual + `EVT MODE MANUAL <reason>`;
- *    ESTOP 0 stays manual; BLE drop: manual -> zero + back to auto (not while
- *    latched); HB timeout in manual -> zero + `EVT MODE AUTO HOST_TIMEOUT`;
- *    PZERO in auto -> `OK PZERO` then `EVT PZERO`; TLM carries mode + src.
+ *    ESTOP 0 stays manual; BLE drop or HB timeout in manual: an E-stop is
+ *    released (`EVT ESTOP 0`), then zero + back to auto, unless OT / LB is
+ *    latched (stays manual); PZERO in auto -> `OK PZERO` then `EVT PZERO`
+ *    (again while running -> `ERR BUSY PZERO`); TLM carries mode + src;
+ *    optional `EVT ESTOP n` echo after `OK ESTOP n` (`estopEvtEcho`).
  */
 import { clamp } from './protocol';
 import { decodeUtf8, encodeUtf8 } from './utf8';
@@ -44,7 +46,11 @@ export interface MockDeviceSnapshot {
 
 const ACTUATOR_CMDS = new Set(['LRA', 'LPULSE', 'VHZ', 'VCM', 'AUTO', 'TEST']);
 /** §11.4.9: refused in auto (AUTO is the MODE alias on ICD001-1). */
+/** Simulated re-zero duration (OK PZERO -> EVT PZERO). */
+const PZERO_MS = 300;
 const V1_ACTUATOR_CMDS = new Set(['LRA', 'LPULSE', 'VHZ', 'VCM', 'TEST']);
+/** fw parseInt: optional '-', 1–6 digits. */
+const INT_RE = /^-?\d{1,6}$/;
 
 export type MockMode = 'auto' | 'manual';
 
@@ -87,6 +93,14 @@ export class MockIcd001Device {
   private pzeroAt = 0;
   private pendingEvts: Array<{ at: number; line: string }> = [];
   autoCaps = { hbMaxS: 30, lraSrc: { A: 0, B: 2 }, vhz: { min: 5, max: 10 } };
+  /** Also send `EVT ESTOP n` after `OK ESTOP n` (allowed by hardware 10/06; the app must tolerate both). */
+  estopEvtEcho = false;
+  /** A phone is connected (fw `bleConn`); set by the transport. */
+  bleConn = false;
+  /** E-stop engaged with the START key while no phone was connected (§11.8.5): survives link loss / HB timeout. */
+  estopKeyNoPhone = false;
+  /** Serial-only lines (fw log): EVT BLE_DISCONNECT…, EVT MODE AUTO BLE_DISCONNECT; never sent over BLE. */
+  serialLog: string[] = [];
 
   constructor(
     readonly variant: MockVariant,
@@ -114,7 +128,12 @@ export class MockIcd001Device {
     return this.isV0 ? { min: 2, max: 50 } : { min: 2, max: 20 };
   }
 
-  infoJson(): string {
+  /**
+   * INFO JSON. ICD001-1 (h11-icd-v1 1.1.0): the INFO characteristic is capped
+   * at 512 B and leaves out `ch.auto`; the `INFO` command (`full`) carries it
+   * (+ name / rst / ntc), ~636 B, sent as several notify packets.
+   */
+  infoJson(full = true): string {
     if (!this.isV0) {
       return JSON.stringify({
         fw: 'h11-demo-ble',
@@ -129,30 +148,37 @@ export class MockIcd001Device {
     // §7.2 locked schema (+ §11 / §11.4.7 / §11.5.1 on ICD001-1)
     const v1 = this.isV1
       ? {
+          // fw 1.1.0: three PPG (J13 J22 J23), no Bullet sensor (egg ppg -1)
+          ppg: ['J13', 'J22', 'J23'],
+          egg: { ppg: -1, act: 0 },
           mode: ['manual', 'auto'],
           boot: 'auto',
-          auto: {
-            vhz: { ...this.autoCaps.vhz },
-            press: { on: 80, off: 50, full: 1200 },
-            hr: { lo: 60, hi: 120 },
-            lraNoHr: 25,
-            fsr: ['J19', 'J20'],
-            lraSrc: { ...this.autoCaps.lraSrc },
-            hbMaxS: this.autoCaps.hbMaxS,
-            maxMin: 0,
-          },
+          ...(full
+            ? {
+                auto: {
+                  vhz: { ...this.autoCaps.vhz },
+                  press: { on: 80, off: 50, full: 1200 },
+                  hr: { lo: 60, hi: 120 },
+                  lraNoHr: 25,
+                  fsr: ['J19', 'J20'],
+                  lraSrc: { ...this.autoCaps.lraSrc },
+                  hbMaxS: this.autoCaps.hbMaxS,
+                  maxMin: 0,
+                },
+              }
+            : {}),
         }
       : {};
     return JSON.stringify({
       proto: this.isV1 ? 'ICD001-1' : 'ICD001-0',
       prod: 'ICD-001',
       hw: 'H1.1',
-      fw: 'icd001-sim',
+      fw: this.isV1 ? 'h11-icd-v1 1.1.0' : 'icd001-sim',
       mux: 1,
       adsA: 1,
       adsB: 1,
       imu: 1,
-      ppg: [1, 1, 1, 1],
+      ppg: this.isV1 ? [1, 1, 1] : [1, 1, 1, 1],
       ch: {
         lra: { A: '上翼', B: '下翼' },
         freq: { min: 100, max: 300, def: 170 },
@@ -164,6 +190,7 @@ export class MockIcd001Device {
         lb: { ...this.safety.lb },
         ...v1,
       },
+      ...(this.isV1 && full ? { name: 'h11-icd-v1', rst: 'POWERON', ntc: 1 } : {}),
     });
   }
 
@@ -185,20 +212,51 @@ export class MockIcd001Device {
     return `EVT MODE ${m.toUpperCase()} ${reason}`;
   }
 
-  /** Called by the transport on BLE drop (§11.5.2, §11.6.2). */
+  /** Called by the transport on BLE drop (§11.5.2, §11.6.2, §11.8). */
   onDisconnect(): void {
     if (!this.isV1) {
       this.handleWrite('STOP'); // firmware: BLE disconnect -> stop all
       return;
     }
     this.hb = 0; // §11.4.12: HB is per connection
-    if (this.latch) {
-      this.allStop(); // §11.6.2: stays manual + latched, outputs 0
+    this.bleConn = false;
+    // fw onBleDisconnect: serial only (the phone is gone)
+    if (this.mode === 'auto') {
+      this.serialLog.push('EVT BLE_DISCONNECT'); // AUTO keeps running
       return;
     }
-    if (this.mode === 'manual') {
-      this.switchMode('auto', 'BLE_DISCONNECT'); // serial log only
+    this.serialLog.push('EVT BLE_DISCONNECT STOP', ...this.hostLost('BLE_DISCONNECT'));
+  }
+
+  /** Called by the transport on connect (fw onBleConnect: HB off until the app sends HB). */
+  onConnect(): void {
+    this.bleConn = true;
+    this.hb = 0;
+    this.lastHostAt = this.now();
+  }
+
+  /**
+   * ICD001-1 host gone (BLE drop or HB timeout, §11.5.2 / §11.5.3 / §11.7.1 /
+   * §11.8). Auto: keeps running. Manual: an E-stop latch is released
+   * (`EVT ESTOP 0`, §11.8.1–2); over-temp / low battery keep it manual and
+   * latched at 0 (§11.8.3–4); otherwise zero + back to auto, even when the
+   * outputs were already 0 (§11.7.4).
+   */
+  private hostLost(reason: 'BLE_DISCONNECT' | 'HOST_TIMEOUT'): string[] {
+    if (this.mode !== 'manual') {
+      return [];
     }
+    const out: string[] = [];
+    this.allStop();
+    if (this.estop && !this.estopKeyNoPhone) {
+      this.estop = false; // §11.8.1–2 (not a no-phone START latch, §11.8.5)
+      out.push('EVT ESTOP 0');
+    }
+    if (this.latch) {
+      return out; // OT / LB (or a no-phone START latch) keep it manual at 0 (§11.8.3–5)
+    }
+    out.push(this.switchMode('auto', reason));
+    return out;
   }
 
   /** ICD001-1 commands (§11.4); null = fall through to the shared v0 handling. */
@@ -227,44 +285,162 @@ export class MockIcd001Device {
       return [`OK MODE ${target.toUpperCase()}`, this.switchMode(target, 'CMD')];
     }
     if (op === 'HB') {
-      if (Number.isNaN(v1) || (v1 !== 0 && (v1 < 5 || v1 > this.autoCaps.hbMaxS))) {
+      if (p.length !== 2 || !INT_RE.test(a1 ?? '')) {
+        return ['ERR ARG HB']; // format before range (§11.7.6, fw H1)
+      }
+      if (v1 !== 0 && (v1 < 5 || v1 > this.autoCaps.hbMaxS)) {
         return ['ERR RANGE HB'];
       }
       this.hb = v1;
       return [`OK HB ${v1}`];
     }
     if (op === 'PZERO') {
+      if (p.length !== 1) {
+        return ['ERR ARG PZERO']; // fw: format first
+      }
+      if (this.latch) {
+        return [`ERR ${this.latch} PZERO`]; // §11.7.6: ESTOP > OVERTEMP > LOWBAT > MODE > BUSY
+      }
       if (this.mode !== 'auto') {
-        return ['ERR MODE MANUAL PZERO'];
+        return ['ERR MODE MANUAL PZERO']; // MODE outranks BUSY (§11.7.6)
+      }
+      if (this.pzeroBusy) {
+        return ['ERR BUSY PZERO']; // §11.7.7: the running re-zero continues
       }
       this.pzeroAt = this.now();
-      this.pendingEvts.push({ at: this.now() + 300, line: 'EVT PZERO' });
+      this.pendingEvts.push({ at: this.now() + PZERO_MS, line: 'EVT PZERO' });
       return ['OK PZERO'];
     }
+    if (op === 'RATE' || op === 'FREQ') {
+      // fw 1.1.0: ERR ARG <op> (format) before ERR RANGE <op>
+      if (p.length !== 2 || !INT_RE.test(a1 ?? '')) {
+        return [`ERR ARG ${op}`];
+      }
+      if (op === 'RATE' ? v1 < 0 || v1 > 20 : v1 < 100 || v1 > 300) {
+        return [`ERR RANGE ${op}`];
+      }
+      if (op === 'RATE') {
+        this.rate = v1;
+      } else {
+        this.freq = v1;
+      }
+      return [`OK ${op} ${v1}`];
+    }
     if (V1_ACTUATOR_CMDS.has(op)) {
-      if (this.latch) {
-        return [`ERR ${this.latch} ${op}`]; // §11.4.5
-      }
-      if (this.mode === 'auto') {
-        return [`ERR MODE AUTO ${op}`]; // §11.4.9: no implicit exit
-      }
-      return null;
+      return this.v1Actuator(op, p);
     }
     if (op === 'STOP') {
       this.allStop();
       return this.mode === 'auto' ? ['OK STOP', this.switchMode('manual', 'STOP')] : ['OK STOP'];
     }
     if (op === 'ESTOP') {
-      const on = a1 === undefined ? true : v1 !== 0;
-      this.estop = on;
+      const on = a1 !== '0'; // fw: only an exact "0" releases; no / garbled arg engages (S10)
       if (!on) {
-        return ['OK ESTOP 0']; // §11.6.4: stays manual, outputs 0
+        this.estopKeyNoPhone = false;
+      } else if (!this.estop) {
+        this.estopKeyNoPhone = false; // a fresh host E-stop is released by link loss; keep a no-phone START latch (E8)
+      }
+      this.estop = on;
+      // hardware 10/06: firmware MAY also send EVT ESTOP n after OK ESTOP n
+      const echo = this.estopEvtEcho ? [`EVT ESTOP ${on ? 1 : 0}`] : [];
+      if (!on) {
+        return ['OK ESTOP 0', ...echo]; // §11.6.4: stays manual, outputs 0
       }
       this.allStop();
-      // §11.4.6: OK ESTOP 1 -> EVT MODE MANUAL ESTOP (still no EVT ESTOP, §9.1)
-      return this.mode === 'auto' ? ['OK ESTOP 1', this.switchMode('manual', 'ESTOP')] : ['OK ESTOP 1'];
+      // §11.4.6: OK ESTOP 1 -> EVT MODE MANUAL ESTOP
+      return this.mode === 'auto'
+        ? ['OK ESTOP 1', ...echo, this.switchMode('manual', 'ESTOP')]
+        : ['OK ESTOP 1', ...echo];
     }
     return null;
+  }
+
+  /**
+   * ICD001-1 actuator command, in the firmware's order (icd_core.cpp, §11.7.6):
+   * format (`ERR ARG <op>`) > latch (`ERR ESTOP|OVERTEMP|LOWBAT <op>`) >
+   * `ERR MODE AUTO <op>` (§11.4.9, no implicit exit) > `ERR RANGE <op>` > apply.
+   */
+  private v1Actuator(op: string, p: string[]): string[] {
+    const int = (x: string | undefined) => (x !== undefined && INT_RE.test(x) ? parseInt(x, 10) : null);
+    const target = (t: string | undefined): number[] | null =>
+      t === '0' || t === 'A' || t === 'CORE'
+        ? [0]
+        : t === '1' || t === 'B' || t === 'WING'
+        ? [1]
+        : t === 'ALL' || t === 'BOTH'
+        ? [0, 1]
+        : null;
+    const g = op === 'LRA' || op === 'LPULSE' ? target(p[1]) : null;
+    const v = op === 'VHZ' ? int(p[1]) : int(p[2]);
+    const on = int(p[3]);
+    const off = int(p[4]);
+    const ms = p.length === 3 ? int(p[2]) : 50;
+    const fmtOk =
+      op === 'LRA'
+        ? p.length === 3 && g !== null && v !== null
+        : op === 'LPULSE'
+        ? p.length === 5 && g !== null && v !== null && on !== null && off !== null
+        : op === 'VHZ'
+        ? p.length === 2 && v !== null
+        : op === 'VCM'
+        ? (p.length === 2 || p.length === 3) && (p[1] === '0' || p[1] === '1') && ms !== null
+        : p.length === 1; // TEST
+    if (!fmtOk) {
+      return [`ERR ARG ${op}`];
+    }
+    if (this.latch) {
+      return [`ERR ${this.latch} ${op}`]; // §11.4.5 / §7.5 ESTOP > OVERTEMP > LOWBAT
+    }
+    if (this.mode === 'auto') {
+      return [`ERR MODE AUTO ${op}`]; // §11.4.9: no implicit exit
+    }
+    const pct = (x: number | null) => x !== null && x >= 0 && x <= 100;
+    const lp = (x: number | null) => x !== null && x >= 50 && x <= 2000;
+    const { min, max } = this.vhzRange;
+    const rngOk =
+      op === 'LRA'
+        ? pct(v)
+        : op === 'LPULSE'
+        ? pct(v) && lp(on) && lp(off)
+        : op === 'VHZ'
+        ? v === 0 || (v! >= min && v! <= max)
+        : op === 'VCM'
+        ? p.length === 2 || (ms! >= 25 && ms! <= 250)
+        : true;
+    if (!rngOk) {
+      return [`ERR RANGE ${op}`];
+    }
+    switch (op) {
+      case 'LRA':
+        g!.forEach(i => {
+          this.lra[i] = v!;
+          this.lp[i] = [0, 0]; // §7.7 LRA cancels LPULSE
+        });
+        return [`OK LRA ${this.lra[0]} ${this.lra[1]}`];
+      case 'LPULSE':
+        g!.forEach(i => {
+          this.lra[i] = v!;
+          this.lp[i] = [on!, off!];
+        });
+        return [`OK LPULSE ${p[1]} ${v} ${on} ${off}`];
+      case 'VHZ':
+        this.vcmOn = v !== 0;
+        if (v !== 0) {
+          this.vcmHz = v!;
+        }
+        return [`OK VHZ ${v}`];
+      case 'VCM':
+        if (p[1] === '0') {
+          this.vcmOn = false;
+          return ['OK VCM 0'];
+        }
+        this.vcmOn = true;
+        this.vcmHz = 500 / ms!;
+        return [`OK VCM 1 ${ms}`];
+      default:
+        this.allStop();
+        return ['OK TEST'];
+    }
   }
 
   /** v0 rejection (§7.5): first of ESTOP > OVERTEMP > LOWBAT. */
@@ -480,13 +656,11 @@ export class MockIcd001Device {
     }
     if (this.isV1) {
       const now = this.now();
-      // §11.5.3 / §11.4.12: HB timeout. Manual -> zero + back to auto; auto: ignored.
-      // While latched the device stays manual (treated like a BLE drop, §11.6.2; asked hardware).
+      // §11.5.3 / §11.7.1 / §11.8.2: HB timeout = a BLE drop with the link still up
+      // (auto: ignored; E-stop released + auto; OT/LB: stay manual + latched).
       if (this.hb > 0 && now - this.lastHostAt > this.hb * 1000) {
         this.lastHostAt = now;
-        if (this.mode === 'manual' && !this.latch) {
-          evts.push(this.switchMode('auto', 'HOST_TIMEOUT'));
-        }
+        evts.push(...this.hostLost('HOST_TIMEOUT'));
       }
       const due = this.pendingEvts.filter(e => e.at <= now);
       this.pendingEvts = this.pendingEvts.filter(e => e.at > now);
@@ -496,34 +670,50 @@ export class MockIcd001Device {
   }
 
   /**
-   * Emulates the START key on the device body (phone connected): toggles
-   * E-stop, `EVT ESTOP n` (§8.3); on ICD001-1 engaging in auto adds
-   * `EVT MODE MANUAL KEY` (§11.4.6); releasing stays manual (§11.6.4).
+   * Emulates the START key on the device body: toggles E-stop, `EVT ESTOP n`
+   * (§8.3); on ICD001-1 engaging in auto adds `EVT MODE MANUAL KEY`
+   * (§11.4.6); releasing with a phone stays manual (§11.6.4), without one
+   * returns to auto (`EVT MODE AUTO KEY`, §11.5.4). Engaged with no phone it
+   * survives later link loss / HB timeouts (§11.8.5).
    */
   pressStartKey(): string[] {
-    this.estop = !this.estop;
-    if (this.estop) {
+    if (!this.estop) {
+      this.estop = true;
+      this.estopKeyNoPhone = !this.bleConn; // §11.8.5
       this.allStop();
+      const out = ['EVT ESTOP 1'];
+      if (this.isV1 && this.mode === 'auto') {
+        out.push(this.switchMode('manual', 'KEY'));
+      }
+      return out;
     }
-    const out = [`EVT ESTOP ${this.estop ? 1 : 0}`];
-    if (this.isV1 && this.estop && this.mode === 'auto') {
-      out.push(this.switchMode('manual', 'KEY'));
+    this.estop = false;
+    this.estopKeyNoPhone = false;
+    const out = ['EVT ESTOP 0'];
+    // §11.5.4: released with no phone connected -> back to auto (KEY); with a phone: stays manual (§11.6.4)
+    if (this.isV1 && !this.bleConn && !this.ot && !this.lowbat && this.mode === 'manual') {
+      out.push(this.switchMode('auto', 'KEY'));
     }
     return out;
   }
 
   /** Emulates the PAUSE key (§11.3.9): re-zero pressure in auto, nothing in manual. */
   pressPauseKey(): string[] {
-    if (!this.isV1 || this.mode !== 'auto') {
-      return [];
+    if (!this.isV1 || this.mode !== 'auto' || this.pzeroBusy) {
+      return []; // manual: no effect; a running zero continues (§11.7.7)
     }
     this.pzeroAt = this.now();
-    return ['EVT PZERO'];
+    this.pendingEvts.push({ at: this.now() + PZERO_MS, line: 'EVT PZERO' });
+    return [];
+  }
+
+  private get pzeroBusy(): boolean {
+    return this.pendingEvts.some(e => e.line === 'EVT PZERO');
   }
 
   /** Sensor status (§11.4.4): 1 usable, 0 failed / not fitted. */
   srcStatus(): { fsr: number[]; ppg: number[] } {
-    return this.srcOverride ?? { fsr: [1, 1], ppg: [1, 1, 1, 1] };
+    return this.srcOverride ?? { fsr: [1, 1], ppg: [1, 1, 1] };
   }
 
   /** Simulated pressure delta (mV) above the PZERO baseline: slow squeeze waves. */
@@ -558,7 +748,7 @@ export class MockIcd001Device {
 
   tlmJson(): string {
     const t = this.now() - this.startedAt;
-    const nPpg = this.isV0 ? 4 : 3;
+    const nPpg = this.isV1 ? 3 : this.isV0 ? 4 : 3; // fw 1.1.0: J13 J22 J23
     const warm = t > 3000;
     const ppg = Array.from({ length: nPpg }, (_, i) => [
       52000 + i * 1500 + Math.round(Math.sin(t / 160 + i) * 800),
@@ -579,6 +769,17 @@ export class MockIcd001Device {
       lra: auto ? auto.lra : [this.lra[0], this.lra[1]],
       f: this.freq,
     };
+    if (this.isV1) {
+      // fw 1.1.0: lra = actual output after the current budget (J12 reserves
+      // 1000 of 1200 mA, LRA 250 mA at 100 %, §11.3.10; both modes), lset = setpoints
+      const req = (auto ? auto.lra : this.latch ? [0, 0] : this.lra) as number[];
+      const j12 = auto ? auto.vhz > 0 : vcmOut && !this.latch;
+      const reqMa = (req[0] + req[1]) * 2.5;
+      const lim = Math.max(0, 1200 - (j12 ? 1000 : 0));
+      const k = reqMa > lim && reqMa > 0 ? lim / reqMa : 1;
+      obj.lra = [Math.round(req[0] * k), Math.round(req[1] * k)];
+      obj.lset = [this.lra[0], this.lra[1]];
+    }
     if (this.isV0) {
       obj.lp = auto
         ? [
@@ -684,6 +885,7 @@ export class MockIcd001Transport implements Icd001Transport {
     const c: Conn = { mtu, lastStep: now, lastTlm: now, timer: 0 as unknown as Timer, rx: '', rxIdle: null };
     c.timer = setInterval(() => this.tick(id), 25);
     this.connected.set(id, c);
+    dev.onConnect();
     return { mtu };
   }
 
@@ -714,7 +916,7 @@ export class MockIcd001Transport implements Icd001Transport {
 
   async readInfo(id: string): Promise<number[]> {
     const dev = this.requireConnected(id);
-    return encodeUtf8(dev.infoJson());
+    return encodeUtf8(dev.infoJson(false)); // INFO characteristic (≤ 512 B; no ch.auto on ICD001-1)
   }
 
   async write(id: string, bytes: number[], _withResponse: boolean, allowSplit: boolean): Promise<void> {

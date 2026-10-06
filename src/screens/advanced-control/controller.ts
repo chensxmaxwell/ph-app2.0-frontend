@@ -11,7 +11,7 @@
  * methods; nothing here knows about colours, layout or components.
  */
 import { effectiveMode } from '../../services/icd001/client';
-import { supportsAuto } from '../../services/icd001/protocol';
+import { supportsAuto, wingSetpoints } from '../../services/icd001/protocol';
 
 import {
   AUTO_HINT_TOAST,
@@ -204,6 +204,11 @@ export interface AdvancedControlView {
     autoAllowed: boolean;
     /** Re-zero pressure shown (auto only, §11.4.14); busy between OK and EVT PZERO. */
     pzero: 'available' | 'busy' | null;
+    /**
+     * Auto running: sensors Auto follows (TLM src, §11.4.4); null otherwise.
+     * Not tied to the Bullet card: fw 1.1.0 has no Bullet sensor (egg ppg -1).
+     */
+    sensors: AutoSensors | null;
   };
 }
 
@@ -643,7 +648,9 @@ export class AdvancedControlController {
       }
     }
     if (s.status !== 'connected' && prev.status === 'connected') {
-      this.latchedAtDrop = prev.estop || prev.overTemp || prev.lowBattery;
+      // ICD001-1 §11.8: only over-temp / low battery keep it manual over a drop (an
+      // E-stop is released and the device returns to auto). Used for auto devices only.
+      this.latchedAtDrop = prev.overTemp || prev.lowBattery;
       this.modeNotice = null; // the Connection lost notice takes over; reconnect re-reads the mode
     }
     // PZERO done (EVT PZERO, also the PAUSE key)
@@ -665,8 +672,12 @@ export class AdvancedControlController {
       const silent =
         !!ei && (ei.reason === 'MODE AUTO' || ei.verb === 'MODE' || ei.verb === 'AUTO' || ei.verb === 'HB');
       if (ei?.verb === 'PZERO') {
-        this.toast = { ...PZERO_MANUAL_TOAST, until: t + TOAST_MS };
-        this.schedule(TOAST_MS);
+        // ERR MODE MANUAL PZERO -> toast; ERR BUSY PZERO (§11.7.7): the running
+        // re-zero finishes with EVT PZERO; a latch reason has its own banner.
+        if (ei.reason.startsWith('MODE')) {
+          this.toast = { ...PZERO_MANUAL_TOAST, until: t + TOAST_MS };
+          this.schedule(TOAST_MS);
+        }
       } else if (!safety && !silent && this.lastInput && t - this.lastInput.at < ERR_ATTRIBUTION_MS) {
         this.inputAt = { A: -1e12, B: -1e12, vcm: -1e12 };
         this.toast = {
@@ -726,11 +737,14 @@ export class AdvancedControlController {
       return;
     }
     const t = this.now();
+    // Manual sliders follow the setpoint (`lset`), not the actual output: the
+    // current budget can lower `lra` (J12 on) and it ramps (fw 1.1.0).
+    const set = wingSetpoints(tlm);
     (['A', 'B'] as const).forEach((g, i) => {
       if (t - this.inputAt[g] > OPTIMISTIC_MS) {
-        this.wing.values[g] = tlm.lra[i];
-        if (tlm.lra[i] > 0) {
-          this.wing.restore[g] = tlm.lra[i];
+        this.wing.values[g] = set[i];
+        if (set[i] > 0) {
+          this.wing.restore[g] = set[i];
         }
       }
     });
@@ -909,8 +923,10 @@ export class AdvancedControlController {
     const tint = { upper: 0, lower: 0, head: 0, egg: 0 };
     if (active) {
       const tlm = this.s.tlm;
-      const a = tlm ? tlm.lra[0] : 0;
-      const b = tlm ? tlm.lra[1] : 0;
+      // Auto: actual output; manual: the setpoint the sliders show
+      const w = tlm ? (this.inAuto ? tlm.lra : wingSetpoints(tlm)) : [0, 0];
+      const a = w[0];
+      const b = w[1];
       // optimistic values while dragging, telemetry otherwise
       const t = this.now();
       const va = t - this.inputAt.A <= OPTIMISTIC_MS ? this.wing.values.A : a;
@@ -998,6 +1014,7 @@ export class AdvancedControlController {
         switching: live && s.modePending !== null,
         autoAllowed: live && !s.estop && !s.overTemp && !s.lowBattery,
         pzero: inAuto && s.mode === 'auto' ? (s.pzero?.state === 'pending' ? 'busy' : 'available') : null,
+        sensors: live && inAuto ? autoSensors(s.tlm, s.info) : null,
       },
     };
   }

@@ -8,7 +8,6 @@ import { bindHomeStackNavigation } from "../src/screens/love/overlay";
 import { NavBar } from "@common/components/nav-bar/nav-bar";
 import { Icd001DebugScreen } from "../src/screens/icd001-debug";
 import { AdvancedControlScreen } from "../src/screens/advanced-control";
-import { GlobalAutoPill } from "../src/screens/advanced-control/components/AutoPill";
 import { Manual } from "../src/screens/control/sub-screens/manual";
 import { Pattern } from "../src/screens/control/sub-screens/pattern";
 import { CreatePattern } from "../src/screens/control/sub-screens/pattern/sub-screens/create-pattern";
@@ -120,7 +119,6 @@ export const HomeStack = () => (
     </Stack.Navigator>
     <GlobalSessionLovePill />
     <GlobalMessageCallPill />
-    <GlobalAutoPill />
   </View>
 );
 

@@ -18,6 +18,7 @@ import { spacings } from "@common/styles/spacings";
 import { ConnectionPill } from "@common/components/connection-pill";
 
 import { AdvancedEntry, useAdvancedEntryGridPaddingTop } from "./advanced-entry";
+import { BottomTabBarHeightContext } from "@react-navigation/bottom-tabs";
 
 const CARD_ICON_SIZE = 72;
 const CARD_TITLE_GAP = 20;
@@ -72,6 +73,9 @@ const AutoRing = ({ active }: { active: boolean }) => {
 export const Control = () => {
   const { controls, autoOn, autoIntensity, setAutoIntensity } = useControl();
   const gridPaddingTop = useAdvancedEntryGridPaddingTop();
+  // The tab bar floats over the scene: keep the last row scrollable clear of it
+  // (and of the ICD001-1 Auto bar docked on it, which shrinks the scene).
+  const tabBarHeight = React.useContext(BottomTabBarHeightContext) ?? 0;
 
   const renderControls: ListRenderItem<ControlType> = ({ item }) => {
     const { title, Icon, onPress, active, id } = item;
@@ -123,7 +127,11 @@ export const Control = () => {
           keyExtractor={(item) => item.id}
           extraData={`${autoOn}-${autoIntensity}`}
           numColumns={2}
-          contentContainerStyle={[styles.cardContainer, gridPaddingTop !== null && { paddingTop: gridPaddingTop }]}
+          contentContainerStyle={[
+            styles.cardContainer,
+            gridPaddingTop !== null && { paddingTop: gridPaddingTop },
+            { paddingBottom: tabBarHeight + spacings.h16 },
+          ]}
           columnWrapperStyle={styles.columnWrapper}
         />
       </View>
