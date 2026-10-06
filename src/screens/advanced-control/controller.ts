@@ -185,6 +185,8 @@ export class AdvancedControlController {
   private view!: AdvancedControlView;
   private s: Icd001State;
   private lastInfo: DeviceInfo | null = null;
+  /** Shown (disabled) before any device was seen; null = no cards (Advanced control). */
+  private placeholderInfo: DeviceInfo | null = null;
   private lastName: string | null = null;
   private lastDevice: DiscoveredDevice | null = null;
 
@@ -264,6 +266,14 @@ export class AdvancedControlController {
   };
 
   getView = (): AdvancedControlView => this.view;
+
+  /** Manual page: show the module cards (disabled) before the first connect. */
+  setPlaceholderInfo(info: DeviceInfo | null): void {
+    if (this.placeholderInfo !== info) {
+      this.placeholderInfo = info;
+      this.emit();
+    }
+  }
 
   // ------------------------------------------------------------ intents
 
@@ -760,7 +770,7 @@ export class AdvancedControlController {
         batteryWarn: live && s.lowBattery,
       },
       cards: live ? this.buildViews(s.info, true, screen) : [],
-      lastSeen: live ? [] : this.buildViews(this.lastInfo, false, screen),
+      lastSeen: live ? [] : this.buildViews(this.lastInfo ?? this.placeholderInfo, false, screen),
       scan: { scanning: s.status === 'scanning', connecting: screen.connecting, devices: s.devices },
       estop: {
         on: live && s.estop,

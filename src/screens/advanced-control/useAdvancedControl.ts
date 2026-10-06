@@ -16,14 +16,28 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 import { useIcd001 } from '../../services/icd001/useIcd001';
 
 import { AdvancedControlController, AdvancedControlView } from './controller';
+import { PLACEHOLDER_INFO } from './model';
 import { createPulseSpeedStore } from './pulseMemory';
 
 const pulseSpeedStore = createPulseSpeedStore(AsyncStorage);
 
-export function useAdvancedControl(): { view: AdvancedControlView; ctl: AdvancedControlController } {
+export function useAdvancedControl(opts: { placeholderCards?: boolean } = {}): {
+  view: AdvancedControlView;
+  ctl: AdvancedControlController;
+} {
   // client is re-created when switching BLE <-> mock
   const { client } = useIcd001();
-  const ctl = useMemo(() => new AdvancedControlController(client, Date.now, pulseSpeedStore), [client]);
+  const placeholder = !!opts.placeholderCards;
+  const ctl = useMemo(() => {
+    const c = new AdvancedControlController(client, Date.now, pulseSpeedStore);
+    // set before the first render so the cards don't pop in a frame later
+    c.setPlaceholderInfo(placeholder ? PLACEHOLDER_INFO : null);
+    return c;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- placeholder changes go through the effect below
+  }, [client]);
+  useEffect(() => {
+    ctl.setPlaceholderInfo(placeholder ? PLACEHOLDER_INFO : null);
+  }, [ctl, placeholder]);
   useEffect(() => {
     ctl.start();
     return () => {

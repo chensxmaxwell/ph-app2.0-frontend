@@ -31,8 +31,20 @@ export type AdvancedControlParams = { expanded?: CardId } | undefined;
 
 type Dragging = 'A' | 'B' | 'vcm' | null;
 
-export const AdvancedControlScreen = ({ initialOverlay }: { initialOverlay?: React.ReactNode } = {}) => {
-  const { view, ctl } = useAdvancedControl();
+export interface AdvancedControlProps {
+  initialOverlay?: React.ReactNode;
+  /** Header title. The Manual page hosts this same screen as "Manual" (Turn 13). */
+  title?: string;
+  /** Show the Wings / Pulse & Bullet cards (disabled) before the first connect (Manual). */
+  placeholderCards?: boolean;
+}
+
+export const AdvancedControlScreen = ({
+  initialOverlay,
+  title: screenTitle = 'Advanced control',
+  placeholderCards = false,
+}: AdvancedControlProps = {}) => {
+  const { view, ctl } = useAdvancedControl({ placeholderCards });
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const bg = useScreenWrapper().getBackgroundTypeConfig(undefined);
@@ -164,7 +176,7 @@ export const AdvancedControlScreen = ({ initialOverlay }: { initialOverlay?: Rea
         {/* Stack header (playground/index.tsx header + backIcon): paddingTop 60, chevron 35 at left 20. */}
         <View style={styles.header}>
           <Text style={styles.h1} accessibilityRole="header">
-            Advanced control
+            {screenTitle}
           </Text>
           <Pressable
             onPress={() => navigation.goBack()}

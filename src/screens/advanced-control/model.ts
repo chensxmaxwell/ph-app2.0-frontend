@@ -21,6 +21,7 @@ import {
   formatLra,
   formatStop,
   formatVcmHz,
+  parseInfo,
 } from '../../services/icd001/protocol';
 
 import type { Icd001State } from '../../services/icd001/client';
@@ -362,6 +363,32 @@ export function beatLabel(hz: number, p: ReturnType<typeof rhythmPresets>): 'Sof
 }
 
 /** Cards follow INFO (never hard-coded): order lra → vhz → egg as in the locked ch table. */
+/**
+ * Display-only module set for a page that has never seen a device (Manual,
+ * Turn 13): the v0 locked INFO schema (§7.2) without safety thresholds, so the
+ * Wings and Pulse & Bullet cards show (dimmed, disabled) before the first
+ * connect. Never used for commands: controls are disabled while disconnected.
+ */
+export const PLACEHOLDER_INFO: DeviceInfo = parseInfo({
+  proto: 'ICD001-0',
+  prod: 'ICD-001',
+  hw: 'H1.1',
+  fw: 'placeholder',
+  mux: 1,
+  adsA: 1,
+  adsB: 1,
+  imu: 1,
+  ppg: [1, 1, 1, 1],
+  ch: {
+    lra: { A: '上翼', B: '下翼' },
+    freq: { min: 100, max: 300, def: 170 },
+    vhz: { min: 2, max: 50, def: 10 },
+    lpulse: { min: 50, max: 2000 },
+    ppg: ['J13', 'J22', 'J23', 'EGG'],
+    egg: { ppg: 3, act: 0 },
+  },
+}) as DeviceInfo;
+
 export function buildCards(info: DeviceInfo | null): ModuleCard[] {
   if (!info) {
     return [];

@@ -11,8 +11,17 @@ import { BackButton } from '@common/components/back-button';
 import PlayButton from '@images/arrowtriangle-right.svg';
 import PauseButton from '@images/pause.svg';
 import { SeekBarVertical } from './sub-components/seek-bar-vertical';
+import { ManualIcd001, useManualMode } from './icd001';
 
-export const Manual = () => {
+/**
+ * Manual: ICD-001 / H1.1 wings + pulse cards (same screen, commands, Stop all
+ * and auto-STOP as Advanced control), unless a legacy or demo device is the
+ * active link, which keeps the original level slider + play button.
+ */
+export const Manual = () => (useManualMode() === 'icd001' ? <ManualIcd001 /> : <LegacyManual />);
+
+/** Original Manual (legacy BLE / demo device): level slider + play. Unchanged. */
+const LegacyManual = () => {
   const {
     currentValue,
     handleLevelChange,
