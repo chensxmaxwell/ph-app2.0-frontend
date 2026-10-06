@@ -224,4 +224,61 @@ describe('Manual page on the mock', () => {
     });
     expect(dev.commandLog.filter((c: string) => c === 'STOP')).toEqual(['STOP']);
   });
+
+  it('failed connect on Manual: two-line failure notice + Retry (same as Advanced / Find); Retry reconnects', async () => {
+    const client = getIcd001Client();
+    const transport = (client as unknown as { transport: any }).transport;
+    await act(async () => {
+      await client.disconnect();
+    });
+    let r!: renderer.ReactTestRenderer;
+    await act(async () => {
+      r = renderer.create(<Manual />);
+    });
+    transport.faults = { hang: { link: true } }; // TF 1.2 (27): connect never answers
+    const device = { id: 'sim-ICD1-5A3C', name: 'ICD1-5A3C', rssi: -50, kind: null, simulated: true };
+    await act(async () => {
+      const p = client.connect(device);
+      await settle(16_000); // 15 s cap
+      await p;
+    });
+    expect(client.getState().status).toBe('error');
+    let t = texts(r);
+    expect(t).toContain('Manual');
+    expect(t).toContain("Couldn't connect");
+    expect(t).toContain('No answer. Keep it close, tap Retry.');
+    expect(byTestID(r, 'connect-failure').length).toBeGreaterThan(0);
+    expect(byTestID(r, 'card-wing').length).toBeGreaterThan(0); // cards stay (disabled)
+
+    transport.faults = {};
+    await act(async () => {
+      byLabel(r, 'Retry').props.onPress();
+      await settle(1000);
+    });
+    expect(client.getState().status).toBe('connected');
+    t = texts(r);
+    expect(t).not.toContain("Couldn't connect");
+    expect(byTestID(r, 'connect-failure').length).toBe(0);
+    expect(t).toContain('Connected');
+
+    // Firmware without the ICD-001 service: firmware-update notice, still with Retry.
+    await act(async () => {
+      await client.disconnect();
+    });
+    transport.faults = { noService: true };
+    await act(async () => {
+      const p = client.connect(device);
+      await settle(1000);
+      await p;
+    });
+    t = texts(r);
+    expect(t).toContain('Firmware update needed');
+    expect(t).toContain('This device needs a firmware update.');
+    expect(byTestID(r, 'connect-retry').length).toBeGreaterThan(0);
+    transport.faults = {};
+    await act(async () => {
+      r.unmount();
+      await jest.advanceTimersByTimeAsync(50);
+    });
+  });
 });

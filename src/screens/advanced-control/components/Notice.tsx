@@ -1,8 +1,9 @@
 /**
  * Notice card (design v4 §1, §5): the module-card surface, first in the stack.
  * Icon 32 + title 14 + one body line 13 (all full white, no grey on cards), optional
- * PillButton-style action on the right (Reconnect / Scan). Used for e-stop,
- * connection lost, over-temp, low battery and short info messages.
+ * PillButton-style action on the right (Reconnect / Scan / Retry). Used for e-stop,
+ * connection lost, a failed connect (Retry; Advanced control and Manual), over-temp,
+ * low battery and short info messages.
  */
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -29,10 +30,12 @@ export const Notice = ({
   onAction?: (a: NonNullable<BannerModel['action']>) => void;
 }) => {
   const label = model.action === 'reconnect' ? 'Reconnect' : model.action === 'retry' ? 'Retry' : 'Scan';
+  // Connect failure (client connectFailure) uses the same test ids as the Find page card.
+  const failure = model.action === 'retry';
   return (
     <View
       style={styles.card}
-      testID="notice"
+      testID={failure ? 'connect-failure' : 'notice'}
       accessible={!model.action}
       accessibilityRole={model.action ? undefined : 'alert'}
       accessibilityLabel={model.action ? undefined : `${model.title}. ${model.line}`}
@@ -49,6 +52,7 @@ export const Notice = ({
       </View>
       {model.action ? (
         <Pressable
+          testID={failure ? 'connect-retry' : undefined}
           onPress={() => onAction?.(model.action!)}
           disabled={busy}
           accessibilityRole="button"
