@@ -7,6 +7,8 @@ import LinearGradient from 'react-native-linear-gradient';
 import RefreshButton from '@images/icons/refresh-button.svg';
 import BleConnectIcon from '@images/icons/ble-connect.svg';
 import GoBackIcon from '@images/icons/go-back.svg'
+import { peripheralName } from './scanFilter';
+import { useFindDevices } from './useFindDevices';
 
 type DeviceProps = {
     peripheralWrapper: PeripheralWrapper;
@@ -22,7 +24,7 @@ const DeviceItem = memo(
             peripheralWrapper.connected
               ? disconnect(peripheralWrapper)
               : connect(peripheralWrapper)}>
-            <Text style={styles.deviceName}>{peripheralWrapper.peripheral.name}</Text>
+            <Text style={styles.deviceName}>{peripheralName(peripheralWrapper.peripheral)}</Text>
             {peripheralWrapper.connected && <BleConnectIcon />}
         </TouchableOpacity>
         );
@@ -62,15 +64,14 @@ export const ConnectDevice = () => {
         } as PeripheralWrapper['peripheral'],
         connected: demoConnected,
     };
-    const devices = [demoDevice, ...(bleDevice ?? [])];
-    const linked = isConnected || demoConnected;
-
-    const handleRefresh = () => {
-        // Simulate refreshing logic
-        if (!scaning) {
-            startScan();
-        }
-    };
+    // Only ICD1- / H11- devices are listed (scanFilter.ts); ICD-001 rows use the ICD-001 client.
+    const find = useFindDevices({
+        bleDevice, scaning, startScan, stopScan,
+        legacyConnected: isConnected, demoConnected, demoConnecting, demoBattery: battery,
+    });
+    const devices = [demoDevice, ...find.found];
+    const linked = find.linked;
+    const handleRefresh = find.refresh;
 
     // Demo row is enough for an IPA with an empty location permission
     // string. Do not auto-start a BLE scan on mount.
@@ -98,9 +99,9 @@ export const ConnectDevice = () => {
             <View style={styles.connectContainer}>
                 <View style={linked ? styles.connectIndicator : styles.disconnectIndicator} />
                 <Text style={styles.buttonText}>
-                    {demoConnecting ? 'Connecting...' : linked ? 'Connected' : 'Disconnected'}
+                    {find.statusText}
                 </Text>
-                <Text style={styles.percentageText}>{linked ? `${battery}%` : '--'}</Text>
+                <Text style={styles.percentageText}>{find.batteryText}</Text>
             </View>
             
 
@@ -122,6 +123,9 @@ export const ConnectDevice = () => {
                                     connectDemo();
                                     return;
                                 }
+                                if (find.connectIcd001(wrapper)) {
+                                    return;
+                                }
                                 connect(wrapper);
                             }}
                             disconnect={(wrapper) => {
@@ -129,11 +133,17 @@ export const ConnectDevice = () => {
                                     disconnectDemo();
                                     return;
                                 }
+                                if (find.disconnectIcd001(wrapper)) {
+                                    return;
+                                }
                                 disconnect(wrapper);
                             }}
                             />
                         )}
                     keyExtractor={(item) => item.peripheral.id}
+                    ListFooterComponent={find.emptyText ? (
+                        <Text testID="find-device-empty" style={styles.emptyText}>{find.emptyText}</Text>
+                    ) : null}
                 />
             </View>
             {fromOnboarding ? (
@@ -263,6 +273,13 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: 'bold',
         fontFamily: 'Quicksand', 
+    },
+    emptyText: {
+        color: '#FCFCFC99',
+        fontSize: 13,
+        fontWeight: 'bold',
+        fontFamily: 'Quicksand',
+        lineHeight: 43,
     },
     continueButton: {
         width: 297,

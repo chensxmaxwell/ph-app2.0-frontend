@@ -33,6 +33,15 @@ jest.mock("../src/hooks/useBleManager", () => ({
   }),
 }));
 
+jest.mock("../src/services/icd001", () => ({
+  ...(jest.requireActual("../src/services/icd001/protocol") as Record<string, unknown>),
+  useIcd001: () => ({
+    state: { status: "idle", device: null, tlm: null },
+    client: { connect: jest.fn(), disconnect: jest.fn() },
+    mode: "ble",
+  }),
+}));
+
 jest.mock("../src/store/device", () => ({
   DEMO_DEVICE_ID: "ph-demo",
   DEMO_DEVICE_NAME: "Pleasure House",

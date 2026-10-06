@@ -32,6 +32,8 @@ module.exports = {
           'src/screens/icd001-debug/**',
           'src/screens/advanced-control/**',
           'src/screens/control/advanced-entry.tsx',
+          'src/screens/onboarding/ConnectDevice/scanFilter.ts',
+          'src/screens/onboarding/ConnectDevice/useFindDevices.ts',
           '__tests__/icd001/**',
         ],
         rules: {
