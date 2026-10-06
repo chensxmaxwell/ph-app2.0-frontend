@@ -26,10 +26,34 @@ export const STEP_TIMEOUT_MS: Record<ConnectStep, number> = {
   services: 5000,
   notify: 5000,
   info: 3000,
-  'info-cmd': 2000,
+  'info-cmd': 2000, // floor; the real limit is infoCmdTimeoutMs(mtu)
   setup: 3000,
   cleanup: 3000,
 };
+
+/**
+ * Longest `INFO` command reply on the wire: fw `char j[1100]` (incl. NUL) +
+ * `\n` = 1100 B (h11-icd-v1 1.1.2 sends ~874 B, §11.9.2). It comes back as
+ * one line split into MTU-3 byte notifications on the TLM characteristic.
+ */
+export const INFO_REPLY_MAX_BYTES = 1100;
+/** Pessimistic radio pace: one notification per 50 ms connection event. */
+const NOTIFY_WORST_MS = 50;
+const INFO_CMD_CEILING_MS = 5000;
+
+/**
+ * INFO command timeout for a link MTU. iOS reports 23 (ble-manager cannot read
+ * the negotiated MTU), so iOS always gets the MTU-23 budget: 55 packets ->
+ * 1 s + 55 x 50 ms = 3.75 s. MTU >= 185 stays at the 2 s floor.
+ */
+export function infoCmdTimeoutMs(mtu: number | null | undefined): number {
+  const payload = mtu && mtu > 23 ? mtu - 3 : 20;
+  const packets = Math.ceil(INFO_REPLY_MAX_BYTES / payload);
+  return Math.min(
+    INFO_CMD_CEILING_MS,
+    Math.max(STEP_TIMEOUT_MS['info-cmd'], 1000 + packets * NOTIFY_WORST_MS),
+  );
+}
 
 export type ConnectFailureKind = 'timeout' | 'unsupported' | 'bluetooth' | 'failed';
 

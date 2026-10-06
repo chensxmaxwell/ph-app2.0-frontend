@@ -36,6 +36,7 @@ module.exports = {
           'src/screens/onboarding/ConnectDevice/useFindDevices.ts',
           'src/screens/control/sub-screens/manual/icd001.tsx',
           '__tests__/icd001/**',
+          'jest/icd001-*.ts',
         ],
         rules: {
           'prettier/prettier': [

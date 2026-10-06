@@ -10,6 +10,7 @@ import {
   ConnectStepError,
   STEP_TIMEOUT_MS,
   connectFailureFor,
+  infoCmdTimeoutMs,
   toStepError,
   withTimeout,
 } from './connectSteps';
@@ -175,6 +176,7 @@ const hhmmss = (t: number) => {
 export class Icd001Client {
   private state: Icd001State;
   private listeners = new Set<Listener>();
+  /** 4096 B per line: well above the 1100 B INFO command reply (INFO_REPLY_MAX_BYTES). */
   private assembler = new LineAssembler();
   private scheduler: CommandScheduler;
   private unsubs: Array<() => void> = [];
@@ -480,18 +482,28 @@ export class Icd001Client {
         }
         info = null;
       }
+      // INFO command reply is one ≤ 1100 B line (fw 1.1.2 ≈ 874 B): 55 notifications at MTU 23.
+      const infoCmdMs = infoCmdTimeoutMs(mtu);
+      const infoCmd = async () => {
+        const r = await step('info-cmd', () => this.requestInfoViaCommand(infoCmdMs), infoCmdMs);
+        if (!r) {
+          this.connectLogLine(`info-cmd: no reply in ${infoCmdMs} ms`);
+        }
+        return r;
+      };
       if (!info) {
-        info = await step('info-cmd', () => this.requestInfoViaCommand());
+        info = await infoCmd();
       }
       if (!info) {
         // Connected, ICD-001 service there, but no INFO JSON we can read: old / other firmware.
         throw new ConnectStepError('info', 'unsupported', 'no INFO (characteristic or command)');
       }
       if (supportsAuto(info) && info.auto && !info.auto.detail) {
-        // h11-icd-v1 1.1.0: the INFO characteristic (≤ 512 B) leaves out ch.auto
-        // (fsr / lraSrc / hbMaxS / vhz); the INFO command returns the full ~636 B
-        // JSON as several notify packets (one line). Fallbacks if it does not come.
-        const full = await step('info-cmd', () => this.requestInfoViaCommand());
+        // h11-icd-v1 1.1.x: the INFO characteristic (≤ 512 B) leaves out ch.auto
+        // (fsr / lraSrc / hbMaxS / vhz); the INFO command returns the full JSON
+        // (1.1.0 ≈ 636 B, 1.1.2 ≈ 874 B, buffer 1100 B) as several notify packets
+        // (one line). Unknown keys (auto.hrValid, hrValid.fast) are ignored. Fallbacks if it does not come.
+        const full = await infoCmd();
         if (full && supportsAuto(full)) {
           info = full;
         }

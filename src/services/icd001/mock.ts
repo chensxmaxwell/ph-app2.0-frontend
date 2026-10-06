@@ -120,6 +120,8 @@ export class MockIcd001Device {
   estopKeyNoPhone = false;
   /** Serial-only lines (fw log): EVT BLE_DISCONNECT…, EVT MODE AUTO BLE_DISCONNECT; never sent over BLE. */
   serialLog: string[] = [];
+  /** Exact `INFO` command reply (e.g. a fw 1.1.2 874 B fixture); null = built from the fields above. */
+  fullInfoOverride: string | null = null;
 
   constructor(
     readonly variant: MockVariant,
@@ -153,6 +155,9 @@ export class MockIcd001Device {
    * (+ name / rst / ntc), ~636 B, sent as several notify packets.
    */
   infoJson(full = true): string {
+    if (full && this.fullInfoOverride !== null) {
+      return this.fullInfoOverride;
+    }
     if (!this.isV0) {
       return JSON.stringify({
         fw: 'h11-demo-ble',
@@ -853,6 +858,8 @@ interface Conn {
   /** v0 receive buffer (executes on `\n`/`;`, or after 100 ms idle). */
   rx: string;
   rxIdle: ReturnType<typeof setTimeout> | null;
+  /** With notifyPacketMs: when the last queued notification goes out. */
+  airBusyUntil?: number;
 }
 
 /** In-memory transport backed by MockIcd001Device instances. */
@@ -873,7 +880,12 @@ export class MockIcd001Transport implements Icd001Transport {
 
   constructor(
     devices?: MockIcd001Device[],
-    private readonly opts: { mtu?: number; connectDelayMs?: number } = {},
+    private readonly opts: {
+      mtu?: number;
+      connectDelayMs?: number;
+      /** Radio pace: ms per notification (0 = all at once). Lines stay whole and in order, like fw bleSendLine. */
+      notifyPacketMs?: number;
+    } = {},
   ) {
     const list = devices ?? [
       new MockIcd001Device('icd1v1', 'ICD1-7E21'),
@@ -1096,9 +1108,22 @@ export class MockIcd001Transport implements Icd001Transport {
     }
     const bytes = encodeUtf8(`${line}\n`);
     const chunk = c.mtu > 23 ? c.mtu - 3 : 20;
+    const pace = this.opts.notifyPacketMs ?? 0;
+    const now = Date.now();
+    let at = Math.max(now, c.airBusyUntil ?? 0);
     for (let i = 0; i < bytes.length; i += chunk) {
       const part = bytes.slice(i, i + chunk);
-      this.notifyCbs.forEach(cb => cb(id, part));
+      if (!pace) {
+        this.notifyCbs.forEach(cb => cb(id, part));
+        continue;
+      }
+      at += pace;
+      setTimeout(() => {
+        if (this.connected.get(id) === c) {
+          this.notifyCbs.forEach(cb => cb(id, part));
+        }
+      }, at - now);
     }
+    c.airBusyUntil = at;
   }
 }
