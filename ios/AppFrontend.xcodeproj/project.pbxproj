@@ -9,11 +9,6 @@
 /* Begin PBXBuildFile section */
 		00E356F31AD99517003FC87E /* AppFrontendTests.m in Sources */ = {isa = PBXBuildFile; fileRef = 00E356F21AD99517003FC87E /* AppFrontendTests.m */; };
 		13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB01A68108700A75B9A /* AppDelegate.mm */; };
-		A11E0001A68108700A75B9A2 /* PHNative.mm in Sources */ = {isa = PBXBuildFile; fileRef = A11E0001A68108700A75B9A1 /* PHNative.mm */; };
-		A11E0001A68108700A75B9A5 /* viewer-page.html in Resources */ = {isa = PBXBuildFile; fileRef = A11E0001A68108700A75B9A4 /* viewer-page.html */; };
-		A11E0001A68108700A75B9A7 /* three.min.js in Resources */ = {isa = PBXBuildFile; fileRef = A11E0001A68108700A75B9A6 /* three.min.js */; };
-		A11E0001A68108700A75B9A9 /* GLTFLoader.js in Resources */ = {isa = PBXBuildFile; fileRef = A11E0001A68108700A75B9A8 /* GLTFLoader.js */; };
-		A11E0001A68108700A75B9AB /* bozo-male.glb in Resources */ = {isa = PBXBuildFile; fileRef = A11E0001A68108700A75B9AA /* bozo-male.glb */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		13B07FC11A68108700A75B9A /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB71A68108700A75B9A /* main.m */; };
 		25A020BEFCF4418EBC4E83D0 /* Quicksand-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 8AD338D91E5F4B778AEF02E0 /* Quicksand-Bold.ttf */; };
@@ -23,6 +18,11 @@
 		7530EF41823AF894E22B5C30 /* libPods-AppFrontend-AppFrontendTests.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 6CC117A09A8BE5FBBD37D5D2 /* libPods-AppFrontend-AppFrontendTests.a */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
 		958EE90617F44616B3DE6987 /* Quicksand-Light.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 6948D7D86AE746B685E11943 /* Quicksand-Light.ttf */; };
+		A11E0001A68108700A75B9A2 /* PHNative.mm in Sources */ = {isa = PBXBuildFile; fileRef = A11E0001A68108700A75B9A1 /* PHNative.mm */; };
+		A11E0001A68108700A75B9A5 /* viewer-page.html in Resources */ = {isa = PBXBuildFile; fileRef = A11E0001A68108700A75B9A4 /* viewer-page.html */; };
+		A11E0001A68108700A75B9A7 /* three.min.js in Resources */ = {isa = PBXBuildFile; fileRef = A11E0001A68108700A75B9A6 /* three.min.js */; };
+		A11E0001A68108700A75B9A9 /* GLTFLoader.js in Resources */ = {isa = PBXBuildFile; fileRef = A11E0001A68108700A75B9A8 /* GLTFLoader.js */; };
+		A11E0001A68108700A75B9AB /* bozo-male.glb in Resources */ = {isa = PBXBuildFile; fileRef = A11E0001A68108700A75B9AA /* bozo-male.glb */; };
 		B4C6D75B2C825729003F8113 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B4C6D75A2C825729003F8113 /* Assets.xcassets */; };
 		E65B7BAB5CA140978F419822 /* Quicksand-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 91821C7A44204EBC910EA963 /* Quicksand-SemiBold.ttf */; };
 		EB307786043DA0B8F305D352 /* libPods-AppFrontend.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 6538A50D58B9F0BD749BEC97 /* libPods-AppFrontend.a */; };
@@ -47,11 +47,6 @@
 		13B07F961A680F5B00A75B9A /* AppFrontend.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AppFrontend.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FAF1A68108700A75B9A /* AppDelegate.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = AppDelegate.h; path = AppFrontend/AppDelegate.h; sourceTree = "<group>"; };
 		13B07FB01A68108700A75B9A /* AppDelegate.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = AppDelegate.mm; path = AppFrontend/AppDelegate.mm; sourceTree = "<group>"; };
-		A11E0001A68108700A75B9A1 /* PHNative.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = PHNative.mm; path = AppFrontend/PHNative.mm; sourceTree = "<group>"; };
-		A11E0001A68108700A75B9A4 /* viewer-page.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "viewer-page.html"; sourceTree = "<group>"; };
-		A11E0001A68108700A75B9A6 /* three.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "three.min.js"; sourceTree = "<group>"; };
-		A11E0001A68108700A75B9A8 /* GLTFLoader.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "GLTFLoader.js"; sourceTree = "<group>"; };
-		A11E0001A68108700A75B9AA /* bozo-male.glb */ = {isa = PBXFileReference; lastKnownFileType = file; path = "bozo-male.glb"; sourceTree = "<group>"; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = AppFrontend/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = AppFrontend/Info.plist; sourceTree = "<group>"; };
 		13B07FB71A68108700A75B9A /* main.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; name = main.m; path = AppFrontend/main.m; sourceTree = "<group>"; };
@@ -64,6 +59,11 @@
 		8AD338D91E5F4B778AEF02E0 /* Quicksand-Bold.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = "Quicksand-Bold.ttf"; path = "../assets/fonts/Quicksand-Bold.ttf"; sourceTree = "<group>"; };
 		91821C7A44204EBC910EA963 /* Quicksand-SemiBold.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = "Quicksand-SemiBold.ttf"; path = "../assets/fonts/Quicksand-SemiBold.ttf"; sourceTree = "<group>"; };
 		91EA0EF9D9FE92204EF53EC1 /* Pods-AppFrontend-AppFrontendTests.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-AppFrontend-AppFrontendTests.debug.xcconfig"; path = "Target Support Files/Pods-AppFrontend-AppFrontendTests/Pods-AppFrontend-AppFrontendTests.debug.xcconfig"; sourceTree = "<group>"; };
+		A11E0001A68108700A75B9A1 /* PHNative.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = PHNative.mm; path = AppFrontend/PHNative.mm; sourceTree = "<group>"; };
+		A11E0001A68108700A75B9A4 /* viewer-page.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "viewer-page.html"; sourceTree = "<group>"; };
+		A11E0001A68108700A75B9A6 /* three.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = three.min.js; sourceTree = "<group>"; };
+		A11E0001A68108700A75B9A8 /* GLTFLoader.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = GLTFLoader.js; sourceTree = "<group>"; };
+		A11E0001A68108700A75B9AA /* bozo-male.glb */ = {isa = PBXFileReference; lastKnownFileType = file; path = "bozo-male.glb"; sourceTree = "<group>"; };
 		A922CADA5EAF4253AF5BB80D /* Quicksand-Regular.ttf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = "Quicksand-Regular.ttf"; path = "../assets/fonts/Quicksand-Regular.ttf"; sourceTree = "<group>"; };
 		B4C6D75A2C825729003F8113 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B86A16EF636343CD9B8C5D2C /* AngryPortraitToumpano.otf */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; name = AngryPortraitToumpano.otf; path = ../assets/fonts/AngryPortraitToumpano.otf; sourceTree = "<group>"; };
@@ -169,6 +169,18 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		A11E0001A68108700A75B9A3 /* avatar-engine */ = {
+			isa = PBXGroup;
+			children = (
+				A11E0001A68108700A75B9A4 /* viewer-page.html */,
+				A11E0001A68108700A75B9A6 /* three.min.js */,
+				A11E0001A68108700A75B9A8 /* GLTFLoader.js */,
+				A11E0001A68108700A75B9AA /* bozo-male.glb */,
+			);
+			name = "avatar-engine";
+			path = "AppFrontend/avatar-engine";
+			sourceTree = "<group>";
+		};
 		AD1ACC8B368042CFABDC3AB9 /* Resources */ = {
 			isa = PBXGroup;
 			children = (
@@ -192,18 +204,6 @@
 				D3A47A71012B1C67D8363630 /* Pods-AppFrontend-AppFrontendTests.release.xcconfig */,
 			);
 			path = Pods;
-			sourceTree = "<group>";
-		};
-		A11E0001A68108700A75B9A3 /* avatar-engine */ = {
-			isa = PBXGroup;
-			children = (
-				A11E0001A68108700A75B9A4 /* viewer-page.html */,
-				A11E0001A68108700A75B9A6 /* three.min.js */,
-				A11E0001A68108700A75B9A8 /* GLTFLoader.js */,
-				A11E0001A68108700A75B9AA /* bozo-male.glb */,
-			);
-			name = "avatar-engine";
-			path = "AppFrontend/avatar-engine";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -555,9 +555,9 @@
 					"-ObjC",
 					"-lc++",
 					"-framework",
-					"Speech",
+					Speech,
 					"-framework",
-					"AVFoundation",
+					AVFoundation,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = ai.pleasurehouse.app;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = ai.pleasurehouse.app;
@@ -590,9 +590,9 @@
 					"-ObjC",
 					"-lc++",
 					"-framework",
-					"Speech",
+					Speech,
 					"-framework",
-					"AVFoundation",
+					AVFoundation,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = ai.pleasurehouse.app;
 				"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = ai.pleasurehouse.app;
