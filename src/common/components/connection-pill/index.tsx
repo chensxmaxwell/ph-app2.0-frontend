@@ -33,7 +33,9 @@ export const ConnectionPill: React.FC<ConnectionPillProps> = () => {
         {connecting
           ? 'Connecting...'
           : connectStatus
-          ? `Connected  ${batteryText}`
+          ? batteryText === '--'
+            ? 'Connected'
+            : `Connected  ${batteryText}`
           : 'Disconnected'}
       </Text>
     </TouchableOpacity>

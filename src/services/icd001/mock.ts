@@ -183,7 +183,7 @@ export class MockIcd001Device {
                   vhz: { ...this.autoCaps.vhz },
                   press: { on: 80, off: 50, full: 1200 },
                   hr: { lo: 60, hi: 120 },
-                  lraNoHr: 25,
+                  lraNoHr: 0, // §11.9: 25 -> 0 in fw 1.1.1+
                   fsr: ['J19', 'J20'],
                   lraSrc: { ...this.autoCaps.lraSrc },
                   hbMaxS: this.autoCaps.hbMaxS,

@@ -3,7 +3,7 @@ import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from "reac
 import LinearGradient from "react-native-linear-gradient";
 import Device from '@images/device.svg';
 import { useOnboarding5 } from "./hooks";
-import { useBleManager } from "../../../hooks/useBleManager";
+import { linkViewFromState, useIcd001 } from "../../../services/icd001";
 import GoBackIcon from '@images/icons/go-back.svg'
 import { useCustomAlert } from "@common/util";
 
@@ -36,9 +36,9 @@ export const OnBoardingStep5 = () => {
         });
     };
 
-    const {
-        isConnected
-    } = useBleManager();
+    // Same ICD-001 session as Find / Home pill (never legacy BLE or a fake 100%).
+    const { state: icd } = useIcd001();
+    const link = linkViewFromState(icd);
 
 
     return (
@@ -57,11 +57,11 @@ export const OnBoardingStep5 = () => {
             </View>
 
             <TouchableOpacity style={styles.connectContainer} onPress={handleNavigateToConnectDevice}>
-                <View style={isConnected ? styles.connectIndicator : styles.disconnectIndicator} />
+                <View style={link.connected ? styles.connectIndicator : styles.disconnectIndicator} />
                 <Text style={styles.buttonText}>
-                    {isConnected ? 'Connected' : 'Disconnected'}
+                    {link.connecting ? 'Connecting...' : link.connected ? 'Connected' : 'Disconnected'}
                 </Text>
-                <Text style={styles.percentageText}>100%</Text>
+                <Text style={styles.percentageText}>{link.connected ? link.batteryText : '--'}</Text>
             </TouchableOpacity>
 
             <View style={styles.imageContainer}>
