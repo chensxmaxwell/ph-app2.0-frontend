@@ -53,6 +53,7 @@ import {
   wingFreqCorrection,
   tempText,
   wingSummary,
+  clampPulseTarget,
 } from './model';
 import { PulseSpeedStore, memoryPulseSpeedStore } from './pulseMemory';
 
@@ -769,6 +770,10 @@ export class AdvancedControlController {
 
   /** Last Pulse speed the user chose (or the device ran): kept by the app, §10.7. */
   private rememberPulse(hz: number): void {
+    hz = clampPulseTarget(hz);
+    if (!hz) {
+      return;
+    }
     this.pulse.restore = hz;
     this.pulseTouched = true;
     if (this.pulseKey) {
@@ -785,14 +790,15 @@ export class AdvancedControlController {
     this.pulseTouched = false;
     const cached = this.pulseStore.get(name);
     if (cached !== null) {
-      this.pulse.restore = cached;
+      // values remembered under the old 10–50 / 2–50 range are pulled into 1–30
+      this.pulse.restore = clampPulseTarget(cached);
       return;
     }
     this.pulseStore
       .load(name)
       .then(v => {
         if (v !== null && this.pulseKey === name && !this.pulseTouched) {
-          this.pulse.restore = v;
+          this.pulse.restore = clampPulseTarget(v);
           this.emit();
         }
       })

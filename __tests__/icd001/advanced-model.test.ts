@@ -6,6 +6,10 @@ import {
   RELEASED_ON_DEVICE_BANNER,
   UNLOCK_LINE,
   HOTSPOT_ZONES,
+  PLACEHOLDER_INFO,
+  VHZ_UI_MAX,
+  VHZ_UI_MIN,
+  clampPulseTarget,
   RhythmCard,
   WING_FREQ_HZ,
   WingCtx,
@@ -362,13 +366,13 @@ describe('device strip values', () => {
 });
 
 describe('cards from INFO', () => {
-  it('v0: wings (2 groups) + pulse (VHZ capped to 10–50) + bullet (read-only)', () => {
+  it('v0: wings (2 groups) + pulse (VHZ ch.vhz 2–50 ∩ app 1–30) + bullet (read-only)', () => {
     const cards = buildCards(v0);
     expect(cards.map(c => `${c.id}:${c.kind}`)).toEqual(['wing:intensity', 'vcm:rhythm', 'egg:sensor']);
     const w = cards[0];
     expect(w.kind === 'intensity' && w.groups.map(g => `${g.id}=${g.label}`)).toEqual(['A=上翼', 'B=下翼']);
     const p = cards[1] as RhythmCard;
-    expect(p.range).toEqual({ min: 10, max: 50, def: 10 });
+    expect(p.range).toEqual({ min: 2, max: 30, def: 10 });
     expect(p.device).toEqual({ min: 2, max: 50 });
     expect(cards[2]).toMatchObject({ ppgIndex: 3, hasActuator: false });
   });
@@ -411,7 +415,31 @@ describe('cards from INFO', () => {
     expect(buildCards(null)).toEqual([]);
   });
 
-  it('range: a narrow VHZ range inside 10–50 is kept; min/max from INFO', () => {
+  it('range: app target 1–30 Hz (Maxwell 10/07), always clamped to INFO ch.vhz', () => {
+    expect(VHZ_UI_MIN).toBe(1);
+    expect(VHZ_UI_MAX).toBe(30);
+    // fw 1.1.x reports 2–50 -> slider 2–30
+    expect(rhythmRange({ minHz: 2, maxHz: 50, defaultHz: 10, command: 'VHZ' })).toEqual({ min: 2, max: 30, def: 10 });
+    // fw widened to 1–30 -> slider exactly 1–30
+    expect(rhythmRange({ minHz: 1, maxHz: 30, defaultHz: 10, command: 'VHZ' })).toEqual({ min: 1, max: 30, def: 10 });
+    // fw 1–50 -> 1–30
+    expect(rhythmRange({ minHz: 1, maxHz: 50, defaultHz: 40, command: 'VHZ' })).toEqual({ min: 1, max: 30, def: 30 });
+    // device range entirely above 30 keeps its own range (never sends out-of-range)
+    expect(rhythmRange({ minHz: 40, maxHz: 50, defaultHz: 45, command: 'VHZ' })).toEqual({ min: 40, max: 50, def: 45 });
+    // placeholder (never connected) shows the 1–30 target
+    expect((buildCards(PLACEHOLDER_INFO).find(c => c.id === 'vcm') as RhythmCard).range).toEqual({ min: 1, max: 30, def: 10 });
+  });
+
+  it('remembered Pulse Hz is clamped to 1–30', () => {
+    expect(clampPulseTarget(42)).toBe(30);
+    expect(clampPulseTarget(50)).toBe(30);
+    expect(clampPulseTarget(0.6)).toBe(1);
+    expect(clampPulseTarget(12)).toBe(12);
+    expect(clampPulseTarget(0)).toBe(0);
+    expect(clampPulseTarget(NaN)).toBe(0);
+  });
+
+  it('range: a narrow VHZ range inside 1–30 is kept; min/max from INFO', () => {
     expect(rhythmRange({ minHz: 15, maxHz: 30, defaultHz: 20, command: 'VHZ' })).toEqual({
       min: 15,
       max: 30,
@@ -510,15 +538,18 @@ describe('control -> command mapping (wire text per PROTOCOL §7)', () => {
     expect(callToWire({ fn: 'setFreq', hz: WING_FREQ_HZ }, v0)).toBe('FREQ 170');
   });
 
-  it('pulse slider/preset -> VHZ hz within 10–50; switch off -> VHZ 0', () => {
+  it('pulse slider/preset -> VHZ hz within device ∩ 1–30; switch off -> VHZ 0', () => {
     expect(wire({ t: 'pulseSlider', hz: 30 })).toEqual(['VHZ 30']);
-    expect(wire({ t: 'pulseSlider', hz: 4 })).toEqual(['VHZ 10']);
-    expect(wire({ t: 'pulseSlider', hz: 80 })).toEqual(['VHZ 50']);
-    expect(wire({ t: 'pulsePreset', hz: 46 })).toEqual(['VHZ 46']);
+    expect(wire({ t: 'pulseSlider', hz: 4 })).toEqual(['VHZ 4']);
+    expect(wire({ t: 'pulseSlider', hz: 1 })).toEqual(['VHZ 2']); // fw 1.1.x min 2
+    expect(wire({ t: 'pulseSlider', hz: 80 })).toEqual(['VHZ 30']);
+    expect(wire({ t: 'pulsePreset', hz: 46 })).toEqual(['VHZ 30']);
     expect(wire({ t: 'pulseSwitch', on: false, lastHz: 30 })).toEqual(['VHZ 0']);
     expect(wire({ t: 'pulseSwitch', on: true, lastHz: 30 })).toEqual(['VHZ 30']);
+    expect(wire({ t: 'pulseSwitch', on: true, lastHz: 45 })).toEqual(['VHZ 30']); // old remembered value
     expect(wire({ t: 'pulseSwitch', on: true, lastHz: 0 })).toEqual(['VHZ 10']);
-    expect(pulse.range.max).toBe(50);
+    expect(pulse.range.min).toBe(2);
+    expect(pulse.range.max).toBe(30);
   });
 
   it('legacy board -> VCM on halfMs (2–20 Hz)', () => {
@@ -574,9 +605,9 @@ describe('mapping through the real client + simulator (throttle, latest wins)', 
     expect(lra.length).toBeLessThanOrEqual(12);
     expect(lra[lra.length - 1]).toBe('LRA 0 100');
     const vhz = dev.commandLog.filter(c => c.startsWith('VHZ'));
-    expect(vhz[vhz.length - 1]).toBe('VHZ 50');
+    expect(vhz[vhz.length - 1]).toBe('VHZ 30');
     expect(vhz.length).toBeLessThanOrEqual(2);
-    expect(dev.snapshot()).toMatchObject({ lra: [100, 0], vcmOn: true, vcmHz: 50 });
+    expect(dev.snapshot()).toMatchObject({ lra: [100, 0], vcmOn: true, vcmHz: 30 });
 
     runCalls(client, mapAction({ t: 'stopAll' }, {}));
     await tick(200);

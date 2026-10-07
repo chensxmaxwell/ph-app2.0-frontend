@@ -60,9 +60,21 @@ export const HOTSPOT_ZONES: Record<HotspotZone, { card: 'wing' | 'vcm' | 'egg'; 
   head: { card: 'vcm' },
   bullet: { card: 'egg' },
 };
-/** App-side cap for the voice-coil beat range (Maxwell 9/28: 10–50 Hz). */
-export const VHZ_UI_MIN = 10;
-export const VHZ_UI_MAX = 50;
+/**
+ * App-side target for the Manual voice-coil (Pulse) slider: leftmost = 1 Hz,
+ * rightmost = 30 Hz (Maxwell 10/07; was 10–50 from 9/28, slowest felt too
+ * fast). Always intersected with the device's INFO ch.vhz, so on firmware that
+ * still reports 2–50 the slider runs 2–30 until firmware widens to 1–30.
+ */
+export const VHZ_UI_MIN = 1;
+export const VHZ_UI_MAX = 30;
+/** Clamp a remembered / reported Pulse Hz into the app target range (1–30). 0 / invalid = unknown. */
+export function clampPulseTarget(hz: number): number {
+  if (!Number.isFinite(hz) || hz <= 0) {
+    return 0;
+  }
+  return clamp(Math.round(hz), VHZ_UI_MIN, VHZ_UI_MAX);
+}
 /**
  * Wing (LRA) drive frequency is fixed at the device default and not exposed in
  * the UI (Maxwell, 2026-09-29: no Fine tune). The controller corrects a device
@@ -505,7 +517,7 @@ export interface RhythmCard {
   /** App copy (design v2), never INFO labels (Q10). */
   subtitle: string;
   part: 'head';
-  /** Slider range used by the app (INFO ch.vhz capped to 10–50; legacy 2–20). */
+  /** Slider range used by the app (INFO ch.vhz ∩ 1–30; legacy VCM 2–20). */
   range: { min: number; max: number; def: number };
   /** Range the device itself reported. */
   device: { min: number; max: number };
@@ -528,13 +540,13 @@ export type ModuleCard = IntensityCard | RhythmCard | SensorCard;
 export function rhythmRange(caps: VcmCaps): { min: number; max: number; def: number } {
   let min = caps.minHz;
   let max = caps.maxHz;
-  if (caps.command === 'VHZ') {
-    const lo = Math.max(caps.minHz, VHZ_UI_MIN);
-    const hi = Math.min(caps.maxHz, VHZ_UI_MAX);
-    if (lo <= hi) {
-      min = lo;
-      max = hi;
-    }
+  // App target 1–30 Hz, never beyond what the device reported (INFO ch.vhz /
+  // legacy VCM 2–20). A device range entirely outside 1–30 keeps its own range.
+  const lo = Math.max(caps.minHz, VHZ_UI_MIN);
+  const hi = Math.min(caps.maxHz, VHZ_UI_MAX);
+  if (lo <= hi) {
+    min = lo;
+    max = hi;
   }
   return { min, max, def: clamp(caps.defaultHz, min, max) };
 }
@@ -581,7 +593,7 @@ export const PLACEHOLDER_INFO: DeviceInfo = parseInfo({
   ch: {
     lra: { A: '上翼', B: '下翼' },
     freq: { min: 100, max: 300, def: 170 },
-    vhz: { min: 2, max: 50, def: 10 },
+    vhz: { min: VHZ_UI_MIN, max: VHZ_UI_MAX, def: 10 },
     lpulse: { min: 50, max: 2000 },
     ppg: ['J13', 'J22', 'J23', 'EGG'],
     egg: { ppg: 3, act: 0 },

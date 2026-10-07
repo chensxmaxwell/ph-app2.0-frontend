@@ -62,8 +62,9 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
       tempText: '34.2°C',
       batteryPct: 69,
     });
-    expect(t.pulse().card.range).toEqual({ min: 10, max: 50, def: 10 });
-    expect(t.pulse().presets).toEqual({ soft: 14, medium: 30, strong: 46 });
+    // fw reports ch.vhz 2–50; app target 1–30 (Maxwell 10/07) -> slider 2–30
+    expect(t.pulse().card.range).toEqual({ min: 2, max: 30, def: 10 });
+    expect(t.pulse().presets).toEqual({ soft: 5, medium: 10, strong: 27 });
     expect(t.egg()).toMatchObject({ enabled: true, actuator: 'needs-hardware' });
     expect(t.wing().summary).toBe('A 0 · B 0 · Steady');
     t.done();
@@ -144,14 +145,14 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
 
   it('pulse slider with Output off only remembers the rhythm; the switch sends it', async () => {
     const t = await setup();
-    t.ctl.setPulseHz(36);
+    t.ctl.setPulseHz(24);
     await tick(300);
     expect(t.dev.commandLog.filter(c => c.startsWith('VHZ'))).toEqual([]);
-    expect(t.pulse()).toMatchObject({ on: false, hz: 36, row: { kind: 'off', text: 'Off' } });
+    expect(t.pulse()).toMatchObject({ on: false, hz: 24, row: { kind: 'off', text: 'Off' } });
     t.ctl.setPulseOn(true);
     await tick(300);
-    expect(t.dev.commandLog).toContain('VHZ 36');
-    expect(t.pulse().row).toEqual({ kind: 'hz', hz: 36 });
+    expect(t.dev.commandLog).toContain('VHZ 24');
+    expect(t.pulse().row).toEqual({ kind: 'hz', hz: 24 });
     t.done();
   });
 
@@ -160,6 +161,7 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     t.ctl.setPulseOn(true);
     await tick(300);
     t.dev.commandLog.length = 0;
+    // drag past the right end: rightmost = 30 Hz (app target), never 50
     for (let hz = 10; hz <= 50; hz++) {
       t.ctl.setPulseHz(hz);
       await tick(10);
@@ -167,17 +169,22 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     await tick(300);
     const vhz = t.dev.commandLog.filter(c => c.startsWith('VHZ'));
     expect(vhz.length).toBeLessThanOrEqual(6);
-    expect(vhz[vhz.length - 1]).toBe('VHZ 50');
-    expect(t.pulse()).toMatchObject({ on: true, hz: 50, beat: 'Strong', summary: '50 Hz · Strong' });
-    t.ctl.setPulseHz(30, true);
+    expect(vhz[vhz.length - 1]).toBe('VHZ 30');
+    expect(vhz.every(c => Number(c.split(' ')[1]) <= 30)).toBe(true);
+    expect(t.pulse()).toMatchObject({ on: true, hz: 30, beat: 'Strong', summary: '30 Hz · Strong' });
+    // leftmost = device min (2 on fw 1.1.x, 1 once fw widens)
+    t.ctl.setPulseHz(0.5);
+    await tick(300);
+    expect(t.dev.commandLog.slice(-1)[0]).toBe('VHZ 2');
+    t.ctl.setPulseHz(20, true);
     await tick(300);
     t.ctl.setPulseOn(false);
     await tick(300);
     expect(t.dev.commandLog.slice(-1)[0]).toBe('VHZ 0');
-    expect(t.pulse()).toMatchObject({ on: false, hz: 30, summary: 'Off' });
+    expect(t.pulse()).toMatchObject({ on: false, hz: 20, summary: 'Off' });
     t.ctl.setPulseOn(true);
     await tick(300);
-    expect(t.dev.snapshot()).toMatchObject({ vcmOn: true, vcmHz: 30 });
+    expect(t.dev.snapshot()).toMatchObject({ vcmOn: true, vcmHz: 20 });
     t.done();
   });
 
@@ -636,7 +643,7 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
   it('F4 / §10.7: last Pulse speed is remembered per device across leaving and re-entering the page', async () => {
     const t = await setup();
     t.ctl.setPulseOn(true);
-    t.ctl.setPulseHz(36);
+    t.ctl.setPulseHz(24);
     await tick(300);
     t.ctl.setPulseOn(false); // VHZ 0: firmware forgets the Hz
     await tick(300);
@@ -646,11 +653,11 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     const ctl2 = new AdvancedControlController(t.client);
     ctl2.start();
     const pulse2 = () => ctl2.getView().cards.find(c => c.kind === 'rhythm') as RhythmView;
-    expect(pulse2()).toMatchObject({ on: false, hz: 36 });
+    expect(pulse2()).toMatchObject({ on: false, hz: 24 });
     t.dev.commandLog.length = 0;
     ctl2.setPulseOn(true);
     await tick(300);
-    expect(t.dev.commandLog).toContain('VHZ 36');
+    expect(t.dev.commandLog).toContain('VHZ 24');
     ctl2.dispose();
     t.done();
   });
@@ -674,8 +681,14 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     ctl2.start();
     await tick(50);
     const pulse2 = () => ctl2.getView().cards.find(c => c.kind === 'rhythm') as RhythmView;
-    expect(pulse2()).toMatchObject({ on: false, hz: 42 });
+    // 42 was remembered under the old 10–50 range: clamped to the 1–30 target
+    expect(pulse2()).toMatchObject({ on: false, hz: 30 });
     expect(await store.load('ICD1-OTHER')).toBeNull();
+    t.dev.commandLog.length = 0;
+    ctl2.setPulseOn(true);
+    await tick(300);
+    expect(t.dev.commandLog).toContain('VHZ 30');
+    expect(t.dev.commandLog).not.toContain('VHZ 42');
     ctl2.dispose();
     t.done();
   });
