@@ -1,15 +1,16 @@
-import React from "react";
+import { colors } from '@common/styles/colors';
+import { fontSizes, fontWeights } from '@common/styles/fonts';
+import { useNavigation } from '@react-navigation/native';
+import React from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-} from "react-native";
-import { ScreenWrapper } from "@common/components/screen-wrapper";
-import { colors } from "@common/styles/colors";
-import { fontSizes, fontWeights } from "@common/styles/fonts";
-import { useNavigation } from "@react-navigation/native";
+} from 'react-native';
+
+import { ScreenWrapper } from '@common/components/screen-wrapper';
 import ChevronLeft from "@images/chevron-left-white.svg";
 
 const ProfileSettingAbout = () => {
@@ -39,9 +40,9 @@ const ProfileSettingAbout = () => {
           stays visible as a pill so you can jump back in from anywhere.
         </Text>
         <Text style={styles.content}>
-          This build is a demo. Pairing uses a simulated connection, and some
-          looks are male-only until more models ship. We will keep the product
-          private, local-first, and easy to leave.
+          Pairing uses Bluetooth to a real ICD-001 / H11 device (Find your
+          device). Some looks are male-only until more models ship. We will keep
+          the product private, local-first, and easy to leave.
         </Text>
       </ScrollView>
     </ScreenWrapper>

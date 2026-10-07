@@ -73,9 +73,11 @@ jest.mock('../../src/hooks/useBleManager', () => ({
   }),
 }));
 jest.mock('../../src/services/icd001', () => {
-  const actual = jest.requireActual('../../src/services/icd001/protocol') as Record<string, unknown>;
+  const protocol = jest.requireActual('../../src/services/icd001/protocol') as Record<string, unknown>;
+  const link = jest.requireActual('../../src/services/icd001/linkView') as Record<string, unknown>;
   return {
-    ...actual,
+    ...protocol,
+    ...link,
     useIcd001: () => ({
       state: mockIcdState,
       client: { connect: mockIcdConnect, disconnect: mockIcdDisconnect, retry: mockIcdRetry },
@@ -146,14 +148,15 @@ describe('Find your device screen', () => {
     mockStartScan.mockClear();
   });
 
-  it('shows the demo row plus only our devices from the 1.2 (26) scan', () => {
+  it('lists only our devices from the 1.2 (26) scan (no Pleasure House demo row)', () => {
     mockBleDevice = NEARBY;
     let tree!: renderer.ReactTestRenderer;
     act(() => {
       tree = renderer.create(<ConnectDevice />);
     });
     const t = texts(tree);
-    expect(t).toEqual(expect.arrayContaining(['Pleasure House', 'H11-91B1', 'ICD1-5A3C']));
+    expect(t).toEqual(expect.arrayContaining(['H11-91B1', 'ICD1-5A3C']));
+    expect(t).not.toContain('Pleasure House');
     for (const n of ['ESP32', 'midea', 'COLMO', 'Maxwell的Apple Watch', 'Maxwell的MacBook Air']) {
       expect(t).not.toContain(n);
     }
@@ -213,6 +216,19 @@ describe('Find your device screen', () => {
     });
     const t = texts(tree);
     expect(t).toEqual(expect.arrayContaining(['Connected', '100%', 'ICD1-5A3C']));
+  });
+
+  it('header is Disconnected with no demo row; never lists Pleasure House', () => {
+    mockBleDevice = [];
+    mockIcdState = { status: 'idle', device: null, tlm: null, connectFailure: null };
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<ConnectDevice />);
+    });
+    const t = texts(tree);
+    expect(t).toContain('Disconnected');
+    expect(t).not.toContain('Pleasure House');
+    expect(t.some(x => /Connected\s+\d+%/.test(x))).toBe(false);
   });
 
   it('failed connect (TF 1.2 (27) stuck "Connecting"): pill Disconnected, two-line notice + Retry', () => {

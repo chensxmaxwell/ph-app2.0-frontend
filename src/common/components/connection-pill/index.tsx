@@ -1,18 +1,27 @@
-import React from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { colors } from '@common/styles/colors';
+import { fontSizes, fontWeights } from '@common/styles/fonts';
+import { spacings } from '@common/styles/spacings';
+import React from 'react';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import { useConnectionPill } from "./hook";
-import { colors } from "@common/styles/colors";
-import { fontSizes, fontWeights } from "@common/styles/fonts";
-import { spacings } from "@common/styles/spacings";
+import { useConnectionPill } from './hook';
 
 export const ConnectionPill: React.FC<ConnectionPillProps> = () => {
-  const { connectStatus, toggleDevice, connecting, battery } = useConnectionPill();
+  const { connectStatus, toggleDevice, connecting, label, batteryText } =
+    useConnectionPill();
+
+  const text =
+    connecting || !connectStatus
+      ? label
+      : `${label}  ${batteryText === '--' ? '' : batteryText}`.trim();
 
   return (
     <TouchableOpacity
       onPress={() => toggleDevice()}
       style={styles.connectionStatus}
+      testID="connection-pill"
+      accessibilityRole="button"
+      accessibilityLabel={text}
     >
       <View
         style={[
@@ -20,12 +29,12 @@ export const ConnectionPill: React.FC<ConnectionPillProps> = () => {
           connectStatus ? styles.connected : styles.disconnected,
         ]}
       />
-      <Text style={styles.connectionText}>
+      <Text style={styles.connectionText} testID="connection-pill-text">
         {connecting
-          ? "Connecting..."
+          ? 'Connecting...'
           : connectStatus
-          ? `Connected  ${battery}%`
-          : "Disconnected"}
+          ? `Connected  ${batteryText}`
+          : 'Disconnected'}
       </Text>
     </TouchableOpacity>
   );
@@ -33,16 +42,16 @@ export const ConnectionPill: React.FC<ConnectionPillProps> = () => {
 
 const styles = StyleSheet.create({
   connectionStatus: {
-    flexDirection: "row",
-    width: "auto",
-    alignSelf: "center",
+    flexDirection: 'row',
+    width: 'auto',
+    alignSelf: 'center',
     minHeight: 40,
     minWidth: 150,
     borderRadius: 35,
     borderWidth: 1,
     borderColor: colors.white,
-    justifyContent: "space-between",
-    alignItems: "center",
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginTop: 10,
     paddingHorizontal: spacings.w16,
     paddingVertical: spacings.h12,
@@ -63,7 +72,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.neonGreen,
   },
   disconnected: {
-    backgroundColor: "red",
+    backgroundColor: 'red',
   },
 });
 

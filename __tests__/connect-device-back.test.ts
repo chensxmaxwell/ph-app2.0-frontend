@@ -35,9 +35,10 @@ jest.mock("../src/hooks/useBleManager", () => ({
 
 jest.mock("../src/services/icd001", () => ({
   ...(jest.requireActual("../src/services/icd001/protocol") as Record<string, unknown>),
+  ...(jest.requireActual("../src/services/icd001/linkView") as Record<string, unknown>),
   useIcd001: () => ({
-    state: { status: "idle", device: null, tlm: null },
-    client: { connect: jest.fn(), disconnect: jest.fn() },
+    state: { status: "idle", device: null, tlm: null, connectFailure: null },
+    client: { connect: jest.fn(), disconnect: jest.fn(), retry: jest.fn() },
     mode: "ble",
   }),
 }));

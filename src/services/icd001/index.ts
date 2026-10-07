@@ -12,3 +12,5 @@ export {
   useIcd001,
   useIcd001SafetyStop,
 } from './useIcd001';
+export { linkViewFromState } from './linkView';
+export type { LinkView, LinkLabel } from './linkView';

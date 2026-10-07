@@ -3,6 +3,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 
 import { useBleManager } from './useBleManager';
 import { useDevice } from '../store/device';
+import { useIcd001 } from '../services/icd001';
 import { applyToyMotor, stopToy } from '../store/toy';
 import { wavePattern } from '../store/patterns';
 
@@ -66,7 +67,11 @@ export const HomeScreenProvider = ({ children }) => {
     battery,
     name: demoName,
   } = useDevice();
-  const isConnected = bleConnected || demoConnected;
+  // Shared source of truth: ICD-001 client only. Demo fake-connect is gone;
+  // a legacy BLE link alone must not paint Home/Control "Connected".
+  const { state: icd } = useIcd001();
+  const icdConnected = icd.status === 'connected' && !!icd.device;
+  const isConnected = icdConnected;
 
   useEffect(() => {
     // This effect is for debugging purposes to log current mode changes
@@ -86,9 +91,7 @@ export const HomeScreenProvider = ({ children }) => {
     if (!currentMode) {
       setMotorInput([]);
     }
-    if (currentMode && !bleConnected && !demoConnected) {
-      connectDemo();
-    }
+    // Do NOT auto-connect a fake "Pleasure House" demo when a mode starts.
   }, [currentMode]);
 
   useEffect(() => {

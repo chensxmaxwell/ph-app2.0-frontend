@@ -1,21 +1,27 @@
-import { useHomeScreen } from "../../../hooks/HomeScreenContext";
-import { useDevice } from "../../../store/device";
+/**
+ * Home / Control connection pill — same ICD-001 session as Find, Manual,
+ * Advanced and the Auto bar. Never the old demo "Pleasure House" fake link.
+ */
+import { useNavigation } from '@react-navigation/native';
+
+import { linkViewFromState, useIcd001 } from "../../../services/icd001";
 import { SCREENS } from "../../constant";
-import { useNavigation } from "@react-navigation/native";
 
 export const useConnectionPill = () => {
-  const { isConnected } = useHomeScreen();
-  const { battery, connecting } = useDevice();
+  const { state } = useIcd001();
+  const link = linkViewFromState(state);
   const navigation = useNavigation();
 
   const toggleDevice = () => {
-    navigation.navigate(SCREENS.CONNECT_DEVICE);
+    navigation.navigate(SCREENS.CONNECT_DEVICE as never);
   };
 
   return {
-    connectStatus: isConnected,
-    connecting,
-    battery,
+    connectStatus: link.connected,
+    connecting: link.connecting,
+    battery: link.batteryPct,
+    label: link.label,
+    batteryText: link.batteryText,
     toggleDevice,
   };
 };

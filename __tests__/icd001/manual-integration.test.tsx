@@ -105,7 +105,7 @@ describe('Manual page on the mock', () => {
   });
 
   it('demo / legacy "connected" still shows the NEW Manual (ICD cards), never Current Level + Play', async () => {
-    mockLegacyConnected = true; // Find-page "Pleasure House" demo / legacy BLE up
+    mockLegacyConnected = true; // legacy HomeScreen isConnected (must NOT flip Manual)
     let r!: renderer.ReactTestRenderer;
     await act(async () => {
       r = renderer.create(<Manual />);
