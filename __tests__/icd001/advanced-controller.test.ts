@@ -62,9 +62,9 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
       tempText: '34.2°C',
       batteryPct: 69,
     });
-    // fw reports ch.vhz 2–50; app target 1–30 (Maxwell 10/07) -> slider 2–30
-    expect(t.pulse().card.range).toEqual({ min: 2, max: 30, def: 10 });
-    expect(t.pulse().presets).toEqual({ soft: 5, medium: 10, strong: 27 });
+    // mock = fw 1.1.5: ch.vhz 1–30 (§11.11) ∩ app target 1–30 -> slider exactly 1–30
+    expect(t.pulse().card.range).toEqual({ min: 1, max: 30, def: 10 });
+    expect(t.pulse().presets).toEqual({ soft: 4, medium: 10, strong: 27 });
     expect(t.egg()).toMatchObject({ enabled: true, actuator: 'needs-hardware' });
     expect(t.wing().summary).toBe('A 0 · B 0 · Steady');
     t.done();
@@ -172,10 +172,10 @@ describe('AdvancedControlController (view-model) on the simulator', () => {
     expect(vhz[vhz.length - 1]).toBe('VHZ 30');
     expect(vhz.every(c => Number(c.split(' ')[1]) <= 30)).toBe(true);
     expect(t.pulse()).toMatchObject({ on: true, hz: 30, beat: 'Strong', summary: '30 Hz · Strong' });
-    // leftmost = device min (2 on fw 1.1.x, 1 once fw widens)
+    // leftmost = 1 Hz on fw 1.1.5 (a sub-1 value is rounded/clamped, never `VHZ 0.5`)
     t.ctl.setPulseHz(0.5);
     await tick(300);
-    expect(t.dev.commandLog.slice(-1)[0]).toBe('VHZ 2');
+    expect(t.dev.commandLog.slice(-1)[0]).toBe('VHZ 1');
     t.ctl.setPulseHz(20, true);
     await tick(300);
     t.ctl.setPulseOn(false);

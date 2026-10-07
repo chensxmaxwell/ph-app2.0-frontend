@@ -36,6 +36,7 @@ import {
   formatRate,
   formatStop,
   formatVcmHz,
+  clampVcmHz,
   parseErr,
   parseInfo,
   parseLine,
@@ -164,6 +165,11 @@ export interface Icd001ClientOptions {
 
 type Listener = (s: Icd001State) => void;
 
+/**
+ * Min spacing between Pulse (VHZ) writes while dragging. fw 1.1.5 applies a
+ * new Hz only after the current full cycle (≤ 1 s at 1 Hz, §11.11).
+ */
+export const VCM_SEND_INTERVAL_MS = 200;
 const LOG_MAX = 40;
 const CONNECT_LOG_MAX = 30;
 
@@ -318,6 +324,7 @@ export class Icd001Client {
       background: false,
     };
     this.scheduler = new CommandScheduler((line, urgent) => this.write(line, urgent), {
+      keyIntervalMs: { vcm: VCM_SEND_INTERVAL_MS },
       onError: (line, e) => this.pushLog(`! write failed: ${line} (${String(e)})`),
     });
     this.unsubs.push(
@@ -951,7 +958,12 @@ export class Icd001Client {
     if (!caps || !this.canActuate(hz)) {
       return false;
     }
-    this.scheduler.enqueue('vcm', formatVcmHz(hz, caps), true);
+    // formatVcmHz rounds + clamps to INFO ch.vhz: always an integer token
+    // (`VHZ 7`, never `VHZ 7.0` / `VHZ 0.5`, which fw answers ERR ARG VHZ).
+    // Drags are throttled to one VHZ per VCM_SEND_INTERVAL_MS (latest wins,
+    // final value always sent); off (`VHZ 0`) skips the wait.
+    const line = formatVcmHz(hz, caps);
+    this.scheduler.enqueue('vcm', line, true, clampVcmHz(hz, caps) === 0);
     return true;
   }
 

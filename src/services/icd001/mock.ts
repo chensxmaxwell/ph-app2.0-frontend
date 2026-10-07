@@ -13,7 +13,8 @@
  *  - 'h11'  = H11 v1.0 h11-demo-ble as on H11-91B1: INFO without proto,
  *    `VCM on halfMs`, telemetry vcm:[on,halfMs], 3 PPG, each write executed
  *    as-is, VHZ/LPULSE -> ERR UNKNOWN, no ot/lb.
- *  - 'icd1v1' = "ICD001-1" (h11-icd-v1 1.1.0) auto / manual, §11.4–§11.8:
+ *  - 'icd1v1' = "ICD001-1" (h11-icd-v1 1.1.0–1.1.5) auto / manual, §11.4–§11.8
+ *    (manual VHZ integer 1–30 since 1.1.5, §11.11; see `manualVhz`):
  *    boots in AUTO (lastReason BOOT); MODE / MODE query / AUTO alias, idempotent;
  *    actuator commands in auto -> `ERR MODE AUTO <verb>`; verb-tagged ERRs;
  *    STOP / ESTOP 1 / START key / OT / LB -> manual + `EVT MODE MANUAL <reason>`;
@@ -145,8 +146,14 @@ export class MockIcd001Device {
     return this.estop ? 'ESTOP' : this.ot ? 'OVERTEMP' : this.lowbat ? 'LOWBAT' : null;
   }
 
+  /**
+   * Manual `VHZ` range (INFO ch.vhz). fw 1.1.5 (§11.11): integer 1–30, def 10.
+   * Tests set `{ min: 2, max: 50 }` to emulate fw 1.1.0–1.1.4.
+   */
+  manualVhz: { min: number; max: number; def: number } = { min: 1, max: 30, def: 10 };
+
   get vhzRange(): { min: number; max: number } {
-    return this.isV0 ? { min: 2, max: 50 } : { min: 2, max: 20 };
+    return this.isV0 ? { min: this.manualVhz.min, max: this.manualVhz.max } : { min: 2, max: 20 };
   }
 
   /**
@@ -197,7 +204,7 @@ export class MockIcd001Device {
       proto: this.isV1 ? 'ICD001-1' : 'ICD001-0',
       prod: 'ICD-001',
       hw: 'H1.1',
-      fw: this.isV1 ? 'h11-icd-v1 1.1.0' : 'icd001-sim',
+      fw: this.isV1 ? 'h11-icd-v1 1.1.5' : 'icd001-sim',
       mux: 1,
       adsA: 1,
       adsB: 1,
@@ -206,7 +213,7 @@ export class MockIcd001Device {
       ch: {
         lra: { A: '上翼', B: '下翼' },
         freq: { min: 100, max: 300, def: 170 },
-        vhz: { min: 2, max: 50, def: 10 },
+        vhz: { ...this.manualVhz },
         lpulse: { min: 50, max: 2000 },
         ppg: ['J13', 'J22', 'J23', 'EGG'],
         egg: { ppg: 3, act: 0 },
@@ -617,6 +624,9 @@ export class MockIcd001Device {
       }
       case 'VHZ': {
         const { min, max } = this.vhzRange;
+        if (!INT_RE.test(a1 ?? '')) {
+          return ['ERR ARG VHZ']; // integers only (0.5 / 1.0 / 1e1)
+        }
         if (Number.isNaN(v1) || (v1 !== 0 && (v1 < min || v1 > max))) {
           return [`ERR VHZ 0|${min}-${max}`];
         }

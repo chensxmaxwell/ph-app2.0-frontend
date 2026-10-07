@@ -59,27 +59,27 @@ describe('Icd001Client + simulator', () => {
     expect(s.status).toBe('connected');
     expect(s.info?.prod).toBe('ICD-001');
     expect(s.info?.modules.vcm).toMatchObject({
-      minHz: 2,
-      maxHz: 50,
+      minHz: 1, // mock = fw 1.1.5 (§11.11)
+      maxHz: 30,
       command: 'VHZ',
     });
     expect(s.tlm?.ppg).toHaveLength(4);
     expect(s.locked).toBe(false);
     expect(dev.rate).toBe(10);
 
-    expect(client.setVcmHz(35)).toBe(true);
+    expect(client.setVcmHz(25)).toBe(true);
     expect(client.setLra('A', 60)).toBe(true);
     await tick(400);
     expect(dev.snapshot()).toMatchObject({
       vcmOn: true,
-      vcmHz: 35,
+      vcmHz: 25,
       lra: [60, 0],
     });
-    expect(client.getState().tlm?.vcm).toEqual({ on: true, hz: 35 });
+    expect(client.getState().tlm?.vcm).toEqual({ on: true, hz: 25 });
 
-    client.setVcmHz(500); // out of range -> clamped to 50, never sent raw
+    client.setVcmHz(500); // out of range -> clamped to 30 (fw 1.1.5), never sent raw
     await tick(300);
-    expect(dev.commandLog).toContain('VHZ 50');
+    expect(dev.commandLog).toContain('VHZ 30');
     expect(dev.commandLog.some(c => c === 'VHZ 500')).toBe(false);
     client.destroy();
   });
