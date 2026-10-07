@@ -78,19 +78,16 @@ const settle = async (ms = 1000) => {
 };
 
 describe('manualModeFor', () => {
-  const icd = (status: string, name: string | null = 'ICD1-5A3C') => ({
-    status: status as never,
-    device: name === null ? null : { id: 'x', name, rssi: -50, kind: null },
-  });
-  it('ICD-001 session wins, legacy link next, else ICD-001 cards (not connected)', () => {
-    expect(manualModeFor(icd('connected'), true)).toBe('icd001');
-    expect(manualModeFor(icd('connecting', 'H11-91B1'), true)).toBe('icd001');
-    expect(manualModeFor(icd('reconnecting'), true)).toBe('icd001');
-    expect(manualModeFor(icd('disconnected'), true)).toBe('legacy');
-    expect(manualModeFor(icd('idle', null), true)).toBe('legacy');
-    expect(manualModeFor(icd('idle', null), false)).toBe('icd001');
-    expect(manualModeFor(icd('disconnected'), false)).toBe('icd001');
-    expect(manualModeFor(icd('connected', 'ESP32'), true)).toBe('legacy');
+  it('always returns icd001 (demo / legacy link never flips Manual to the old slider)', () => {
+    expect(manualModeFor()).toBe('icd001');
+    expect(manualModeFor({ status: 'idle' as never, device: null }, true)).toBe('icd001');
+    expect(manualModeFor({ status: 'disconnected' as never, device: null }, true)).toBe('icd001');
+    expect(
+      manualModeFor(
+        { status: 'connected' as never, device: { id: 'x', name: 'ESP32', rssi: -50, kind: null } },
+        true,
+      ),
+    ).toBe('icd001');
   });
 });
 
@@ -107,15 +104,20 @@ describe('Manual page on the mock', () => {
     jest.useRealTimers();
   });
 
-  it('legacy/demo link keeps the original level slider + play', async () => {
-    mockLegacyConnected = true;
+  it('demo / legacy "connected" still shows the NEW Manual (ICD cards), never Current Level + Play', async () => {
+    mockLegacyConnected = true; // Find-page "Pleasure House" demo / legacy BLE up
     let r!: renderer.ReactTestRenderer;
     await act(async () => {
       r = renderer.create(<Manual />);
     });
-    expect(texts(r)).toContain('Current Level');
-    expect(byTestID(r, 'legacy-seek-bar').length).toBeGreaterThan(0);
-    expect(byTestID(r, 'card-wing').length).toBe(0);
+    const t = texts(r);
+    expect(t).toContain('Manual');
+    expect(t).not.toContain('Current Level');
+    expect(t).toContain('Not connected'); // ICD session is still empty
+    expect(byTestID(r, 'legacy-seek-bar').length).toBe(0);
+    expect(byTestID(r, 'card-wing').length).toBeGreaterThan(0);
+    expect(byTestID(r, 'card-pulse-bullet').length).toBeGreaterThan(0);
+    expect(opacityOf(byTestID(r, 'controls-wing')[0].props.style)).toBe(0.4);
     await act(async () => {
       r.unmount();
     });
